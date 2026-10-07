@@ -121,6 +121,8 @@ New behavior needs a test. The suite is plain `node:test` with no framework:
 - Keep it focused. Several small pull requests are better than one large one.
 - Explain *why* in the description. The code already shows *what*.
 - Paste the output of the verification commands you ran.
+- Copilot code review runs on every push and follows [`REVIEW.md`](REVIEW.md);
+  its comments are advisory and do not block merging.
 - Update the docs you invalidated: [`docs/guide.md`](docs/guide.md) for user-facing
   behavior, [`extensions/jira-workbench/README.md`](extensions/jira-workbench/README.md)
   for semantics and boundaries.
