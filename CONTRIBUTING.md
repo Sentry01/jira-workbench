@@ -76,6 +76,9 @@ CI runs on every pull request and on every push to `main`:
   to check that `plugin.json` and `marketplace.json` name the same release (see
   [Releasing](#releasing)).
 
+All four are required: a pull request cannot merge until they pass. Pull
+requests are squash-merged, and the branch is deleted after the merge.
+
 ## Review rules
 
 Reviewers check these first. A change that breaks one will not be merged.
@@ -118,6 +121,8 @@ New behavior needs a test. The suite is plain `node:test` with no framework:
 - Keep it focused. Several small pull requests are better than one large one.
 - Explain *why* in the description. The code already shows *what*.
 - Paste the output of the verification commands you ran.
+- Copilot code review runs on every push and follows [`REVIEW.md`](REVIEW.md);
+  its comments are advisory and do not block merging.
 - Update the docs you invalidated: [`docs/guide.md`](docs/guide.md) for user-facing
   behavior, [`extensions/jira-workbench/README.md`](extensions/jira-workbench/README.md)
   for semantics and boundaries.
@@ -159,7 +164,9 @@ CI runs the same check on every pull request. When the pull request merges, the
 GitHub release with notes generated from the merged pull requests. Until the tag
 exists, about a minute, an update fails and the panel does not offer the
 release. If the workflow fails, fix the cause and run it again from the Actions
-tab; a version that is already tagged is skipped.
+tab; a version that is already tagged is skipped. Release tags are protected:
+once created, they cannot be moved or deleted, so a broken release is fixed by
+publishing a new version.
 
 ## Where things live
 
