@@ -76,6 +76,9 @@ CI runs on every pull request and on every push to `main`:
   to check that `plugin.json` and `marketplace.json` name the same release (see
   [Releasing](#releasing)).
 
+All four are required: a pull request cannot merge until they pass. Pull
+requests are squash-merged, and the branch is deleted after the merge.
+
 ## Review rules
 
 Reviewers check these first. A change that breaks one will not be merged.
@@ -159,7 +162,9 @@ CI runs the same check on every pull request. When the pull request merges, the
 GitHub release with notes generated from the merged pull requests. Until the tag
 exists, about a minute, an update fails and the panel does not offer the
 release. If the workflow fails, fix the cause and run it again from the Actions
-tab; a version that is already tagged is skipped.
+tab; a version that is already tagged is skipped. Release tags are protected:
+once created, they cannot be moved or deleted, so a broken release is fixed by
+publishing a new version.
 
 ## Where things live
 

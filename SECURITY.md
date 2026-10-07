@@ -66,10 +66,14 @@ These properties are deliberate. They are useful context for a report:
 
 ## Repository security settings
 
-- GitHub Actions are pinned by full commit SHA, and Dependabot keeps those pins
-  current.
+- GitHub Actions are pinned by full commit SHA, the repository rejects workflows
+  that use an unpinned action, and Dependabot keeps those pins current.
 - CI's "No private data" job rejects a committed `artifacts/` directory or an
   absolute home path.
+- `main` accepts changes only through a pull request whose CI checks pass, for
+  administrators too. Force-pushes and deletion are blocked.
+- Release tags (`v*`) cannot be moved or deleted once created, so a pinned
+  marketplace version always installs the same commit.
 - Secret scanning with push protection, Dependabot alerts and security updates,
   CodeQL code scanning, and private vulnerability reporting are enabled.
 
