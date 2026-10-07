@@ -1,0 +1,15 @@
+{
+  "name": "jira-workbench",
+  "owner": { "name": "Sentry01", "url": "https://github.com/Sentry01" },
+  "metadata": { "description": "Jira Workbench, a Copilot canvas for tracing Jira work to sessions and pull requests." },
+  "plugins": [
+    {
+      "name": "jira-workbench",
+      "description": "Browse any Jira project's hierarchy and trace issues to Copilot sessions and GitHub PRs; Jira read-only.",
+      "version": "1.2.0",
+      "source": { "source": "github", "repo": "Sentry01/jira-workbench", "ref": "v1.2.0" },
+      "repository": "https://github.com/Sentry01/jira-workbench",
+      "license": "MIT"
+    }
+  ]
+}

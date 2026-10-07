@@ -1,0 +1,52 @@
+name: release
+
+# Publishes a release when a merge to main bumps the version. The marketplace entry pins
+# ref v<version>, so `copilot plugin update` cannot install a version until its tag exists:
+# this workflow creates that tag on the merge commit, with a GitHub release and its notes.
+on:
+  push:
+    branches: [main]
+    paths: [".github/plugin/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag and publish the release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Check that the manifests agree
+        id: manifest
+        run: node .github/scripts/check-release.mjs
+
+      # A change to the manifests that keeps the version (for example a new description) is
+      # not a release; its tag already exists.
+      - name: Create the tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.manifest.outputs.tag }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            echo "$TAG already exists; nothing to release."
+            exit 0
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --generate-notes
+          echo "Published $TAG at $GITHUB_SHA."

@@ -1,0 +1,87 @@
+name: Bug report
+description: Something in the canvas behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please **redact private data**: Jira domains,
+        project keys, cloud IDs, repository names, tokens, absolute paths.
+        The synthetic `DEMO` fixture is a good way to describe a scenario safely.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did the canvas do?
+      placeholder: A story with a running session showed up under "Available to start".
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1. Open the canvas and select a project
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      options:
+        - Connecting a site, project, or repository
+        - Execution queue or filters
+        - Launch brief, warnings, or acknowledgement
+        - Hierarchy view
+        - Traceability or refresh
+        - Navigation to a session or pull request
+        - Install, setup, or docs
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The build label shown under the panel. For a git clone, `git rev-parse --short HEAD` also works.
+      placeholder: 2f3f36e · 2026-10-01
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node version, and Copilot app version.
+      placeholder: macOS 15.3, Node 22.11, Copilot app 1.0.87
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or the failing test
+      description: Optional. Console output is often enough.
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed private Jira, repository, and account details from this report.
+          required: true
+        - label: I did not attach my `artifacts/.local/state.json`.
+          required: true

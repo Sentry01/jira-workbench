@@ -1,0 +1,37 @@
+name: Feedback or question
+description: Tell us how it went, or ask how something is meant to work.
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        No format required. First impressions are useful, especially anything
+        that was confusing.
+
+        Please keep private Jira, repository, and account details out of the post.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of feedback is this?
+      options:
+        - I tried it, and here is how it went
+        - Something in the docs was unclear
+        - A question about intended behavior
+        - An idea that is not fully formed yet
+        - Praise, complaints, or both
+    validations:
+      required: true
+
+  - type: textarea
+    id: body
+    attributes:
+      label: Your feedback
+    validations:
+      required: true
+
+  - type: input
+    id: context
+    attributes:
+      label: Anything about your setup we should know?
+      description: Optional. Team size, how you use Jira, what you hoped it would do.

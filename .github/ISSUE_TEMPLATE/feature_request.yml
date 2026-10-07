@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a capability or an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The best requests start with the moment that frustrated you, not with a
+        solution. Describe that first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What were you trying to do, and where did the canvas get in the way?
+      placeholder: I can see which PRs need review, but not which ones have failing checks.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Optional. For example, "I currently work around it by ...".
+
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Project boundaries
+      description: >
+        These are deliberate. A request that needs one of them relaxed is still
+        welcome, but say so explicitly.
+      options:
+        - label: This does not require writing to Jira (edits, transitions, comments, sprints).
+        - label: This does not require a new runtime dependency.
+        - label: This does not require inferring links without verified evidence.

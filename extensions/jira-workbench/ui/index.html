@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jira Workbench</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><defs><linearGradient id="jira-a" x1="98%" y1="0%" x2="58%" y2="40%"><stop offset="18%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient><linearGradient id="jira-b" x1="100%" y1="0%" x2="55%" y2="44%"><stop offset="18%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient></defs><path fill="#2684FF" d="M23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0Z"/><path fill="url(#jira-a)" d="M17.294 5.757H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001z"/><path fill="url(#jira-b)" d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005z"/></svg><div><h1>Jira Workbench</h1><p>From intent to pull request.</p></div></div>
+    <div class="header-actions"><span class="readonly" title="The canvas only reads Jira. Status changes are made by the Copilot sessions it launches.">Canvas reads Jira</span><button id="sync-jira" title="Start one Copilot session that checks every issue's Jira status against linked work and fixes wrong statuses">Update Jira</button><button id="refresh-execution">Refresh live state</button><button id="refresh" title="Refresh Jira, then live sessions and GitHub evidence">Refresh</button></div>
+  </header>
+  <section class="connection-bar" aria-label="Project selection">
+    <label>Jira site<select id="site"><option value="">Connect to Jira</option></select></label>
+    <label>Project<select id="project"><option value="">Select a project</option></select></label>
+    <span class="connection-arrow" aria-hidden="true">&rarr;</span>
+    <label class="repo-label">Copilot repository<select id="repository"><option value="">Choose repository for sessions</option></select></label>
+    <button id="connections" title="Reload sites and repository projects">Reload connections</button>
+    <div id="source-freshness" class="source-freshness" aria-label="Project source freshness"><span id="freshness" class="source" data-tone="idle" tabindex="0" role="note">Jira: not loaded</span><span id="session-freshness" class="source" data-tone="idle" tabindex="0" role="note">Sessions: not needed</span><span id="github-freshness" class="source" data-tone="idle" tabindex="0" role="note">GitHub: not needed</span></div>
+  </section>
+  <div id="notice" role="status" aria-live="polite" aria-relevant="additions text"></div>
+  <div id="connection-status" role="status" aria-live="polite" hidden></div>
+  <div id="sign-in" role="alert" hidden>
+    <p><strong>Atlassian needs you to sign in.</strong> Jira stays read-only here; the last good data is kept. Sign in and the Workbench reloads on its own.</p>
+    <p class="sign-in-actions"><button id="sign-in-button" class="primary">Sign in to Atlassian</button>
+      <span id="sign-in-mcp">or run <code>/mcp auth <span id="sign-in-server">atlassian</span></code> in Copilot.</span>
+      <span id="sign-in-connector" hidden>Reconnect the Atlassian connector in the Copilot app.</span></p>
+    <p id="sign-in-status" class="muted" hidden></p>
+  </div>
+  <div id="update-banner" role="status" aria-live="polite" hidden><span id="update-message"></span><button id="update-action" class="primary" hidden></button></div>
+  <div id="errors" role="alert"></div>
+  <main id="workbench">
+    <section class="workspace">
+      <div class="workspace-heading"><div><div class="eyebrow">PROJECT EXPLORER</div><h2><button id="project-title" class="project-title-action" title="Inspect project scope" disabled>Your work, connected.</button></h2></div><button id="project-start" class="primary" disabled>Start project session</button></div>
+      <div id="metrics" class="metrics"></div>
+      <ol id="progress-tracker" class="progress-tracker" aria-label="Work item progress across the project" hidden></ol>
+      <div class="view-toolbar">
+        <div class="view-switch" role="group" aria-label="Work view"><button id="view-execution" aria-pressed="true">Execution</button><button id="view-hierarchy" aria-pressed="false">Hierarchy</button></div>
+        <div id="execution-filters" class="execution-filters" role="group" aria-label="Execution filter"></div>
+        <button id="show-details" disabled>Show details</button>
+      </div>
+      <div class="filters"><input id="search" type="search" placeholder="Search key, title, assignee..." aria-label="Search work"><select id="status-filter" aria-label="Filter Jira status"><option value="all">All Jira statuses</option><option value="new">To do</option><option value="indeterminate">In progress</option><option value="done">Done</option></select><button id="expand" hidden>Expand all</button></div>
+      <div id="work-scroll">
+        <div id="hierarchy-header" class="tree-header" aria-hidden="true" hidden><span>Work hierarchy</span><span>Jira</span><span>Copilot / PR</span><span>Action</span></div>
+        <div id="tree" role="list" aria-label="Daily execution queue"><div class="empty"><h3>Choose a Jira project</h3><p>Explore every epic, issue and subtask, including work outside active sprints.</p></div></div>
+      </div>
+      <footer><span id="work-count">No project loaded</span><span>Jira, sessions and PRs keep their own state</span></footer>
+    </section>
+    <aside id="inspector" aria-label="Selected work item"><div class="drawer-toolbar"><button id="back-to-work">Back to work</button></div><div id="inspector-content"><div class="empty"><div class="empty-icon" aria-hidden="true">&#9671;</div><h3>Follow the thread</h3><p>Select an item to see its requirements, dependencies, sessions and pull requests.</p></div></div></aside>
+  </main>
+  <p id="build-version" class="build-version" title="Deployed Jira Workbench build (git commit · commit date)"></p>
+  <dialog id="launch-dialog" aria-labelledby="launch-title">
+    <div class="dialog-heading"><div class="eyebrow">START WITH COPILOT</div><h2 id="launch-title">Review session scope</h2></div>
+    <div id="launch-preview"></div>
+    <label for="launch-mode">Mode<select id="launch-mode"><option value="plan">Plan</option><option value="autopilot">Implement</option></select></label>
+    <div class="launch-fields">
+      <label for="launch-objective">Objective<textarea id="launch-objective" rows="3"></textarea></label>
+      <label for="launch-criteria">Acceptance criteria<textarea id="launch-criteria" rows="4" placeholder="One criterion per line. Missing criteria do not prevent planning."></textarea></label>
+      <label for="launch-constraints">Constraints<textarea id="launch-constraints" rows="3" placeholder="Boundaries and implementation constraints"></textarea></label>
+    </div>
+    <details id="launch-sources"><summary>Read-only references &amp; provenance</summary><div id="launch-source-list"></div></details>
+    <section id="launch-warnings" aria-label="Launch warnings"></section>
+    <label id="launch-ack-label" class="checkbox-label" hidden><input id="launch-warning-ack" type="checkbox">I acknowledge every warning above before implementation.</label>
+    <p id="launch-status" role="status" aria-live="polite"></p>
+    <p id="launch-error" role="alert" hidden></p>
+    <div class="safety-note">Creates one nested session in the chosen repository. The canvas makes no Jira edits; an issue session may only move its own issue to In Progress. No automatic fan-out or automatic completion.</div>
+    <div class="dialog-actions"><button id="cancel-launch">Cancel</button><button id="review-changes" disabled>Review changes</button><button id="confirm-launch" class="primary" disabled>Start Plan session</button></div>
+  </dialog>
+  <dialog id="sync-dialog" aria-labelledby="sync-title">
+    <div class="dialog-heading"><div class="eyebrow">UPDATE JIRA</div><h2 id="sync-title">Sync Jira statuses with the work</h2></div>
+    <p>Starts one Copilot session in <strong id="sync-repo"></strong> that checks every issue in <strong id="sync-project"></strong> against linked sessions, pull requests, branches and commits, then moves issues whose status is wrong.</p>
+    <ul>
+      <li>Status transitions only: no field edits, comments, assignments, sprint changes or new issues.</li>
+      <li>Done issues are never reopened. Ambiguous cases are reported, not changed.</li>
+      <li>The session ends with a summary table of every issue it checked.</li>
+    </ul>
+    <div class="safety-note">The session decides what to change. Review its summary in the session afterwards.</div>
+    <div class="dialog-actions"><button id="cancel-sync">Cancel</button><button id="confirm-sync" class="primary">Start sync session</button></div>
+  </dialog>
+</body>
+</html>

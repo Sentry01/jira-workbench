@@ -1,0 +1,115 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Run the test suite
+        run: node --test extensions/jira-workbench/test/*.test.mjs
+
+  browser:
+    name: Browser harnesses
+    runs-on: ubuntu-latest
+    env:
+      WORKBENCH_ROOT: ${{ github.workspace }}/extensions/jira-workbench
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      # The extension has no dependencies; the harnesses need only the browser driver.
+      # Bumped by hand: there is no manifest for Dependabot to track.
+      - name: Install the browser driver
+        run: npm install --no-save --no-package-lock --no-audit --no-fund playwright-core@1.63.0
+
+      - name: Locate Google Chrome
+        run: |
+          chrome="$(command -v google-chrome || true)"
+          if [ -z "$chrome" ]; then
+            echo "::error::Google Chrome is not installed on this runner."
+            exit 1
+          fi
+          "$chrome" --version
+          echo "BROWSER_EXECUTABLE=$chrome" >> "$GITHUB_ENV"
+
+      - name: Verify the canvas workflow
+        run: node verification/verify-canvas.mjs
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/screens
+
+      - name: Verify MCP reconnection
+        run: node verification/verify-reconnect.mjs
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/screens
+
+      - name: Upload screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-harness-screens
+          path: ${{ runner.temp }}/screens
+          if-no-files-found: ignore
+          retention-days: 7
+
+  hygiene:
+    name: No private data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Reject committed local state
+        run: |
+          if git ls-files | grep -E '(^|/)artifacts/'; then
+            echo "::error::artifacts/ contains private local state and must not be committed."
+            exit 1
+          fi
+
+      - name: Reject absolute home paths
+        run: |
+          if git grep -nIE '/(Users|home)/[a-z]' -- . ':!.github/workflows'; then
+            echo "::error::An absolute user path was committed."
+            exit 1
+          fi
+
+  release-manifests:
+    name: Release manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      # plugin.json's version, the marketplace entry's version and its pinned ref must name one release.
+      - name: Test the manifest check
+        run: node --test .github/scripts/*.test.mjs
+
+      - name: Check that the manifests agree
+        run: node .github/scripts/check-release.mjs

@@ -1,0 +1,10 @@
+{
+  "name": "jira-workbench",
+  "description": "Browse any Jira project's hierarchy and trace issues to Copilot sessions and GitHub PRs; Jira read-only.",
+  "version": "1.2.0",
+  "author": { "name": "Sentry01", "url": "https://github.com/Sentry01" },
+  "repository": "https://github.com/Sentry01/jira-workbench",
+  "license": "MIT",
+  "keywords": ["jira", "canvas", "traceability", "copilot"],
+  "extensions": "extensions"
+}

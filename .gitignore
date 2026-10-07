@@ -1,0 +1,10 @@
+# Private local state: Jira/repository mappings, briefs, launch receipts.
+artifacts/
+
+# Local npm installs for the verification harnesses only.
+# The extension itself has no dependencies, so no manifest is tracked.
+node_modules/
+package.json
+package-lock.json
+
+.DS_Store
