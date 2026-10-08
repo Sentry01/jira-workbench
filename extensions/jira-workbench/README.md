@@ -64,7 +64,7 @@ load. A git checkout shows its commit and date (`-dirty` with local changes). A
 plugin or copied install has no `.git`, so it is identified by git's tree hash of
 this folder, which equals the folder's SHA on GitHub. When its tree matches the
 build an update would install, it shows that build's commit and date, prefixed
-with the release version for a pinned release (`v1.1.0 · 1a2b3c4 · 2026-10-03`);
+with the release version for a pinned release (`v1.2.1 · 1a2b3c4 · 2026-10-08`);
 otherwise it shows `v<version> · tree <hash>`. A checkout nested inside another
 repository (such as a versioned `~/.copilot`) is never mistaken for this one.
 

@@ -154,8 +154,8 @@ own or together with the change you are releasing:
    value and its source `ref` to the new tag:
 
    ```json
-   "version": "1.2.0",
-   "source": { "source": "github", "repo": "Sentry01/jira-workbench", "ref": "v1.2.0" },
+   "version": "<version>",
+   "source": { "source": "github", "repo": "Sentry01/jira-workbench", "ref": "v<version>" },
    ```
 
 Check the pair before you push:
@@ -181,11 +181,11 @@ maintainer adds the `no-release` label, which skips this check. The `version` in
 schema version, not the release version.
 
 When the pull request merges, the
-`release` workflow creates the `v1.2.0` tag on the merge commit and publishes a
-GitHub release with notes generated from the merged pull requests. Until the tag
-exists, about a minute, an update fails and the panel does not offer the
-release. If the workflow fails, fix the cause and run it again from the Actions
-tab; a version that is already tagged is skipped. Release tags are protected:
+`release` workflow creates the matching `v<version>` tag on the merge commit and
+publishes a GitHub release with notes generated from the merged pull requests.
+Until the tag exists, about a minute, an update fails and the panel does not
+offer the release. If the workflow fails, fix the cause and run it again from
+the Actions tab; a version that is already tagged is skipped. Release tags are protected:
 once created, they cannot be moved or deleted, so a broken release is fixed by
 publishing a new version.
 

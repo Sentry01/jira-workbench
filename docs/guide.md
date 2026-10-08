@@ -78,8 +78,8 @@ newer build, a banner appears above the work queue:
 
 The small label under the panel names the running build. A git clone shows its
 own commit and date. A plugin install shows the version, commit and date of the
-release it matches, such as `v1.1.0 · 1a2b3c4 · 2026-10-03`, and
-`v1.1.0 · tree <hash>` when it matches no release.
+release it matches, such as `v1.2.1 · 1a2b3c4 · 2026-10-08`, and
+`v1.2.1 · tree <hash>` when it matches no release.
 
 ---
 
