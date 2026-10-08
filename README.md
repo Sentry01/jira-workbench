@@ -19,11 +19,9 @@ Copilot sessions, then traces each result back to the Jira issue it came from.
 
 ## Overview
 
-Requirements live in Jira, agents run in Copilot, and the code lands in GitHub.
-Without a link between them, you check all three by hand to answer two
-questions: what needs my attention next, and did this issue actually ship?
+This Copilot App canvas connects requirements in Jira, agents running in Copilot App sessions, and code landing in GitHub pull requests.
 
-Jira Workbench answers both in one panel. It works from observed evidence
+Jira Workbench helps you understand what needs your attention next and kick off agentic work in Copilot App from one panel. It works from observed evidence
 (session state, pull request state, and checks) rather than from the Jira status
 column.
 
@@ -36,7 +34,7 @@ column.
 | **Traceability** | Each issue links to its sessions, branches, pull requests and checks, with the evidence for every link. Links are never inferred from similar titles or branch names. |
 | **Hierarchy view** | Epics, stories and subtasks by Jira parent link. Missing parents stay visible, and parent cycles are reported. |
 | **Read-only canvas** | The gateway allows only Jira reads. The canvas never edits, transitions or comments on issues, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves its issue to In Progress, and a confirmed **Update Jira** session corrects statuses across the project. |
-| **No dependencies** | Plain JavaScript, tested with `node:test`. It installs as a plugin or a folder copy and needs no build step. |
+| **No dependencies** | Plain JavaScript. It installs as a plugin or a folder copy and needs no build step. |
 
 ## Quickstart
 
