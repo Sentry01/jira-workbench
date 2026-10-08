@@ -43,22 +43,24 @@ const versionOf = (text, where) => {
     catch (error) { fail(`${PLUGIN_FILE} ${where} cannot be read: ${error.message}`); }
     const parts = VERSION.exec(typeof version === "string" ? version : "");
     if (!parts) fail(`${PLUGIN_FILE} ${where} has "version" ${JSON.stringify(version)}; it must be MAJOR.MINOR.PATCH.`);
-    return { text: version, core: parts.slice(1, 4).map(Number), pre: parts[4]?.split(".") ?? null };
+    return { text: version, core: parts.slice(1, 4).map(BigInt), pre: parts[4]?.split(".") ?? null };
 };
 
 // Semantic Versioning precedence: numeric core first; a prerelease ranks below its release.
+// BigInt, because Number rounds long numeric identifiers such as timestamps.
+const order = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
 const compareIdentifier = (a, b) => {
     const [na, nb] = [/^\d+$/.test(a), /^\d+$/.test(b)];
-    if (na && nb) return Number(a) - Number(b);
+    if (na && nb) return order(BigInt(a), BigInt(b));
     if (na !== nb) return na ? -1 : 1;
-    return a < b ? -1 : a > b ? 1 : 0;
+    return order(a, b);
 };
 const compare = (a, b) => {
-    for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i];
+    for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return order(a.core[i], b.core[i]);
     if (!a.pre || !b.pre) return (a.pre ? -1 : 0) - (b.pre ? -1 : 0);
     for (let i = 0; i < Math.min(a.pre.length, b.pre.length); i++) {
-        const order = compareIdentifier(a.pre[i], b.pre[i]);
-        if (order) return order;
+        const result = compareIdentifier(a.pre[i], b.pre[i]);
+        if (result) return result;
     }
     return a.pre.length - b.pre.length;
 };

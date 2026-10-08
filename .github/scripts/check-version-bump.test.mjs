@@ -57,8 +57,12 @@ test("a change that ships nothing passes without a new version", async () => {
 });
 
 test("a shipped change that keeps or lowers the version fails and names the files", async () => {
-    for (const [to, label] of [["1.2.0", "kept"], ["1.1.9", "lowered"], ["1.2.0-rc.1", "prerelease of the same version"]]) {
-        const result = await check({ to, files: code });
+    const cases = [
+        ["1.2.0", "1.2.0", "kept"], ["1.2.0", "1.1.9", "lowered"], ["1.2.0", "1.2.0-rc.1", "prerelease of the same version"],
+        ["1.3.0-20261008083306013", "1.3.0-20261008083306012.1", "lowered by a long numeric identifier"],
+    ];
+    for (const [from, to, label] of cases) {
+        const result = await check({ from, to, files: code });
         assert.equal(result.code, 1, label);
         assert.match(result.stdout, /^::error file=\.github\/plugin\/plugin\.json::/, label);
         assert.match(result.stdout, /extensions\/jira-workbench\/lib\/model\.mjs/, label);
@@ -83,6 +87,7 @@ test("a shipped change that raises the version passes", async () => {
         ["1.2.0", "1.2.1"], ["1.2.0", "1.3.0"], ["1.2.0", "2.0.0"], ["1.9.0", "1.10.0"],
         ["1.2.0", "1.3.0-beta.1"], ["1.3.0-beta.1", "1.3.0"], ["1.3.0-beta.2", "1.3.0-beta.10"],
         ["1.3.0-beta", "1.3.0-beta.1"], ["1.3.0-1", "1.3.0-alpha"],
+        ["1.3.0-20261008083306012", "1.3.0-20261008083306013"],
     ];
     for (const [from, to] of cases) {
         const result = await check({ from, to, files: code });
