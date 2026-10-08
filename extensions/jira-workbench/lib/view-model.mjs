@@ -124,11 +124,28 @@ export function executionEvidence(item, execution, trace = null) {
 }
 
 // The one search rule for both views: key, summary, assignee and parent key, plus the Jira status filter: a status
-// category, or "status:<name>" for one of the project's own workflow statuses.
-export function matches(item, query = "", category = "all") {
+// category, or "status:<name>" for one of the project's own workflow statuses, and the sprint filter.
+export function matches(item, query = "", category = "all", sprint = "all") {
     const search = query.trim().toLocaleLowerCase();
     return (!search || [item.key, item.summary, item.assignee, item.parentKey].filter(Boolean).join(" ").toLocaleLowerCase().includes(search))
-        && (category === "all" || (category.startsWith("status:") ? item.status === category.slice(7) : item.category === category));
+        && (category === "all" || (category.startsWith("status:") ? item.status === category.slice(7) : item.category === category))
+        && (sprint === "all" || (sprint === "none" ? !item.sprints?.length : (item.sprints || []).some(each => `sprint:${each.id}` === sprint)));
+}
+
+// The sprint filter's options: the sprints the loaded issues belong to, plus "No sprint" when some work has none.
+// Empty when the project has no sprint data, so the filter stays hidden.
+export function sprintOptions(issues = []) {
+    const sprints = new Map(issues.flatMap(item => item.sprints || []).map(sprint => [sprint.id, sprint.name]));
+    if (!sprints.size) return [];
+    const options = [...sprints].sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true, sensitivity: "base" }))
+        .map(([id, name]) => ({ value: `sprint:${id}`, label: name }));
+    return issues.some(item => !item.sprints?.length) ? [{ value: "none", label: "No sprint" }, ...options] : options;
+}
+
+// The sprint filter actually applied: the saved choice while the project offers it, otherwise "all". The saved choice
+// itself is kept, so it applies again once a refresh brings that sprint back.
+export function appliedSprint(options = [], selected = "all") {
+    return options.some(option => option.value === selected) ? selected : "all";
 }
 
 const CATEGORY_LABELS = { new: "To do", indeterminate: "In progress", done: "Done", unknown: "Other" };
@@ -154,11 +171,11 @@ export function statusFilterGroups(statuses = [], selected = "all") {
 }
 
 // Keeps matching nodes and the ancestors of matches. With no filter, every node keeps all its children.
-export function filterTree(roots, query = "", category = "all") {
-    const unfiltered = !query.trim() && category === "all";
+export function filterTree(roots, query = "", category = "all", sprint = "all") {
+    const unfiltered = !query.trim() && category === "all" && sprint === "all";
     return roots.flatMap(node => {
-        const children = filterTree(node.children, query, category);
-        const hit = matches(node.issue, query, category);
+        const children = filterTree(node.children, query, category, sprint);
+        const hit = matches(node.issue, query, category, sprint);
         return hit || children.length ? [{ ...node, children: hit && unfiltered ? node.children : children }] : [];
     });
 }

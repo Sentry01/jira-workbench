@@ -28,9 +28,39 @@ export function descendants(issues, nodeId) {
     return children;
 }
 
-export function normalizeIssue(raw) {
+// Custom field IDs differ per Jira site. v1 returns them under their raw ID; v2 maps each to
+// fields.customFields[label] = { id, value }. Both shapes resolve to [id, value] pairs here.
+function customFields(fields) {
+    const pairs = Object.entries(fields).filter(([id]) => id.startsWith("customfield_"));
+    for (const entry of Object.values(fields.customFields || {}))
+        if (entry && typeof entry === "object" && typeof entry.id === "string") pairs.push([entry.id, entry.value]);
+    return pairs;
+}
+
+// Jira Software's sprint value: the field is recognised by what it holds, never by its site-specific ID or label.
+const isSprint = value => value && typeof value === "object" && value.id != null && typeof value.name === "string"
+    && typeof value.state === "string" && value.boardId != null;
+
+export function findSprintField(raw) {
+    return customFields(raw?.fields || {}).find(([, value]) => Array.isArray(value) && value.length && value.every(isSprint))?.[0] || null;
+}
+
+function sprintsIn(fields, fieldId) {
+    if (!fieldId) return undefined;
+    const value = customFields(fields).find(([id]) => id === fieldId)?.[1];
+    return (Array.isArray(value) ? value : value == null ? [] : [value]).flatMap(sprint => {
+        if (!sprint || typeof sprint !== "object" || !sprint.name) return [];
+        const name = String(sprint.name).trim();
+        return name ? [{ id: sprint.id == null ? name : String(sprint.id), name }] : [];
+    });
+}
+
+// sprintField: the site's sprint field ID, when known. Without it `sprints` stays undefined (no sprint data),
+// distinct from [] (no sprint).
+export function normalizeIssue(raw, { sprintField = null } = {}) {
     const f = raw.fields || {};
     if (!raw.id || !raw.key) throw new Error("Jira issue is missing its stable ID or key.");
+    const sprints = sprintsIn(f, sprintField);
     return {
         id: String(raw.id), key: raw.key, summary: f.summary || "Untitled",
         projectId: String(f.project?.id || ""), type: f.issuetype?.name || "Issue",
@@ -38,7 +68,7 @@ export function normalizeIssue(raw) {
         parentKey: f.parent?.key || null, parentId: f.parent?.id || null,
         status: f.status?.name || "Unknown", category: f.status?.statusCategory?.key || "unknown",
         description: plainText(f.description).trim(), assignee: f.assignee?.displayName || "Unassigned",
-        priority: f.priority?.name || "Not set", labels: f.labels || [], updated: f.updated || null,
+        priority: f.priority?.name || "Not set", labels: f.labels || [], updated: f.updated || null, sprints,
         dependencies: (f.issuelinks || []).flatMap(link => {
             const other = link.outwardIssue || link.inwardIssue;
             return other ? [{

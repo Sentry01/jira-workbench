@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, banner, statusFilterGroups,
+    signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -13,7 +13,7 @@ const jiraMark = className => {
 };
 const token = location.hash.slice(1);
 const filters = [["needs-me", "Needs me"], ["running", "Running"], ["prs", "PRs to review"], ["available", "Available to start"], ["all", "All work"]];
-const defaults = () => ({ view: "execution", executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", scrollTop: 0, detailsOpen: false });
+const defaults = () => ({ view: "execution", executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", sprint: "all", scrollTop: 0, detailsOpen: false });
 let state = { sites: [], projects: [], appProjects: [], issues: [], links: {}, requests: [], executions: [], navigationReceipts: [], tree: { roots: [], warnings: [] }, catalogErrors: [] };
 let ui = defaults(), tab = "trace", focusedNode = null, scopeEpoch = 0;
 let selecting = false, scopeConfirmed = true, selectionVersion = 0, selectionChain = Promise.resolve(), pollPending = false, snapshotVersion = 0;
@@ -129,6 +129,7 @@ function normalizePreferences(value = {}) {
         query: typeof value.query === "string" ? value.query : "",
         category: ["all", "new", "indeterminate", "done"].includes(value.category)
             || typeof value.category === "string" && value.category.startsWith("status:") && value.category.length > 7 && value.category.length <= 207 ? value.category : "all",
+        sprint: typeof value.sprint === "string" && /^(?:all|none|sprint:.{1,100})$/s.test(value.sprint) ? value.sprint : "all",
         scrollTop: Number.isFinite(value.scrollTop) ? Math.max(0, value.scrollTop) : 0,
         detailsOpen: value.detailsOpen === true,
     };
@@ -386,6 +387,17 @@ function renderStatusFilter() {
     }
     select.value = ui.category;
 }
+// The sprints the loaded issues belong to; hidden when the project has no sprint data.
+let sprintChoices = [];
+const sprintFilter = () => appliedSprint(sprintChoices, ui.sprint);
+function renderSprintFilter() {
+    const select = $("sprint-filter");
+    sprintChoices = sprintOptions(state.issues);
+    // Hiding a focused control would drop keyboard focus, so hand it to the search field first.
+    if (!sprintChoices.length && document.activeElement === select) $("search").focus({ preventScroll: true });
+    select.hidden = !sprintChoices.length;
+    selectOptions(select, sprintChoices, sprintFilter() === "all" ? "" : sprintFilter(), "All sprints");
+}
 function captureFocus(container) {
     return container.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 }
@@ -409,6 +421,7 @@ function render({ force = false } = {}) {
     }
     selectOptions($("repository"), state.appProjects.map(p => ({ value: p.id, label: p.repo || p.name })), state.mapping?.id, "Choose a Copilot repository");
     renderStatusFilter();
+    renderSprintFilter();
     configureActionControl($("project-start"), "prepare", "project", !state.project || !state.mapping || state.cached);
     configureActionControl($("sync-jira"), "launch", "project", selecting || !state.project || !state.mapping || Boolean(state.error) || state.cached || nodePending("project"));
     configureActionControl($("refresh"), "refresh-jira", "jira", selecting || !state.project);
@@ -506,7 +519,8 @@ function evidenceList(evidence) {
     return list;
 }
 function renderExecutionFilters() {
-    const entries = executionItems().filter(({ item }) => matches(item, ui.query, ui.category));
+    const sprint = sprintFilter();
+    const entries = executionItems().filter(({ item }) => matches(item, ui.query, ui.category, sprint));
     const signature = JSON.stringify([ui.executionFilter, filters.map(([id]) => entries.filter(({ execution }) => id === "all" || execution.views.includes(id)).length)]);
     if ($("execution-filters").dataset.signature === signature) return;
     const focus = captureFocus($("execution-filters"));
@@ -619,7 +633,7 @@ function refreshSourceButton(label, source = "all", nodeId) {
 }
 function renderTree(force = false) {
     const container = $("tree");
-    const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, ui.selected, [...collapsed], state.issues, state.tree, state.executions, state.links, state.requests, state.mapping, selecting, scopeConfirmed]);
+    const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issues, state.tree, state.executions, state.links, state.requests, state.mapping, selecting, scopeConfirmed]);
     if (!force && (container.contains(document.activeElement) || signature === treeDigest)) return;
     const focus = captureFocus(container);
     treeDigest = signature;
@@ -634,7 +648,8 @@ function renderTree(force = false) {
         return;
     }
     if (ui.view === "execution") {
-        const entries = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
+        const sprint = sprintFilter();
+        const entries = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category, sprint) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
         entries.sort((a, b) => (a.execution.rank ?? Number.MAX_SAFE_INTEGER) - (b.execution.rank ?? Number.MAX_SAFE_INTEGER) || a.item.key.localeCompare(b.item.key));
         for (const { item, execution } of entries) {
             const row = createRow(item, 0);
@@ -660,7 +675,7 @@ function renderTree(force = false) {
             container.append(row);
         }
     } else {
-        const roots = filterTree(state.tree.roots, ui.query, ui.category);
+        const roots = filterTree(state.tree.roots, ui.query, ui.category, sprintFilter());
         const childSessions = descendantSessionCounts(state.issues, id => nodeLinks(id).sessions.map(session => session.id));
         const add = (node, depth, parentId = "", index = 0, count = 1) => {
             const item = node.issue, expanded = !collapsed.has(item.id) || Boolean(ui.query);
@@ -702,7 +717,7 @@ function renderTree(force = false) {
     const rows = [...container.querySelectorAll("[data-node-id]")];
     if (!rows.length) container.append(el("div", ui.view === "execution" && !state.executions.length
         ? "No execution entries reported for this project. Refresh live state, or inspect and start project work from the header."
-        : state.issues.length ? "No matching work in this view. Choose All work or clear the search and Jira status filter." : "No visible issues in this project.", "empty"));
+        : state.issues.length ? "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters." : "No visible issues in this project.", "empty"));
     if (!rows.some(row => row.dataset.nodeId === focusedNode)) focusedNode = rows.find(row => row.dataset.nodeId === ui.selected)?.dataset.nodeId || rows[0]?.dataset.nodeId;
     rows.forEach(row => { row.tabIndex = row.dataset.nodeId === focusedNode ? 0 : -1; });
     $("work-count").textContent = `${rows.length} visible work scope${rows.length === 1 ? "" : "s"}`;
@@ -1218,6 +1233,7 @@ function selectProject(cloudId, jiraProjectId) {
 
 $("search").addEventListener("input", () => { ui.query = $("search").value; savePreferences("query"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("status-filter").addEventListener("change", () => { ui.category = $("status-filter").value; savePreferences("category"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
+$("sprint-filter").addEventListener("change", () => { ui.sprint = $("sprint-filter").value || "all"; savePreferences("sprint"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("expand").addEventListener("click", () => { collapsed.clear(); savePreferences("collapsed"); renderTree(true); paintFeedback(); });
 for (const view of ["execution", "hierarchy"]) $(`view-${view}`).addEventListener("click", () => {
     ui.view = view;

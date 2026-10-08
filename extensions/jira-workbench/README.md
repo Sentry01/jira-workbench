@@ -168,6 +168,13 @@ on loaded issues. A step no issue is in yet still appears. On Atlassian MCP v1,
 which has no status listing, or when the listing fails, the filter offers the
 statuses seen on issues and the Jira refresh is unaffected.
 
+The sprint filter lists the sprints the loaded issues belong to, plus **No
+sprint** when some work has none. Sprint field IDs differ per Jira site, so the
+gateway finds the field once per site: it reads one issue matching
+`sprint is not EMPTY` and keeps the custom field whose value holds sprints.
+Projects without sprints, and sites without Jira Software, show no sprint filter.
+A saved sprint the project no longer offers is treated as "all" until it returns.
+
 Project-scoped selection, view, filters, expansion, and scroll are remembered.
 Narrow panels use a focused detail view with **Back to work**. Pending actions do
 not disable unrelated navigation or search.

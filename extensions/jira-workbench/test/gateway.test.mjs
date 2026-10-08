@@ -46,15 +46,57 @@ test("loads every issue page with an explicit project filter, including epics ou
     const calls = [];
     const gateway = new Gateway(runtime((name, args) => {
         calls.push({ name, args });
+        if (/sprint is not EMPTY/.test(args.jql)) return { issues: [], isLast: true };
         return args.nextPageToken ? { issues: [issue("2", "DEMO-2", "DEMO-1")], isLast: true } :
             { issues: [issue("1", "DEMO-1", null, "Epic")], nextPageToken: "next", isLast: false };
     }));
     const result = await gateway.issues("site-a", "42");
     assert.equal(result.issues.length, 2);
-    assert.match(calls[0].args.jql, /^project = 42 /);
-    assert.doesNotMatch(calls[0].args.jql, /sprint/i);
-    assert.equal(calls[1].args.nextPageToken, "next");
-    assert.ok(calls[0].args.fields.includes("parent"));
+    const pages = calls.filter(call => !/sprint/i.test(call.args.jql));
+    assert.equal(pages.length, 2);
+    assert.match(pages[0].args.jql, /^project = 42 /);
+    assert.equal(pages[1].args.nextPageToken, "next");
+    assert.ok(pages[0].args.fields.includes("parent"));
+    assert.ok(!pages[0].args.fields.some(field => field.startsWith("customfield_")), "no site-specific field is assumed");
+    assert.equal(result.issues[0].sprints, undefined, "a project with no sprint data offers no sprint filter");
+});
+
+test("discovers the site's sprint field once, from whatever ID and response shape the site uses", async () => {
+    const sprint = { id: 35, name: "Sprint 1", state: "active", boardId: 36 };
+    const calls = [];
+    const gateway = new Gateway(runtime((name, args) => {
+        calls.push(args);
+        const raw = issue("1", "DEMO-1");
+        if (/sprint is not EMPTY/.test(args.jql)) {
+            assert.deepEqual(args.fields, ["*all"]);
+            raw.fields.customFields = { Sprint: { id: "customfield_31337", value: [sprint] } };
+            return { issues: [raw], isLast: true };
+        }
+        if (args.fields.includes("customfield_31337")) raw.fields.customfield_31337 = [sprint];
+        return { issues: [raw], isLast: true };
+    }));
+    assert.deepEqual((await gateway.issues("site-a", "42")).issues[0].sprints, [{ id: "35", name: "Sprint 1" }]);
+    await gateway.issues("site-a", "42", { fresh: true });
+    assert.equal(calls.filter(args => /sprint/i.test(args.jql)).length, 1, "the field is cached per site");
+    await gateway.issues("site-b", "42");
+    assert.equal(calls.filter(args => /sprint/i.test(args.jql)).length, 2, "another site is probed on its own");
+});
+
+test("a site that rejects the sprint clause loads without a sprint filter; a transient fault still fails the load", async () => {
+    let probes = 0, flaky = false;
+    const gateway = new Gateway(runtime((name, args) => {
+        if (/sprint is not EMPTY/.test(args.jql)) {
+            probes++;
+            if (flaky) throw new Error("503 Service Unavailable");
+            throw new Error("Field 'sprint' does not exist or you do not have permission to view it.");
+        }
+        return { issues: [issue("1", "DEMO-1")], isLast: true };
+    }), { transientDelayMs: 1, transientRetries: 0 });
+    assert.equal((await gateway.issues("site-a", "42")).issues[0].sprints, undefined);
+    await gateway.issues("site-a", "42");
+    assert.equal(probes, 1, "a rejected clause is remembered for the site");
+    flaky = true;
+    await assert.rejects(gateway.issues("site-b", "42"), error => error.retryable === true);
 });
 
 

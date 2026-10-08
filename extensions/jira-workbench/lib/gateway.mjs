@@ -1,4 +1,4 @@
-import { normalizeIssue, parseToolResult } from "./model.mjs";
+import { findSprintField, normalizeIssue, parseToolResult } from "./model.mjs";
 import { bounded, classify, JIRA_SERVER, matchesTool, preferred, serverLabel, signInError, SITE_TOOL, toolError } from "./runtime.mjs";
 import { open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -77,6 +77,8 @@ export class Gateway {
         this.owner = null;
         // The Jira server whose read last succeeded: the one actually serving, after any failover.
         this.answered = null;
+        // Each site's sprint field ID, learned from Jira's own data; it is site-wide and does not change.
+        this.sprintFields = new Map();
     }
     invalidate() { this.toolsAt = 0; this.rebuiltAt = 0; this.recent.clear(); this.owner = null; }
     rpc(key, start, ms, what) {
@@ -331,21 +333,42 @@ export class Gateway {
         }
         return [...statuses.values()];
     }
+    // Sprint field IDs differ per site. Jira resolves the JQL `sprint` keyword itself, so one issue it matches
+    // reveals the field by its sprint-shaped value. No match leaves the project without sprint data.
+    async sprintField(cloudId, projectId, options) {
+        if (this.sprintFields.has(cloudId)) return this.sprintFields.get(cloudId);
+        let result;
+        try {
+            result = await this.call("searchJiraIssuesUsingJql", {
+                cloudId, jql: `project = ${projectId} AND sprint is not EMPTY`, fields: ["*all"], maxResults: 1, responseContentFormat: "markdown",
+            }, { ...options, optional: { view: "full" } });
+        } catch (error) {
+            // Sign-in, outages and retryable faults belong to the Connection, exactly as for the issue read itself.
+            if (error.retryable || error.jiraDown || error.needsSignIn || error.kind === "auth") throw error;
+            // A site without Jira Software rejects the clause ("Field 'sprint' does not exist"); remember that.
+            if (/\bsprint\b/i.test(error.message || "")) this.sprintFields.set(cloudId, null);
+            return null;
+        }
+        const field = findSprintField(Array.isArray(result?.issues) ? result.issues[0] : null);
+        if (field) this.sprintFields.set(cloudId, field);
+        return field;
+    }
     async issues(cloudId, projectId, options) {
         if (!/^\d+$/.test(projectId)) throw invalid("A numeric Jira project ID is required.");
+        const sprintField = await this.sprintField(cloudId, projectId, options);
         const issues = new Map(), cursors = new Set();
         let nextPageToken;
         for (let page = 0; page < 100; page++) {
             const args = {
                 cloudId, jql: `project = ${projectId} ORDER BY key ASC`,
-                fields: FIELDS, maxResults: 100, responseContentFormat: "markdown",
+                fields: sprintField ? [...FIELDS, sprintField] : FIELDS, maxResults: 100, responseContentFormat: "markdown",
             };
             if (nextPageToken) args.nextPageToken = nextPageToken;
             // v2's default "compact" view drops project, parent, description, labels and links even when asked for.
             const result = await this.call("searchJiraIssuesUsingJql", args, { ...options, optional: { view: "full" } });
             if (!Array.isArray(result.issues)) throw invalid("Jira issue search returned an unsupported response.");
             for (const raw of result.issues) {
-                const row = normalizeIssue(raw);
+                const row = normalizeIssue(raw, { sprintField });
                 if (row.projectId !== projectId) throw invalid("Jira returned an issue outside the selected project.");
                 issues.set(row.id, row);
             }

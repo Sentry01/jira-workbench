@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeIssue, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, requestStatus } from "../lib/model.mjs";
+import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, requestStatus } from "../lib/model.mjs";
 
 const issue = (id, key, parent, type = "Story", category = "new") => ({
     id, key, fields: {
@@ -22,12 +22,30 @@ const rows = [
 test("normalizes descriptions, status category and parent without treating sprint as a parent", () => {
     const raw = issue("2", "DEMO-2", "DEMO-1");
     raw.fields.description = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "<script>reference</script>" }] }] };
-    raw.fields.customfield_10020 = [{ id: 8 }];
-    const result = normalizeIssue(raw);
+    raw.fields.customfield_10777 = [{ id: 8, name: "Sprint 8", state: "active", boardId: 3 }];
+    const result = normalizeIssue(raw, { sprintField: "customfield_10777" });
     assert.equal(result.parentKey, "DEMO-1");
     assert.equal(result.description, "<script>reference</script>");
     assert.equal(result.category, "new");
     assert.equal(result.type, "Story");
+    assert.deepEqual(result.sprints, [{ id: "8", name: "Sprint 8" }]);
+    assert.equal(normalizeIssue(raw).sprints, undefined, "without a discovered sprint field there is no sprint data");
+    assert.deepEqual(rows[1].sprints, undefined);
+    raw.fields.customfield_10777 = null;
+    assert.deepEqual(normalizeIssue(raw, { sprintField: "customfield_10777" }).sprints, [], "a known field with no value is an empty sprint list");
+});
+
+test("finds the sprint field by its value shape in either Atlassian MCP response shape, whatever its ID", () => {
+    const sprint = { id: 35, name: "Sprint 1", state: "future", boardId: 36, goal: "" };
+    const v1 = issue("2", "DEMO-2");
+    Object.assign(v1.fields, { customfield_10001: [{ id: 1, name: "Team", value: "x" }], customfield_12345: [sprint] });
+    assert.equal(findSprintField(v1), "customfield_12345");
+    const v2 = issue("2", "DEMO-2");
+    v2.fields.customFields = { Team: { id: "customfield_10001", value: [{ id: 1, name: "x" }] }, Sprint: { id: "customfield_20020", value: [sprint] } };
+    assert.equal(findSprintField(v2), "customfield_20020");
+    assert.deepEqual(normalizeIssue(v2, { sprintField: "customfield_20020" }).sprints, [{ id: "35", name: "Sprint 1" }]);
+    assert.equal(findSprintField(issue("3", "DEMO-3")), null);
+    assert.equal(findSprintField(null), null);
 });
 
 
