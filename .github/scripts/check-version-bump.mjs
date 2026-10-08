@@ -23,7 +23,8 @@ const isShipped = file => file.startsWith(SHIPPED) && !file.startsWith(`${SHIPPE
 
 let changed;
 // --no-renames lists both sides of a rename, so moving a shipped file out of the extension still counts.
-try { changed = git("diff", "--name-only", "--no-renames", base, "HEAD").split("\n").filter(Boolean); }
+// -z keeps paths unquoted; otherwise git quotes non-ASCII names and they would miss the prefix check.
+try { changed = git("diff", "--name-only", "--no-renames", "-z", base, "HEAD").split("\0").filter(Boolean); }
 catch (error) { fail(`Cannot list the files changed since ${base}: ${String(error.stderr || error.message).trim()}`); }
 
 const shipped = changed.filter(isShipped);

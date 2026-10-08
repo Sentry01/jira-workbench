@@ -72,6 +72,8 @@ test("added, deleted and moved shipped files count as shipped changes", async ()
         { "extensions/jira-workbench/lib/model.mjs": null },
         // Identical content, so git sees a rename out of the extension.
         { "extensions/jira-workbench/lib/model.mjs": null, "scripts/model.mjs": "export const a = 1;\n" },
+        // Git quotes non-ASCII paths unless the output is NUL-separated.
+        { "extensions/jira-workbench/ui/caf\u00e9.css": "body {}\n" },
     ];
     for (const files of cases) assert.equal((await check({ files })).code, 1, Object.keys(files)[0]);
 });
