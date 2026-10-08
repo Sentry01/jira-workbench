@@ -308,7 +308,8 @@ export class Workbench {
             }, fresh);
             if (!current()) return this.snapshot();
             this.issues = result.issues;
-            if (result.statuses) this.statuses = result.statuses;
+            // No listing this time: drop any earlier one rather than present it as current; issue statuses still show.
+            this.statuses = result.statuses || [];
             this.fetchedAt = result.fetchedAt;
             this.error = null;
             this.cached = false;

@@ -654,10 +654,19 @@ test("without a status listing (v1, or a failed read) the filter still offers ev
         const runtime = fakeRuntime(options);
         const { connection, workbench, open, loaded } = await harness(t, runtime);
         if (options.failListing) connection.gateway.statuses = async () => { throw new Error("listing unavailable"); };
+        // A listing cached by an earlier read, with a step the workflow has since removed.
+        await workbench.cache.update(data => {
+            data.catalog = { sites: [{ id: SITE.id, name: "demo", url: SITE.url }], appProjects: [] };
+            data.projectLists[SITE.id] = { projects: [{ id: "42", key: "DEMO", name: "Demo project" }] };
+            data.issues[`${SITE.id}/42/project`] = { issues: [], statuses: [{ name: "Retired step", category: "indeterminate" }], fetchedAt: new Date().toISOString() };
+        });
+        assert.equal(await workbench.hydrate(requested), true);
+        assert.ok((await workbench.snapshot()).statuses.some(s => s.name === "Retired step"), "the cached listing shows on a warm start");
         await open();
         await until(t, () => loaded(workbench), { what: "project to load" });
         assert.ok(!runtime.calls.some(c => c.args?.name === "listJiraStatuses"));
-        assert.deepEqual((await workbench.snapshot()).statuses, [{ name: "To Do", category: "new" }]);
+        assert.deepEqual((await workbench.snapshot()).statuses, [{ name: "To Do", category: "new" }], "an earlier listing is not presented as current");
+        assert.deepEqual((await workbench.cache.read()).issues[workbench.selectedScope()].statuses, []);
         assert.equal(workbench.error, null, "a missing listing never fails the Jira refresh");
     }
 });
