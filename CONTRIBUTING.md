@@ -78,8 +78,11 @@ CI runs on every pull request and on every push to `main`:
   fails when the shipped canvas changes but the version does not rise (see
   [Releasing](#releasing)).
 
-All four are required: a pull request cannot merge until they pass. Pull
-requests are squash-merged, and the branch is deleted after the merge.
+All four are required: a pull request cannot merge until they pass. The branch
+must also be up to date with `main`, so the checks run against the latest
+release; otherwise two pull requests could both raise the version to the same
+number and the second would merge unreleased. Pull requests are squash-merged,
+and the branch is deleted after the merge.
 
 ## Review rules
 
