@@ -10,7 +10,7 @@ const READ_TOOLS = new Set([
     "list_projects", "get_sessions_status", "get_session",
 ]);
 // Atlassian MCP v2 serves most reads only through executeRead; just these operations may pass through it.
-const READ_OPERATIONS = new Set(["listJiraProjects"]);
+const READ_OPERATIONS = new Set(["listJiraProjects", "listJiraStatuses"]);
 const FIELDS = ["summary", "description", "status", "issuetype", "project", "parent", "assignee", "priority", "labels", "issuelinks", "updated"];
 
 export async function resolveToolResult(result) {
@@ -316,6 +316,20 @@ export class Gateway {
             startAt += result.values.length;
         }
         throw invalid("Jira project pagination exceeded 100 pages; narrow the accessible project set.");
+    }
+    // The project's workflow statuses, or null when the serving Atlassian version cannot list them (v1 has no such read).
+    async statuses(cloudId, projectId, options) {
+        if (!/^\d+$/.test(projectId)) throw invalid("A numeric Jira project ID is required.");
+        if (await this.offers("getVisibleJiraProjects") || !(await this.offers("executeRead"))) return null;
+        const result = await this.call("executeRead", { name: "listJiraStatuses", cloudId, inputs: { mode: "project", projectKey: projectId } }, options);
+        if (!Array.isArray(result?.statuses)) throw invalid("Jira status listing returned an unsupported response.");
+        const statuses = new Map();
+        for (const status of result.statuses.slice(0, 500)) {
+            const name = typeof status?.name === "string" && status.name.length <= 200 ? status.name : "";
+            if (name && !statuses.has(name))
+                statuses.set(name, { name, category: ["new", "indeterminate", "done"].includes(status.category) ? status.category : "unknown" });
+        }
+        return [...statuses.values()];
     }
     async issues(cloudId, projectId, options) {
         if (!/^\d+$/.test(projectId)) throw invalid("A numeric Jira project ID is required.");

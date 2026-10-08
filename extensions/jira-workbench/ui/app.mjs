@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, banner,
+    signInNeeded, banner, statusFilterGroups,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -127,7 +127,8 @@ function normalizePreferences(value = {}) {
         selected: typeof value.selected === "string" ? value.selected : null,
         collapsed: Array.isArray(value.collapsed) ? value.collapsed.filter(id => typeof id === "string") : [],
         query: typeof value.query === "string" ? value.query : "",
-        category: ["all", "new", "indeterminate", "done"].includes(value.category) ? value.category : "all",
+        category: ["all", "new", "indeterminate", "done"].includes(value.category)
+            || typeof value.category === "string" && value.category.startsWith("status:") && value.category.length > 7 && value.category.length <= 207 ? value.category : "all",
         scrollTop: Number.isFinite(value.scrollTop) ? Math.max(0, value.scrollTop) : 0,
         detailsOpen: value.detailsOpen === true,
     };
@@ -366,6 +367,25 @@ function selectOptions(select, options, value, placeholder, force = false) {
     }
     select.value = value || "";
 }
+// Built per project from the view model's groups; this only turns them into <option> and <optgroup> nodes.
+function renderStatusFilter() {
+    const select = $("status-filter");
+    if (document.activeElement === select) return;
+    const groups = statusFilterGroups(state.statuses, ui.category);
+    const signature = JSON.stringify(groups);
+    if (select.dataset.options !== signature) {
+        select.dataset.options = signature;
+        select.replaceChildren(...groups.flatMap(({ label, options }) => {
+            const nodes = options.map(option => new Option(option.label, option.value));
+            if (!label) return nodes;
+            const group = document.createElement("optgroup");
+            group.label = label;
+            group.append(...nodes);
+            return [group];
+        }));
+    }
+    select.value = ui.category;
+}
 function captureFocus(container) {
     return container.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 }
@@ -388,6 +408,7 @@ function render({ force = false } = {}) {
         selectOptions($("project"), state.projects.map(p => ({ value: p.id, label: `${p.key} - ${p.name}` })), state.project?.id, "Select Jira project");
     }
     selectOptions($("repository"), state.appProjects.map(p => ({ value: p.id, label: p.repo || p.name })), state.mapping?.id, "Choose a Copilot repository");
+    renderStatusFilter();
     configureActionControl($("project-start"), "prepare", "project", !state.project || !state.mapping || state.cached);
     configureActionControl($("sync-jira"), "launch", "project", selecting || !state.project || !state.mapping || Boolean(state.error) || state.cached || nodePending("project"));
     configureActionControl($("refresh"), "refresh-jira", "jira", selecting || !state.project);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeIssue, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, requestStatus } from "../lib/model.mjs";
+import { normalizeIssue, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, requestStatus } from "../lib/model.mjs";
 
 const issue = (id, key, parent, type = "Story", category = "new") => ({
     id, key, fields: {
@@ -142,6 +142,33 @@ test("Jira sync kickoff authorizes only status transitions within the selected p
     assert.doesNotMatch(rules, /MERGED/, "evidence stays inside untrusted context");
     assert.match(kickoff, /<jira-context>[\s\S]*"number": 9[\s\S]*<\/jira-context>/);
     assert.equal(JSON.parse(prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.mode, "autopilot");
+});
+
+
+test("Jira sync kickoff targets the project's own workflow statuses, kept inside untrusted context", () => {
+    const statuses = [{ name: "To Do", category: "new" }, { name: "PR Waiting", category: "indeterminate" }, { name: "In Progress", category: "indeterminate" }, { name: "Done", category: "done" }];
+    const kickoff = kickoffOf(jiraSyncPrompt({
+        requestId: "sync-1", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", projectKey: "DEMO",
+        copilotProjectId: "p", repo: "example/demo", siteUrl: "https://example.atlassian.net", evidence: [], statuses,
+    }));
+    const rules = kickoff.slice(0, kickoff.indexOf("\n\n<jira-context>\n\n"));
+    assert.match(rules, /projectStatuses/);
+    assert.match(rules, /waiting on an open, non-draft PR/);
+    assert.match(rules, /listJiraIssueTransitions/);
+    assert.match(rules, /whose target is the chosen status/);
+    assert.doesNotMatch(rules, /"PR Waiting"/, "status names stay inside untrusted context");
+    assert.match(kickoff, /<jira-context>[\s\S]*"projectStatuses": \[[\s\S]*"PR Waiting"[\s\S]*<\/jira-context>/);
+});
+
+test("project statuses merge the workflow listing with statuses seen on issues, ordered by category", () => {
+    const workflow = [{ name: "PR Waiting", category: "indeterminate" }, { name: "Done", category: "done" }, { name: "To Do", category: "new" }];
+    const issues = [{ status: "To Do", category: "new" }, { status: "Blocked", category: "indeterminate" }, { status: "Odd", category: "weird" }];
+    assert.deepEqual(projectStatuses(workflow, issues), [
+        { name: "To Do", category: "new" }, { name: "PR Waiting", category: "indeterminate" }, { name: "Blocked", category: "indeterminate" },
+        { name: "Done", category: "done" }, { name: "Odd", category: "unknown" },
+    ]);
+    assert.deepEqual(projectStatuses(null, [{ status: "To Do", category: "new" }]), [{ name: "To Do", category: "new" }]);
+    assert.deepEqual(projectStatuses([{ name: "" }, null, { category: "new" }], []), []);
 });
 
 

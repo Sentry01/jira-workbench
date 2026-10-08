@@ -208,6 +208,9 @@ Switch to **Hierarchy** to see epics, stories and subtasks by Jira parent link.
 
 - Search (by key, title, assignee or parent key) and the status filter apply to
   both views. Searching for a parent's key also finds its children.
+- The status filter lists the selected project's own workflow statuses, grouped
+  by category, so custom steps such as "PR Waiting" can be filtered on even
+  before any issue is in them. Pick a category to match all of its statuses.
 - A missing parent stays visible with a warning, and a parent cycle is reported
   rather than dropped.
 - Parent progress counts descendant work items, not story points.
@@ -271,7 +274,10 @@ It starts one Copilot session in the mapped repository. That session:
    pull requests, branches and commits that mention the issue key.
 3. Moves an issue to **In Progress** when work is active or a pull request is
    open, and to **Done** when merged work clearly delivers it and nothing for it
-   remains open. Anything unclear is left alone and reported.
+   remains open. It uses the project's own workflow: if the project has a review
+   or waiting step (for example "PR Waiting"), an issue whose work is in an open,
+   non-draft pull request goes there instead of In Progress. Anything unclear is
+   left alone and reported.
 4. Ends with a summary table: issue, old status, new status, and evidence.
 
 The session changes only statuses. It makes no field edits, comments,

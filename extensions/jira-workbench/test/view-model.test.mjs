@@ -4,7 +4,7 @@ import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS }
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
-    descendantSessionCounts, defaultMode, signInNeeded, banner,
+    descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../verification/fixture.mjs";
 
@@ -37,6 +37,9 @@ test("search retains the ancestors of a matching subtask", () => {
 });
 
 test("one search rule covers key, summary, assignee and parent key, in both views", () => {
+    assert.equal(matches({ ...rows[1], status: "PR Waiting", category: "indeterminate" }, "", "status:PR Waiting"), true, "a project's own status filters exactly");
+    assert.equal(matches({ ...rows[1], status: "In Progress", category: "indeterminate" }, "", "status:PR Waiting"), false);
+    assert.equal(matches({ ...rows[1], status: "PR Waiting", category: "indeterminate" }, "", "indeterminate"), true, "a category still covers its statuses");
     assert.equal(matches(rows[1], "demo-1"), true, "a parent key finds its children");
     assert.equal(matches(rows[1], "  ada  "), true, "assignee, trimmed and case-insensitive");
     assert.equal(matches(rows[1], "summary demo-2"), true);
@@ -225,4 +228,22 @@ test("the banner follows the connection state: sign-in, automatic retry, or plai
         "Background refresh failed: disk full", "Parent cycle",
         "Execution snapshot references unavailable work items: 9. Refresh the workbench to reconcile the sources.",
     ]);
+});
+
+test("the status filter groups each project's own workflow statuses under their category", () => {
+    const statuses = [{ name: "To Do", category: "new" }, { name: "In Progress", category: "indeterminate" },
+        { name: "PR Waiting", category: "indeterminate" }, { name: "Done", category: "done" }];
+    assert.deepEqual(statusFilterGroups(statuses), [
+        { label: null, options: [{ value: "all", label: "All Jira statuses" }] },
+        { label: "To do", options: [{ value: "new", label: "To do (any)" }, { value: "status:To Do", label: "To Do" }] },
+        { label: "In progress", options: [{ value: "indeterminate", label: "In progress (any)" },
+            { value: "status:In Progress", label: "In Progress" }, { value: "status:PR Waiting", label: "PR Waiting" }] },
+        { label: "Done", options: [{ value: "done", label: "Done (any)" }, { value: "status:Done", label: "Done" }] },
+    ]);
+    const other = statusFilterGroups([{ name: "Odd", category: "unknown" }]);
+    assert.deepEqual(other.find(group => group.label === "Other").options, [{ value: "status:Odd", label: "Odd" }], "unknown statuses get a group with no category option");
+    assert.equal(statusFilterGroups([]).some(group => group.label === "Other"), false);
+    assert.deepEqual(statusFilterGroups([], "status:PR Waiting").at(-1), { label: null, options: [{ value: "status:PR Waiting", label: "PR Waiting (not listed)" }] },
+        "a saved status the project no longer lists stays selectable");
+    assert.equal(statusFilterGroups(statuses, "status:PR Waiting").length, 4, "a listed status adds no extra option");
 });

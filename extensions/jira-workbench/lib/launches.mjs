@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { launchPrompt, jiraSyncPrompt, descendants, requestStatus } from "./model.mjs";
+import { launchPrompt, jiraSyncPrompt, descendants, projectStatuses, requestStatus } from "./model.mjs";
 import { createBrief, acknowledgeBrief } from "./brief.mjs";
 import { dependencyWarnings } from "./execution.mjs";
 
@@ -106,6 +106,7 @@ export class Launches {
             requestId, instanceId: wb.instanceId, cloudId: site.id, siteUrl: site.url,
             jiraProjectId: project.id, projectKey: project.key,
             copilotProjectId: mapping.id, repo: mapping.repo, evidence, omittedLinkedIssues: linked.length - evidence.length,
+            statuses: projectStatuses(wb.statuses, wb.issues),
         });
         await wb.store.update(current => {
             if (wb.selectedScope() !== scope || wb.site?.id !== site.id || wb.project?.id !== project.id)
