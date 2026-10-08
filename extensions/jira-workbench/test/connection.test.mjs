@@ -636,6 +636,19 @@ test("each project's own workflow statuses reach the snapshot and cache, includi
     assert.deepEqual((await reopened.snapshot()).statuses, expected, "a warm start shows the project's statuses before Jira answers");
 });
 
+for (const [what, options] of [["the app's Atlassian Rovo connector alone", { status: null, connector: "connected" }],
+    ["the Rovo connector beside a v1 atlassian server", { status: "connected", connector: "connected" }]]) {
+    test(`${what} serves each project's workflow statuses`, async t => {
+        const runtime = fakeRuntime(options);
+        const { workbench, open, loaded } = await harness(t, runtime);
+        await open();
+        await until(t, () => loaded(workbench), { what: "project to load through the connector" });
+        const listings = runtime.calls.filter(c => c.args?.name === "listJiraStatuses");
+        assert.ok(listings.length >= 1 && listings.every(c => c.server === CONNECTOR));
+        assert.ok((await workbench.snapshot()).statuses.some(s => s.name === "PR Waiting"));
+    });
+}
+
 test("without a status listing (v1, or a failed read) the filter still offers every status seen on an issue", async t => {
     for (const options of [{}, { v2: true, failListing: true }]) {
         const runtime = fakeRuntime(options);
