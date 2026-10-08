@@ -1,6 +1,6 @@
-# Instructions for Copilot
+# Instructions for agents
 
-Read [`CONTRIBUTING.md`](../CONTRIBUTING.md) before changing code; its review rules
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing code; its review rules
 are not negotiable. These steps apply to every pull request.
 
 ## Release the change
@@ -30,7 +30,7 @@ extension manifest's schema version, not the release version. Leave it alone.
 If the change should not publish a release on its own, do not raise the version.
 Say so in the pull request body so a maintainer can add the `no-release` label.
 
-Full details are in [Releasing](../CONTRIBUTING.md#releasing).
+Full details are in [Releasing](CONTRIBUTING.md#releasing).
 
 ## Update the docs
 
@@ -44,7 +44,7 @@ Update the docs the change makes wrong, in the same pull request:
 
 ## Open the pull request
 
-Fill in [`.github/PULL_REQUEST_TEMPLATE.md`](PULL_REQUEST_TEMPLATE.md), including
+Fill in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md), including
 the commands you ran and their output.
 
 Write docs in a plain, professional tone: no emojis, no em dashes, no Unicode

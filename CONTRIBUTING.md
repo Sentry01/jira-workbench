@@ -203,9 +203,9 @@ extensions/jira-workbench/   The installable canvas; this is the product
 docs/                        Install guide, user guide, screenshots, and their generator
 .github/plugin/              Plugin and marketplace manifests; the marketplace pins the released version
 .github/scripts/             Release checks: the two manifests name one release, and a shipped change raises it
-.github/copilot-instructions.md  Release and docs steps for Copilot agents working on a pull request
 .github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks) and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
+AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
 
 Start with [`extensions/jira-workbench/README.md`](extensions/jira-workbench/README.md).
