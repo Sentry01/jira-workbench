@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, banner, statusFilterGroups, sprintOptions,
+    signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -387,15 +387,16 @@ function renderStatusFilter() {
     }
     select.value = ui.category;
 }
-// The sprints the loaded issues belong to; hidden when the project has no sprint data. A saved sprint the project no
-// longer offers applies as "all" without being overwritten, so it returns once the data does (e.g. after a refresh).
-let sprintValues = new Set();
-const sprintFilter = () => sprintValues.has(ui.sprint) ? ui.sprint : "all";
+// The sprints the loaded issues belong to; hidden when the project has no sprint data.
+let sprintChoices = [];
+const sprintFilter = () => appliedSprint(sprintChoices, ui.sprint);
 function renderSprintFilter() {
-    const options = sprintOptions(state.issues);
-    sprintValues = new Set(options.map(option => option.value));
-    $("sprint-filter").hidden = !options.length;
-    selectOptions($("sprint-filter"), options, sprintFilter() === "all" ? "" : sprintFilter(), "All sprints");
+    const select = $("sprint-filter");
+    sprintChoices = sprintOptions(state.issues);
+    // Hiding a focused control would drop keyboard focus, so hand it to the search field first.
+    if (!sprintChoices.length && document.activeElement === select) $("search").focus({ preventScroll: true });
+    select.hidden = !sprintChoices.length;
+    selectOptions(select, sprintChoices, sprintFilter() === "all" ? "" : sprintFilter(), "All sprints");
 }
 function captureFocus(container) {
     return container.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
@@ -518,7 +519,8 @@ function evidenceList(evidence) {
     return list;
 }
 function renderExecutionFilters() {
-    const entries = executionItems().filter(({ item }) => matches(item, ui.query, ui.category, sprintFilter()));
+    const sprint = sprintFilter();
+    const entries = executionItems().filter(({ item }) => matches(item, ui.query, ui.category, sprint));
     const signature = JSON.stringify([ui.executionFilter, filters.map(([id]) => entries.filter(({ execution }) => id === "all" || execution.views.includes(id)).length)]);
     if ($("execution-filters").dataset.signature === signature) return;
     const focus = captureFocus($("execution-filters"));
@@ -646,7 +648,8 @@ function renderTree(force = false) {
         return;
     }
     if (ui.view === "execution") {
-        const entries = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category, sprintFilter()) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
+        const sprint = sprintFilter();
+        const entries = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category, sprint) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
         entries.sort((a, b) => (a.execution.rank ?? Number.MAX_SAFE_INTEGER) - (b.execution.rank ?? Number.MAX_SAFE_INTEGER) || a.item.key.localeCompare(b.item.key));
         for (const { item, execution } of entries) {
             const row = createRow(item, 0);

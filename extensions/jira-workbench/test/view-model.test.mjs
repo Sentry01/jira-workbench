@@ -4,7 +4,7 @@ import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS }
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
-    descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups, sprintOptions,
+    descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../verification/fixture.mjs";
 
@@ -61,6 +61,16 @@ test("sprint options list the project's sprints, with No sprint only when some w
     assert.deepEqual(sprintOptions(withSprints([{ id: "9", name: "Sprint 9" }], [])).map(option => option.value), ["none", "sprint:9"]);
     assert.deepEqual(sprintOptions(withSprints([], [])), [], "known sprint field, but no sprints: no filter");
     assert.deepEqual(sprintOptions(rows), [], "no sprint data: no filter");
+});
+
+test("a saved sprint the project no longer offers applies as all, and applies again once it returns", () => {
+    const offered = sprintOptions([{ ...rows[1], sprints: [{ id: "12", name: "Sprint 12" }] }, rows[2]]);
+    assert.equal(appliedSprint(offered, "sprint:12"), "sprint:12");
+    assert.equal(appliedSprint(offered, "none"), "none");
+    assert.equal(appliedSprint(offered, "sprint:99"), "all", "a sprint not offered never hides work");
+    assert.equal(appliedSprint([], "sprint:12"), "all", "no sprint data: no sprint filter");
+    assert.equal(appliedSprint(offered, "all"), "all");
+    assert.equal(appliedSprint(), "all");
 });
 
 test("an unfiltered tree keeps every node and child", () => {

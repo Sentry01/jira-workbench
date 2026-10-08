@@ -142,6 +142,12 @@ export function sprintOptions(issues = []) {
     return issues.some(item => !item.sprints?.length) ? [{ value: "none", label: "No sprint" }, ...options] : options;
 }
 
+// The sprint filter actually applied: the saved choice while the project offers it, otherwise "all". The saved choice
+// itself is kept, so it applies again once a refresh brings that sprint back.
+export function appliedSprint(options = [], selected = "all") {
+    return options.some(option => option.value === selected) ? selected : "all";
+}
+
 const CATEGORY_LABELS = { new: "To do", indeterminate: "In progress", done: "Done", unknown: "Other" };
 
 // The status filter's options for one project: "All", then each category with an "(any)" option and that project's
