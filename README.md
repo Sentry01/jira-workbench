@@ -13,10 +13,6 @@ Copilot sessions, then traces each result back to the Jira issue it came from.
 
 </div>
 
-![The execution queue: work grouped by what it needs from you](docs/images/02-execution.png)
-
----
-
 ## Overview
 
 This Copilot App canvas connects requirements in Jira, agents running in Copilot App sessions, and code landing in GitHub pull requests.
@@ -25,6 +21,9 @@ Jira Workbench helps you understand what needs your attention next and kick off 
 (session state, pull request state, and checks) rather than from the Jira status
 column.
 
+
+![The execution queue: work grouped by what it needs from you](docs/images/02-execution.png)
+
 ## Features
 
 | Feature | Description |
@@ -32,7 +31,7 @@ column.
 | **Execution queue** | Work is grouped into *Needs me*, *Running*, *PRs to review* and *Available to start*. An issue still in "To Do" with an active session appears under *Running*. |
 | **Launch from an issue** | One click turns a Jira issue into an editable, hash-verified brief. Missing acceptance criteria and unresolved blockers are shown as warnings you must acknowledge before implementation starts. |
 | **Traceability** | Each issue links to its sessions, branches, pull requests and checks, with the evidence for every link. Links are never inferred from similar titles or branch names. |
-| **Hierarchy view** | Epics, stories and subtasks by Jira parent link. Missing parents stay visible, and parent cycles are reported. |
+| **Hierarchy view** | Epics, stories and subtasks by Jira parent link, with status and sprint filters. Missing parents stay visible, and parent cycles are reported. |
 | **Per-project statuses** | The status filter lists each project's own Jira workflow statuses, grouped by category, including custom steps such as "PR Waiting" that no issue is in yet. |
 | **Read-only canvas** | The gateway allows only Jira reads. The canvas never edits, transitions or comments on issues, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves its issue to In Progress, and a confirmed **Update Jira** session corrects statuses across the project using that project's own workflow (for example "PR Waiting" for work in an open pull request). |
 | **No dependencies** | Plain JavaScript. It installs as a plugin or a folder copy and needs no build step. |
@@ -55,8 +54,8 @@ install, updating, uninstalling, and troubleshooting.
    session you installed from will not see the canvas.
 
 3. In the new session, ask Copilot:
-
    > Open the jira-workbench canvas
+
 
 4. Use the pickers along the top to choose your Jira site, a Jira project, and
    the Copilot repository to work in.

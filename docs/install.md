@@ -94,13 +94,13 @@ with screenshots.
 ## Check that it worked
 
 - `copilot plugin list` includes `jira-workbench@jira-workbench` and its version,
-  such as `(v1.1.0)`. The Copilot app's plugin list shows the same version.
+  such as `(v1.2.1)`. The Copilot app's plugin list shows the same version.
 - In the new session, ask Copilot to list loaded extensions. There is exactly
   one `jira-workbench` entry, with the ID `plugin:jira-workbench:jira-workbench`.
 - The small label under the panel names the build. For a plugin install, it
   shows the version, commit and date when your copy matches the latest release,
-  such as `v1.1.0 · 1a2b3c4 · 2026-10-03`, and the version and a tree hash
-  otherwise, such as `v1.1.0 · tree 5d6e7f8`. (A git clone always shows its own
+  such as `v1.2.1 · 1a2b3c4 · 2026-10-08`, and the version and a tree hash
+  otherwise, such as `v1.2.1 · tree 5d6e7f8`. (A git clone always shows its own
   commit and date, even when it is behind `main`.)
 - The connection bar shows a green **Jira** dot, and your project's work appears.
 
