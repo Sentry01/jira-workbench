@@ -4,7 +4,7 @@ import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS }
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
-    descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups,
+    descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups, sprintOptions,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../verification/fixture.mjs";
 
@@ -54,10 +54,32 @@ test("one search rule covers key, summary, assignee and parent key, in both view
     assert.deepEqual(keys(filterTree(buildTree(rows).roots, "", "done")), ["DEMO-1", "DEMO-2", "DEMO-3"]);
 });
 
+test("sprint options list the project's sprints, with No sprint only when some work has none", () => {
+    const withSprints = (...lists) => lists.map(sprints => ({ ...rows[1], sprints }));
+    assert.deepEqual(sprintOptions(withSprints([{ id: "10", name: "Sprint 10" }], [{ id: "9", name: "Sprint 9" }], [{ id: "9", name: "Sprint 9" }])),
+        [{ value: "sprint:9", label: "Sprint 9" }, { value: "sprint:10", label: "Sprint 10" }]);
+    assert.deepEqual(sprintOptions(withSprints([{ id: "9", name: "Sprint 9" }], [])).map(option => option.value), ["none", "sprint:9"]);
+    assert.deepEqual(sprintOptions(withSprints([], [])), [], "known sprint field, but no sprints: no filter");
+    assert.deepEqual(sprintOptions(rows), [], "no sprint data: no filter");
+});
+
 test("an unfiltered tree keeps every node and child", () => {
     const tree = buildTree(rows).roots;
     assert.deepEqual(keys(filterTree(tree)), keys(tree));
     assert.deepEqual(keys(filterTree(tree, "   ", "all")), keys(tree));
+});
+
+test("sprint filtering matches membership and keeps hierarchy ancestors for both sprint and backlog work", () => {
+    const sprintRows = rows.map((row, index) => ({
+        ...row,
+        sprints: index === 1 ? [{ id: "12", name: "Sprint 12" }] : [],
+    }));
+    assert.equal(matches(sprintRows[1], "", "all", "sprint:12"), true);
+    assert.equal(matches(sprintRows[2], "", "all", "sprint:12"), false);
+    assert.equal(matches(sprintRows[2], "", "all", "none"), true);
+    assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots, "", "all", "sprint:12")), ["DEMO-1", "DEMO-2"]);
+    assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots, "", "all", "none")), ["DEMO-1", "DEMO-2", "DEMO-3", "DEMO-4", "DEMO-5"]);
+    assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots)), keys(buildTree(sprintRows).roots));
 });
 
 test("source freshness labels each mix of linked evidence", () => {

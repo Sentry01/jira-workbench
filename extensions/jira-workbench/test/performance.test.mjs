@@ -40,7 +40,7 @@ test("a 5,000-issue project loads in one pass with no redundant Jira calls", asy
     const ms = performance.now() - started;
     assert.equal(snapshot.issues.length, 5000);
     assert.ok(ms < 2500, `select took ${ms.toFixed(0)}ms`);
-    assert.equal(runtime.counters.jiraExecutes, 1 + 1 + 50, "sites + projects + 50 issue pages, nothing repeated");
+    assert.equal(runtime.counters.jiraExecutes, 1 + 1 + 1 + 50, "sites + projects + sprint-field probe + 50 issue pages, nothing repeated");
     assert.equal(runtime.counters.rebuilds, 1);
 });
 

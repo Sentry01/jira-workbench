@@ -1,5 +1,5 @@
 import { launchBrowser, screenshotPath } from "./browser.mjs";
-import { createFixture, seedProject } from "./fixture.mjs";
+import { createFixture, seedProject, scope } from "./fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +26,22 @@ async function bodyHas(text) {
 try {
     await page.goto(server.url);
     await bodyHas("Needs your answer");
+    const sprintFilter = page.locator("#sprint-filter");
+    await sprintFilter.waitFor({ state: "visible" });
+    assert.deepEqual(await sprintFilter.locator("option").allTextContents(), ["All sprints", "No sprint", "Sprint 12"]);
+    let sprintSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok());
+    await sprintFilter.selectOption("sprint:12");
+    await sprintSaved;
+    await page.waitForFunction(() => [...document.querySelectorAll("#tree [data-node-id]")].map(row => row.dataset.nodeId).sort().join(",") === "2,3");
+    assert.equal((await store.read()).preferences[scope].sprint, "sprint:12");
+    await page.locator("#view-hierarchy").click();
+    await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "tree");
+    await page.waitForFunction(() => [...document.querySelectorAll("#tree [data-node-id]")].map(row => row.dataset.nodeId).sort().join(",") === "1,2,3");
+    sprintSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok());
+    await sprintFilter.selectOption("");
+    await sprintSaved;
+    await page.locator("#view-execution").click();
+    await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "list");
     assert.match(await page.locator("body").innerText(), /Answer question/);
     assert.match(await page.locator("body").innerText(), /Review PR/);
     assert.match(await page.locator("body").innerText(), /Interrupted/);
@@ -236,7 +252,7 @@ try {
     await page.screenshot({ path: screenshotPath("narrow.png"), fullPage: true });
     assert.equal(sent.length, 2, "Only the explicitly confirmed fake launches are queued");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), and narrow layout. External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter, project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), and narrow layout. External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();

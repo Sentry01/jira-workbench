@@ -281,6 +281,7 @@ export class Workbench {
             collapsed: v => Array.isArray(v) && v.length <= 10000 && v.every(id => typeof id === "string" && id.length <= 100),
             query: v => typeof v === "string" && v.length <= 500,
             category: v => ["all", "new", "indeterminate", "done"].includes(v) || typeof v === "string" && v.startsWith("status:") && v.length > 7 && v.length <= 207,
+            sprint: v => typeof v === "string" && /^(?:all|none|sprint:.{1,100})$/s.test(v),
             scrollTop: v => Number.isFinite(v) && v >= 0 && v <= 10000000,
             detailsOpen: v => typeof v === "boolean",
         };

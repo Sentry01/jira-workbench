@@ -30,7 +30,8 @@ const node = (n, extras = {}) => ({
 
 export const issues = [
     node(1, { type: "Epic", level: 1, summary: "Daily execution" }),
-    node(2, { summary: "Needs your answer" }), node(3, { summary: "Running with a PR" }),
+    node(2, { summary: "Needs your answer", sprints: [{ id: "12", name: "Sprint 12" }] }),
+    node(3, { summary: "Running with a PR", sprints: [{ id: "12", name: "Sprint 12" }] }),
     node(4, { summary: "Merged work" }),
     node(5, { summary: "Missing criteria and blocked", dependencies: [{ key: "DEMO-6", relationship: "is blocked by", status: "To Do", category: "new" }] }),
     node(6, { summary: "Ready example", description: "## Acceptance criteria\n- Display the result" }),

@@ -135,7 +135,8 @@ test("the largest preferences the validator accepts fit their own, larger body c
     const scope = workbench.selectedScope(), id = "\u0001".repeat(100);
     const preferences = {
         view: "execution", executionFilter: "needs-me", selected: id, collapsed: Array(10_000).fill(id),
-        query: "\u0001".repeat(500), category: "done", scrollTop: 10_000_000, detailsOpen: true,
+        query: "\u0001".repeat(500), category: "done", sprint: `sprint:${"\u0001".repeat(100)}`,
+        scrollTop: 10_000_000, detailsOpen: true,
     };
     const body = JSON.stringify({ scope, preferences });
     assert.ok(Buffer.byteLength(body) > 6_000_000);

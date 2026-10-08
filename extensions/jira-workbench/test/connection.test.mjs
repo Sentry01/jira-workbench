@@ -194,7 +194,7 @@ test("ten panels opening together share one tool rebuild and one read per Jira s
     assert.ok(workbenches.every(loaded));
     assert.equal(runtime.counters.rebuilds, 1);
     assert.equal(runtime.counters.maxConcurrentRebuilds, 1);
-    assert.equal(runtime.counters.jiraExecutes, 3, "sites, projects and one issue page, shared by all ten");
+    assert.equal(runtime.counters.jiraExecutes, 4, "sites, projects, the sprint-field probe and one issue page, shared by all ten");
 });
 
 test("an event burst triggers one reconnect per panel, not one per event", async t => {
