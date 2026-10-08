@@ -72,12 +72,17 @@ CI runs on every pull request and on every push to `main`:
   Chrome. Their screenshots are uploaded as an artifact when one fails.
 - **No private data**: rejects a committed `artifacts/` directory or an absolute
   home path.
-- **Release manifests**: tests `.github/scripts/check-release.mjs`, then runs it
-  to check that `plugin.json` and `marketplace.json` name the same release (see
+- **Release manifests**: tests the scripts in `.github/scripts/`, then runs
+  `check-release.mjs` to check that `plugin.json` and `marketplace.json` name the
+  same release. On a pull request it also runs `check-version-bump.mjs`, which
+  fails when the shipped canvas changes but the version does not rise (see
   [Releasing](#releasing)).
 
-All four are required: a pull request cannot merge until they pass. Pull
-requests are squash-merged, and the branch is deleted after the merge.
+All four are required: a pull request cannot merge until they pass. The branch
+must also be up to date with `main`, so the checks run against the latest
+release; otherwise two pull requests could both raise the version to the same
+number and the second would merge unreleased. Pull requests are squash-merged,
+and the branch is deleted after the merge.
 
 ## Review rules
 
@@ -159,7 +164,23 @@ Check the pair before you push:
 node .github/scripts/check-release.mjs
 ```
 
-CI runs the same check on every pull request. When the pull request merges, the
+CI runs the same check on every pull request.
+
+A pull request that changes the shipped canvas must also raise the version. The
+shipped canvas is every file under `extensions/jira-workbench/` except `test/`
+and Markdown files. CI compares `plugin.json` with the base branch and fails
+when the version does not rise. To check a committed branch before you push:
+
+```sh
+node .github/scripts/check-version-bump.mjs "$(git merge-base origin/main HEAD)"
+```
+
+If a change should wait for a later release, say so in the pull request; a
+maintainer adds the `no-release` label, which skips this check. The `version` in
+`extensions/jira-workbench/copilot-extension.json` is the extension manifest's
+schema version, not the release version.
+
+When the pull request merges, the
 `release` workflow creates the `v1.2.0` tag on the merge commit and publishes a
 GitHub release with notes generated from the merged pull requests. Until the tag
 exists, about a minute, an update fails and the panel does not offer the
@@ -184,9 +205,10 @@ extensions/jira-workbench/   The installable canvas; this is the product
   test/                      Node test suite, split along module ownership
 docs/                        Install guide, user guide, screenshots, and their generator
 .github/plugin/              Plugin and marketplace manifests; the marketplace pins the released version
-.github/scripts/             check-release.mjs: checks that the two manifests name one release
+.github/scripts/             Release checks: the two manifests name one release, and a shipped change raises it
 .github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks) and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
+AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
 
 Start with [`extensions/jira-workbench/README.md`](extensions/jira-workbench/README.md).

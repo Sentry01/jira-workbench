@@ -53,6 +53,10 @@ Naming, refactors and wording are Low at most.
 - No new runtime dependencies; the extension must run from a plain `cp -R`.
 - If `.github/plugin/plugin.json` changes version, `marketplace.json` must
   change `version` and `ref` to the same `v<version>`.
+- A change to `extensions/jira-workbench/` outside `test/` and Markdown must
+  raise that version, unless the PR explains why it should not release. Check
+  the size of the raise: patch for fixes, minor for new behavior, major when
+  users must act.
 - When behavior changes, `docs/guide.md` or `extensions/jira-workbench/README.md`
   must change with it. Flag docs that the diff makes wrong.
 

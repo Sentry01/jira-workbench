@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    # labeled and unlabeled re-run the checks when the no-release label changes.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -99,8 +101,10 @@ jobs:
     name: Release manifests
     runs-on: ubuntu-latest
     steps:
+      # Depth 2 keeps the base: a pull request checks out its merge commit, whose first parent is the base branch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -108,8 +112,15 @@ jobs:
           node-version: "22"
 
       # plugin.json's version, the marketplace entry's version and its pinned ref must name one release.
-      - name: Test the manifest check
+      - name: Test the release checks
         run: node --test .github/scripts/*.test.mjs
 
       - name: Check that the manifests agree
         run: node .github/scripts/check-release.mjs
+
+      # A change to the shipped canvas must raise the version, unless the pull request has the no-release label.
+      - name: Check that a shipped change raises the version
+        if: github.event_name == 'pull_request'
+        run: node .github/scripts/check-version-bump.mjs
+        env:
+          NO_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'no-release') }}
