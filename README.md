@@ -21,9 +21,8 @@ Jira Workbench helps you understand what needs your attention next and kick off 
 (session state, pull request state, and checks) rather than from the Jira status
 column.
 
-![The execution queue: work grouped by what it needs from you](docs/images/02-execution.png)
 
----
+![The execution queue: work grouped by what it needs from you](docs/images/02-execution.png)
 
 ## Features
 
@@ -55,8 +54,8 @@ install, updating, uninstalling, and troubleshooting.
    session you installed from will not see the canvas.
 
 3. In the new session, ask Copilot:
-
    > Open the jira-workbench canvas
+
 
 4. Use the pickers along the top to choose your Jira site, a Jira project, and
    the Copilot repository to work in.
