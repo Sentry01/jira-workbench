@@ -19,7 +19,7 @@ Copilot sessions, then traces each result back to the Jira issue it came from.
 
 ## Overview
 
-This canvas for Copilot App connects the Requirements that live in Jira, agents that run in Copilot App sessions, and the code in PRs that lands in GitHub.
+This Copilot App canvas connects requirements in Jira, agents running in Copilot App sessions, and code landing in GitHub pull requests.
 Without a link between them, you check all three by hand to answer two
 questions: 
 
