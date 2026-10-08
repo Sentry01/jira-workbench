@@ -32,3 +32,4 @@ WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node verification/verify-canvas.
 - [ ] The canvas stays Jira read-only; delegated session writes (issue to In Progress, Update Jira status-only sync) are not widened
 - [ ] No private data in code, tests, docs, or screenshots
 - [ ] Docs updated (`docs/guide.md` for users, the extension README for semantics)
+- [ ] Changes to the shipped canvas raise the version in both plugin manifests, or the pull request has the `no-release` label
