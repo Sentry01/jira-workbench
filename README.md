@@ -20,8 +20,6 @@ Copilot sessions, then traces each result back to the Jira issue it came from.
 ## Overview
 
 This Copilot App canvas connects requirements in Jira, agents running in Copilot App sessions, and code landing in GitHub pull requests.
-Without a link between them, you check all three by hand to answer two
-questions: 
 
 Jira Workbench helps you understand what needs your attention next and kick off agentic work in Copilot App from one panel. It works from observed evidence
 (session state, pull request state, and checks) rather than from the Jira status
