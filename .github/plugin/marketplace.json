@@ -6,8 +6,8 @@
     {
       "name": "jira-workbench",
       "description": "Browse any Jira project's hierarchy and trace issues to Copilot sessions and GitHub PRs; Jira read-only.",
-      "version": "1.2.0",
-      "source": { "source": "github", "repo": "Sentry01/jira-workbench", "ref": "v1.2.0" },
+      "version": "1.2.1",
+      "source": { "source": "github", "repo": "Sentry01/jira-workbench", "ref": "v1.2.1" },
       "repository": "https://github.com/Sentry01/jira-workbench",
       "license": "MIT"
     }
