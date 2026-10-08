@@ -131,6 +131,28 @@ export function matches(item, query = "", category = "all") {
         && (category === "all" || (category.startsWith("status:") ? item.status === category.slice(7) : item.category === category));
 }
 
+const CATEGORY_LABELS = { new: "To do", indeterminate: "In progress", done: "Done", unknown: "Other" };
+
+// The status filter's options for one project: "All", then each category with an "(any)" option and that project's
+// own workflow statuses (e.g. "PR Waiting"). A saved exact status the project no longer lists stays selectable.
+export function statusFilterGroups(statuses = [], selected = "all") {
+    const groups = Object.entries(CATEGORY_LABELS).flatMap(([category, label]) => {
+        const own = (statuses || []).filter(status => status.category === category);
+        if (category === "unknown" && !own.length) return [];
+        return [{ label, options: [
+            ...category === "unknown" ? [] : [{ value: category, label: `${label} (any)` }],
+            ...own.map(status => ({ value: `status:${status.name}`, label: status.name })),
+        ] }];
+    });
+    const missing = typeof selected === "string" && selected.startsWith("status:")
+        && !groups.some(group => group.options.some(option => option.value === selected));
+    return [
+        { label: null, options: [{ value: "all", label: "All Jira statuses" }] },
+        ...groups,
+        ...missing ? [{ label: null, options: [{ value: selected, label: `${selected.slice(7)} (not listed)` }] }] : [],
+    ];
+}
+
 // Keeps matching nodes and the ancestors of matches. With no filter, every node keeps all its children.
 export function filterTree(roots, query = "", category = "all") {
     const unfiltered = !query.trim() && category === "all";

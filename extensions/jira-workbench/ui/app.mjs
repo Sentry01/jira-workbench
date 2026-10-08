@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, banner,
+    signInNeeded, banner, statusFilterGroups,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -367,26 +367,22 @@ function selectOptions(select, options, value, placeholder, force = false) {
     }
     select.value = value || "";
 }
-const CATEGORY_LABELS = { new: "To do", indeterminate: "In progress", done: "Done", unknown: "Other" };
-// Built per project: each status category, then that project's own workflow statuses in it (e.g. "PR Waiting").
+// Built per project from the view model's groups; this only turns them into <option> and <optgroup> nodes.
 function renderStatusFilter() {
-    const select = $("status-filter"), statuses = state.statuses || [];
+    const select = $("status-filter");
     if (document.activeElement === select) return;
-    const missing = ui.category.startsWith("status:") && !statuses.some(status => `status:${status.name}` === ui.category);
-    const signature = JSON.stringify([statuses, missing && ui.category]);
+    const groups = statusFilterGroups(state.statuses, ui.category);
+    const signature = JSON.stringify(groups);
     if (select.dataset.options !== signature) {
         select.dataset.options = signature;
-        const groups = Object.entries(CATEGORY_LABELS).flatMap(([category, label]) => {
-            const own = statuses.filter(status => status.category === category);
-            if (category === "unknown" && !own.length) return [];
+        select.replaceChildren(...groups.flatMap(({ label, options }) => {
+            const nodes = options.map(option => new Option(option.label, option.value));
+            if (!label) return nodes;
             const group = document.createElement("optgroup");
             group.label = label;
-            if (category !== "unknown") group.append(new Option(`${label} (any)`, category));
-            group.append(...own.map(status => new Option(status.name, `status:${status.name}`)));
+            group.append(...nodes);
             return [group];
-        });
-        select.replaceChildren(new Option("All Jira statuses", "all"), ...groups,
-            ...missing ? [new Option(`${ui.category.slice(7)} (not listed)`, ui.category)] : []);
+        }));
     }
     select.value = ui.category;
 }
