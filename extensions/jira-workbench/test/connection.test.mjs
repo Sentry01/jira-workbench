@@ -612,8 +612,41 @@ test("Atlassian MCP v2 loads sites, projects and the full hierarchy", async t =>
     assert.equal(child.category, "new");
     const searches = runtime.calls.filter(c => c.name === "searchJiraIssuesUsingJql");
     assert.ok(searches.length >= 1 && searches.every(c => c.args.view === "full"));
-    const lists = runtime.calls.filter(c => c.name === "executeRead");
-    assert.ok(lists.length >= 1 && lists.every(c => c.args.name === "listJiraProjects" && c.args.cloudId === SITE.id));
+    const lists = runtime.calls.filter(c => c.name === "executeRead" && c.args.name === "listJiraProjects");
+    assert.ok(lists.length >= 1 && lists.every(c => c.args.cloudId === SITE.id));
+    assert.ok(runtime.calls.filter(c => c.name === "executeRead").every(c => ["listJiraProjects", "listJiraStatuses"].includes(c.args.name)));
+});
+
+test("each project's own workflow statuses reach the snapshot and cache, including steps no issue is in", async t => {
+    const runtime = fakeRuntime({ v2: true });
+    const { workbench, open, loaded } = await harness(t, runtime);
+    await open();
+    await until(t, () => loaded(workbench), { what: "v2 project to load" });
+    const listings = runtime.calls.filter(c => c.name === "executeRead" && c.args.name === "listJiraStatuses");
+    assert.ok(listings.length >= 1 && listings.every(c => c.args.cloudId === SITE.id && c.args.inputs.mode === "project" && c.args.inputs.projectKey === "42"));
+    const expected = [
+        { name: "To Do", category: "new" }, { name: "PR Waiting", category: "indeterminate" },
+        { name: "In Progress", category: "indeterminate" }, { name: "Done", category: "done" },
+    ];
+    assert.deepEqual((await workbench.snapshot()).statuses, expected);
+    const cached = await workbench.cache.read();
+    assert.deepEqual(cached.issues[workbench.selectedScope()].statuses.map(s => s.name), ["PR Waiting", "In Progress", "Done", "To Do"]);
+    const reopened = new Workbench({ cache: workbench.cache, store: workbench.store });
+    assert.equal(await reopened.hydrate(), true);
+    assert.deepEqual((await reopened.snapshot()).statuses, expected, "a warm start shows the project's statuses before Jira answers");
+});
+
+test("without a status listing (v1, or a failed read) the filter still offers every status seen on an issue", async t => {
+    for (const options of [{}, { v2: true, failListing: true }]) {
+        const runtime = fakeRuntime(options);
+        const { connection, workbench, open, loaded } = await harness(t, runtime);
+        if (options.failListing) connection.gateway.statuses = async () => { throw new Error("listing unavailable"); };
+        await open();
+        await until(t, () => loaded(workbench), { what: "project to load" });
+        assert.ok(!runtime.calls.some(c => c.args?.name === "listJiraStatuses"));
+        assert.deepEqual((await workbench.snapshot()).statuses, [{ name: "To Do", category: "new" }]);
+        assert.equal(workbench.error, null, "a missing listing never fails the Jira refresh");
+    }
 });
 
 test("Atlassian MCP v1 search is never sent v2-only arguments", async t => {

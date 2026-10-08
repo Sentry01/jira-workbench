@@ -123,11 +123,12 @@ export function executionEvidence(item, execution, trace = null) {
     return evidence;
 }
 
-// The one search rule for both views: key, summary, assignee and parent key, plus the Jira status category.
+// The one search rule for both views: key, summary, assignee and parent key, plus the Jira status filter: a status
+// category, or "status:<name>" for one of the project's own workflow statuses.
 export function matches(item, query = "", category = "all") {
     const search = query.trim().toLocaleLowerCase();
     return (!search || [item.key, item.summary, item.assignee, item.parentKey].filter(Boolean).join(" ").toLocaleLowerCase().includes(search))
-        && (category === "all" || item.category === category);
+        && (category === "all" || (category.startsWith("status:") ? item.status === category.slice(7) : item.category === category));
 }
 
 // Keeps matching nodes and the ancestors of matches. With no filter, every node keeps all its children.

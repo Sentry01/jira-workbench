@@ -22,6 +22,9 @@ export const V2_SITE = { cloudId: "cloud-demo", url: "https://demo.atlassian.net
 // no displayName or source, and it offers the Atlassian MCP v2 tools as cc-_<id>-<tool>.
 export const CONNECTOR = "cc-_rovo";
 export const PROJECTS = [{ id: "42", key: "DEMO", name: "Demo project" }, { id: "43", key: "ALT", name: "Other project" }];
+// listJiraStatuses (mode "project"), observed live 2026-10-08: a custom workflow step no issue is in yet, listed in workflow order.
+export const STATUSES = [{ id: "4", name: "PR Waiting", category: "indeterminate", scope: "PROJECT" }, { id: "3", name: "In Progress", category: "indeterminate", scope: "PROJECT" },
+    { id: "5", name: "Done", category: "done", scope: "PROJECT" }, { id: "1", name: "To Do", category: "new", scope: "PROJECT" }];
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -88,6 +91,8 @@ export function fakeRuntime({ status = "connected", connector = null, rebuildMs 
             if (name === "searchJiraIssuesUsingJql") return { data: search(args, v2) };
             if (name === "executeRead" && args.name === "listJiraProjects")
                 return { data: { values: PROJECTS, isLast: true, total: PROJECTS.length, startAt: args.inputs?.startAt ?? 0 } };
+            if (name === "executeRead" && args.name === "listJiraStatuses")
+                return { data: { mode: "project", statuses: STATUSES } };
             throw new Error(`Unexpected Jira v2 tool ${name} ${args?.name || ""}`);
         }
         if (name === "getAccessibleAtlassianResources") return [SITE];

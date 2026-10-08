@@ -63,6 +63,11 @@ export async function createFixture({ directory, root = resolveRoot() }) {
         sites: async () => [{ id: "demo-site", url: "https://example.atlassian.net", name: "Example" }],
         projects: async () => [{ id: "42", key: "DEMO", name: "Daily execution demo" }, { id: "43", key: "ALT", name: "Another project" }],
         issues: async (site, project) => ({ issues: project === "42" ? issues : [], fetchedAt: new Date().toISOString() }),
+        // Project 42's workflow has a step no demo issue is in yet; project 43 lists none.
+        statuses: async (site, project) => project === "42" ? [
+            { name: "To Do", category: "new" }, { name: "In Progress", category: "indeterminate" },
+            { name: "PR Waiting", category: "indeterminate" }, { name: "Done", category: "done" },
+        ] : null,
         call: async (name, args) => {
             if (name === "list_projects") return [{ id: "app-project", name: "Example repo", github_repo: "example/demo" }];
             if (name === "get_sessions_status") return { sessions: sessionIds.map((id, index) => ({

@@ -37,6 +37,9 @@ test("search retains the ancestors of a matching subtask", () => {
 });
 
 test("one search rule covers key, summary, assignee and parent key, in both views", () => {
+    assert.equal(matches({ ...rows[1], status: "PR Waiting", category: "indeterminate" }, "", "status:PR Waiting"), true, "a project's own status filters exactly");
+    assert.equal(matches({ ...rows[1], status: "In Progress", category: "indeterminate" }, "", "status:PR Waiting"), false);
+    assert.equal(matches({ ...rows[1], status: "PR Waiting", category: "indeterminate" }, "", "indeterminate"), true, "a category still covers its statuses");
     assert.equal(matches(rows[1], "demo-1"), true, "a parent key finds its children");
     assert.equal(matches(rows[1], "  ada  "), true, "assignee, trimmed and case-insensitive");
     assert.equal(matches(rows[1], "summary demo-2"), true);

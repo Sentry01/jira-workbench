@@ -127,7 +127,8 @@ function normalizePreferences(value = {}) {
         selected: typeof value.selected === "string" ? value.selected : null,
         collapsed: Array.isArray(value.collapsed) ? value.collapsed.filter(id => typeof id === "string") : [],
         query: typeof value.query === "string" ? value.query : "",
-        category: ["all", "new", "indeterminate", "done"].includes(value.category) ? value.category : "all",
+        category: ["all", "new", "indeterminate", "done"].includes(value.category)
+            || typeof value.category === "string" && value.category.startsWith("status:") && value.category.length > 7 && value.category.length <= 207 ? value.category : "all",
         scrollTop: Number.isFinite(value.scrollTop) ? Math.max(0, value.scrollTop) : 0,
         detailsOpen: value.detailsOpen === true,
     };
@@ -366,6 +367,29 @@ function selectOptions(select, options, value, placeholder, force = false) {
     }
     select.value = value || "";
 }
+const CATEGORY_LABELS = { new: "To do", indeterminate: "In progress", done: "Done", unknown: "Other" };
+// Built per project: each status category, then that project's own workflow statuses in it (e.g. "PR Waiting").
+function renderStatusFilter() {
+    const select = $("status-filter"), statuses = state.statuses || [];
+    if (document.activeElement === select) return;
+    const missing = ui.category.startsWith("status:") && !statuses.some(status => `status:${status.name}` === ui.category);
+    const signature = JSON.stringify([statuses, missing && ui.category]);
+    if (select.dataset.options !== signature) {
+        select.dataset.options = signature;
+        const groups = Object.entries(CATEGORY_LABELS).flatMap(([category, label]) => {
+            const own = statuses.filter(status => status.category === category);
+            if (category === "unknown" && !own.length) return [];
+            const group = document.createElement("optgroup");
+            group.label = label;
+            if (category !== "unknown") group.append(new Option(`${label} (any)`, category));
+            group.append(...own.map(status => new Option(status.name, `status:${status.name}`)));
+            return [group];
+        });
+        select.replaceChildren(new Option("All Jira statuses", "all"), ...groups,
+            ...missing ? [new Option(`${ui.category.slice(7)} (not listed)`, ui.category)] : []);
+    }
+    select.value = ui.category;
+}
 function captureFocus(container) {
     return container.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 }
@@ -388,6 +412,7 @@ function render({ force = false } = {}) {
         selectOptions($("project"), state.projects.map(p => ({ value: p.id, label: `${p.key} - ${p.name}` })), state.project?.id, "Select Jira project");
     }
     selectOptions($("repository"), state.appProjects.map(p => ({ value: p.id, label: p.repo || p.name })), state.mapping?.id, "Choose a Copilot repository");
+    renderStatusFilter();
     configureActionControl($("project-start"), "prepare", "project", !state.project || !state.mapping || state.cached);
     configureActionControl($("sync-jira"), "launch", "project", selecting || !state.project || !state.mapping || Boolean(state.error) || state.cached || nodePending("project"));
     configureActionControl($("refresh"), "refresh-jira", "jira", selecting || !state.project);

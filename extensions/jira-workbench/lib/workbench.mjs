@@ -1,4 +1,4 @@
-import { buildTree, scopeKey } from "./model.mjs";
+import { buildTree, projectStatuses, scopeKey } from "./model.mjs";
 import { deriveExecution } from "./execution.mjs";
 import { Launches } from "./launches.mjs";
 import { objects, settle } from "./runtime.mjs";
@@ -12,6 +12,8 @@ export class Workbench {
         this.projectLists = new Map();
         this.previews = new Map();
         this.issues = [];
+        // The selected project's workflow statuses as Jira listed them; empty when it could not.
+        this.statuses = [];
         this.error = null;
         this.catalogErrors = [];
         this.executionRefreshes = new Map();
@@ -91,6 +93,7 @@ export class Workbench {
         this.project = project;
         const cached = data.issues?.[this.selectedScope()];
         this.issues = Array.isArray(cached?.issues) ? cached.issues : [];
+        this.statuses = Array.isArray(cached?.statuses) ? cached.statuses : [];
         this.fetchedAt = cached?.fetchedAt || null;
         this.cached = true;
         return true;
@@ -140,6 +143,7 @@ export class Workbench {
         this.site = null;
         this.project = null;
         this.issues = [];
+        this.statuses = [];
         this.fetchedAt = null;
         this.cached = false;
         this.error = null;
@@ -205,6 +209,7 @@ export class Workbench {
         this.site = site;
         this.project = project;
         this.issues = [];
+        this.statuses = [];
         this.fetchedAt = null;
         this.cached = false;
         this.previews.clear();
@@ -257,6 +262,7 @@ export class Workbench {
             signIn: connection?.state === "signin" ? { server: connection.server, connector: connection.connector } : null,
             projects: this.site ? this.projectLists.get(this.site.id) || [] : [],
             issues: this.issues, tree: buildTree(this.issues),
+            statuses: this.site && this.project ? projectStatuses(this.statuses, this.issues) : [],
             mapping, links, requests, executions,
             preferences: this.site && this.project ? data.preferences?.[this.selectedScope()] || {} : {},
             navigationReceipts: this.hostActions?.snapshot?.() || [],
@@ -274,7 +280,7 @@ export class Workbench {
             selected: v => v === null || typeof v === "string" && v.length <= 100,
             collapsed: v => Array.isArray(v) && v.length <= 10000 && v.every(id => typeof id === "string" && id.length <= 100),
             query: v => typeof v === "string" && v.length <= 500,
-            category: v => ["all", "new", "indeterminate", "done"].includes(v),
+            category: v => ["all", "new", "indeterminate", "done"].includes(v) || typeof v === "string" && v.startsWith("status:") && v.length > 7 && v.length <= 207,
             scrollTop: v => Number.isFinite(v) && v >= 0 && v <= 10000000,
             detailsOpen: v => typeof v === "boolean",
         };
@@ -292,14 +298,22 @@ export class Workbench {
         const generation = this.refreshGeneration = (this.refreshGeneration || 0) + 1;
         const current = () => generation === this.refreshGeneration && scope === this.currentScope();
         try {
-            const result = await this.jira(options => this.gateway.issues(this.site.id, this.project.id, options), fresh);
+            const { id: cloudId } = this.site, { id: projectId } = this.project;
+            const result = await this.jira(async options => {
+                const read = await this.gateway.issues(cloudId, projectId, options);
+                // Only after the issues answered, so a dead token still costs one call. Optional: without the
+                // workflow listing, statuses seen on issues still show.
+                const statuses = this.gateway.statuses ? await this.gateway.statuses(cloudId, projectId, options).catch(() => null) : null;
+                return { ...read, statuses };
+            }, fresh);
             if (!current()) return this.snapshot();
             this.issues = result.issues;
+            if (result.statuses) this.statuses = result.statuses;
             this.fetchedAt = result.fetchedAt;
             this.error = null;
             this.cached = false;
             await this.remember(data => {
-                data.issues[scope] = { issues: result.issues, fetchedAt: result.fetchedAt };
+                data.issues[scope] = { issues: result.issues, statuses: this.statuses, fetchedAt: result.fetchedAt };
                 data.lastScope = { cloudId: this.site.id, jiraProjectId: this.project.id };
             });
         } catch (error) {

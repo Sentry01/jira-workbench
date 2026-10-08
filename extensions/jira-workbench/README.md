@@ -12,7 +12,8 @@ itself only reads Jira.
   browseable projects, and JQL search: the Copilot app's Atlassian Rovo
   connector, an Atlassian MCP server, or both. Both the Rovo MCP v1 endpoint and
   the recommended v2 endpoint (`https://mcp.atlassian.com/v2/mcp`) work; on v2
-  the project list is read through `executeRead` (`listJiraProjects` only). When
+  the project list and each project's workflow statuses are read through
+  `executeRead` (`listJiraProjects` and `listJiraStatuses` only). When
   several Atlassian servers offer the same tools, the Workbench reads from the
   most usable one and prefers the app's connector when both are connected.
 - GitHub repository projects already configured in the Copilot app.
@@ -159,6 +160,13 @@ Each launch stores a private immutable brief, its content hash, source provenanc
 and acknowledgements with the request and resulting session. A lost HTTP response
 can be reconciled by the persisted preview/request identity rather than retrying
 creation blindly.
+
+The status filter is built per project: each status category, then that
+project's own workflow statuses (for example a custom "PR Waiting" step), read
+with `listJiraStatuses` after each Jira refresh and merged with the statuses seen
+on loaded issues. A step no issue is in yet still appears. On Atlassian MCP v1,
+which has no status listing, or when the listing fails, the filter offers the
+statuses seen on issues and the Jira refresh is unaffected.
 
 Project-scoped selection, view, filters, expansion, and scroll are remembered.
 Narrow panels use a focused detail view with **Back to work**. Pending actions do
@@ -335,7 +343,11 @@ one-queued-request-per-scope rule; a request with no receipt after 15 minutes no
 longer counts) and launches one Autopilot session. The kickoff
 lists every issue in the project, compares each with its Workbench-linked
 sessions and PRs plus repository PRs, branches and commits, and transitions
-issues whose status category is wrong. It may make **only status transitions, only
+issues whose status category is wrong. The project's workflow statuses are passed
+inside `<jira-context>`, so the session picks the target status from the
+project's own workflow: work waiting on an open, non-draft PR goes to a review or
+waiting status (for example "PR Waiting") when the project has one, otherwise to
+its general in-progress status. It may make **only status transitions, only
 within the selected project, at most one per issue**. It never reopens a done
 issue, leaves ambiguous cases unchanged, makes no field edits, comments,
 assignments, sprint changes, creation, deletion or links, does not modify the

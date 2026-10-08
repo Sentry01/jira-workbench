@@ -181,6 +181,19 @@ try {
     await page.waitForFunction(() => document.querySelectorAll('#tree [role="treeitem"]').length === 3);
     assert.deepEqual(await page.$$eval('#tree [role="treeitem"]', rows => rows.map(row => row.dataset.nodeId)), ["1", "6", "8"]);
     await page.locator("#search").fill("");
+    // The status filter is built from the project's own workflow, including a step no issue is in yet.
+    const statusOptions = () => page.$$eval("#status-filter option", options => options.map(o => [o.parentElement.label || "", o.value, o.textContent]));
+    assert.deepEqual(await statusOptions(), [
+        ["", "all", "All Jira statuses"],
+        ["To do", "new", "To do (any)"], ["To do", "status:To Do", "To Do"],
+        ["In progress", "indeterminate", "In progress (any)"], ["In progress", "status:In Progress", "In Progress"], ["In progress", "status:PR Waiting", "PR Waiting"],
+        ["Done", "done", "Done (any)"], ["Done", "status:Done", "Done"],
+    ]);
+    await page.locator("#status-filter").selectOption("status:PR Waiting");
+    await page.waitForFunction(() => !document.querySelector('#tree [role="treeitem"]'));
+    await page.locator("#status-filter").selectOption("status:To Do");
+    await page.waitForFunction(() => document.querySelectorAll('#tree [role="treeitem"]').length === 8);
+    await page.locator("#status-filter").selectOption("all");
     await page.getByRole("treeitem", { name: /DEMO-5 / }).click();
     assert.match(await page.locator("#inspector").innerText(), /Missing criteria and blocked/);
     const preferencesSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok()
@@ -191,6 +204,7 @@ try {
     await page.waitForFunction(() => document.getElementById("project-title").textContent === "Another project");
     assert.equal(await page.locator("#repository").inputValue(), "");
     assert.doesNotMatch(await page.locator("#inspector").innerText(), /Missing criteria and blocked/);
+    assert.ok(!(await statusOptions()).some(([, value]) => value === "status:PR Waiting"), "statuses are per project");
     await page.locator("#project").selectOption("42");
     await page.waitForFunction(() => document.getElementById("project-title").textContent === "Daily execution demo");
     await page.waitForFunction(() => document.getElementById("search").value === "Ready example");
@@ -222,7 +236,7 @@ try {
     await page.screenshot({ path: screenshotPath("narrow.png"), fullPage: true });
     assert.equal(sent.length, 2, "Only the explicitly confirmed fake launches are queued");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), and narrow layout. External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), and narrow layout. External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();
