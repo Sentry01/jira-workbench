@@ -41,7 +41,7 @@
         <div id="execution-filters" class="execution-filters" role="group" aria-label="Execution filter"></div>
         <button id="show-details" disabled>Show details</button>
       </div>
-      <div class="filters"><input id="search" type="search" placeholder="Search key, title, assignee..." aria-label="Search work"><select id="status-filter" aria-label="Filter Jira status"><option value="all">All Jira statuses</option><option value="new">To do</option><option value="indeterminate">In progress</option><option value="done">Done</option></select><button id="expand" hidden>Expand all</button></div>
+      <div class="filters"><input id="search" type="search" placeholder="Search key, title, assignee..." aria-label="Search work"><select id="status-filter" aria-label="Filter Jira status"><option value="all">All Jira statuses</option><option value="new">To do</option><option value="indeterminate">In progress</option><option value="done">Done</option></select><select id="sprint-filter" aria-label="Filter sprint" hidden><option value="">All sprints</option></select><button id="expand" hidden>Expand all</button></div>
       <div id="work-scroll">
         <div id="hierarchy-header" class="tree-header" aria-hidden="true" hidden><span>Work hierarchy</span><span>Jira</span><span>Copilot / PR</span><span>Action</span></div>
         <div id="tree" role="list" aria-label="Daily execution queue"><div class="empty"><h3>Choose a Jira project</h3><p>Explore every epic, issue and subtask, including work outside active sprints.</p></div></div>

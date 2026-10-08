@@ -33,7 +33,8 @@ column.
 | **Launch from an issue** | One click turns a Jira issue into an editable, hash-verified brief. Missing acceptance criteria and unresolved blockers are shown as warnings you must acknowledge before implementation starts. |
 | **Traceability** | Each issue links to its sessions, branches, pull requests and checks, with the evidence for every link. Links are never inferred from similar titles or branch names. |
 | **Hierarchy view** | Epics, stories and subtasks by Jira parent link. Missing parents stay visible, and parent cycles are reported. |
-| **Read-only canvas** | The gateway allows only Jira reads. The canvas never edits, transitions or comments on issues, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves its issue to In Progress, and a confirmed **Update Jira** session corrects statuses across the project. |
+| **Per-project statuses** | The status filter lists each project's own Jira workflow statuses, grouped by category, including custom steps such as "PR Waiting" that no issue is in yet. |
+| **Read-only canvas** | The gateway allows only Jira reads. The canvas never edits, transitions or comments on issues, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves its issue to In Progress, and a confirmed **Update Jira** session corrects statuses across the project using that project's own workflow (for example "PR Waiting" for work in an open pull request). |
 | **No dependencies** | Plain JavaScript. It installs as a plugin or a folder copy and needs no build step. |
 
 ## Quickstart
@@ -134,7 +135,7 @@ states. None of them means the work is done.
 
 ## What it does not do
 
-- **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch. An issue session moves only its own issue to In Progress when it starts implementing (after plan approval in Plan mode). **Update Jira** starts one confirmed session that makes status-only fixes across the project and never reopens Done issues. These limits are set by the session's prompt and are not technically enforced; see [Security](SECURITY.md).
+- **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch. An issue session moves only its own issue to In Progress when it starts implementing (after plan approval in Plan mode). **Update Jira** starts one confirmed session that makes status-only fixes across the project, picks target statuses from the project's own workflow, and never reopens Done issues. These limits are set by the session's prompt and are not technically enforced; see [Security](SECURITY.md).
 - **No fan-out.** One confirmed launch creates exactly one session.
 - **No auto-merge or auto-approve.** Review actions open the real Copilot surface, and you decide.
 - **No pending action shown as finished.** A pending request is labeled as pending. A launch with no session receipt after 15 minutes is marked as unknown, stops blocking new work, and can be cleared.

@@ -70,14 +70,16 @@ test("failed refresh preserves last good hierarchy and marks it stale", async t 
 test("project-scoped preferences survive reopening and reject stale-project writes", async t => {
     const { workbench, store, gateway } = await fixture(t);
     const scope = "cloud-demo/42/project";
-    await workbench.savePreferences({ scope, preferences: { view: "hierarchy", selected: "2", query: "Loading", collapsed: ["1"], scrollTop: 120 } });
+    await workbench.savePreferences({ scope, preferences: { view: "hierarchy", selected: "2", query: "Loading", collapsed: ["1"], sprint: "sprint:12", scrollTop: 120 } });
     const other = new Workbench({ gateway, store, github: async () => ({}), send: async () => {}, instanceId: "other-panel" });
     await other.catalog();
     await other.select({ cloudId: site.id, jiraProjectId: project.id });
     await other.idle();
     assert.equal((await other.snapshot()).preferences.selected, "2");
+    assert.equal((await other.snapshot()).preferences.sprint, "sprint:12");
     await assert.rejects(workbench.savePreferences({ scope: "other/42/project", preferences: { selected: "2" } }), /project|scope/i);
     await assert.rejects(workbench.savePreferences({ scope, preferences: { view: "invented" } }), /view/i);
+    await assert.rejects(workbench.savePreferences({ scope, preferences: { sprint: "other-value" } }), /sprint/i);
 });
 
 

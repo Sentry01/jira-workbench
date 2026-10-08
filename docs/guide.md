@@ -206,11 +206,14 @@ Switch to **Hierarchy** to see epics, stories and subtasks by Jira parent link.
 
 ![The hierarchy view with an item selected](images/04-hierarchy.png)
 
-- Search (by key, title, assignee or parent key) and the status filter apply to
-  both views. Searching for a parent's key also finds its children.
+- Search (by key, title, assignee or parent key), the status filter and the
+  sprint filter apply to both views. Searching for a parent's key also finds its
+  children.
 - The status filter lists the selected project's own workflow statuses, grouped
   by category, so custom steps such as "PR Waiting" can be filtered on even
   before any issue is in them. Pick a category to match all of its statuses.
+- The sprint filter lists the sprints the project's issues belong to, plus "No
+  sprint" when some work has none. It is hidden for projects without sprints.
 - A missing parent stays visible with a warning, and a parent cycle is reported
   rather than dropped.
 - Parent progress counts descendant work items, not story points.
