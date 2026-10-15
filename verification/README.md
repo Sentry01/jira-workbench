@@ -58,7 +58,7 @@ keyboard focus, the freshness dots, and the narrow layout.
 No real sessions are created and no real service is contacted.
 
 ```sh
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node verification/verify-canvas.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-canvas.mjs
 ```
 
 Without `WORKBENCH_ROOT`, it loads the extension from
@@ -68,7 +68,7 @@ git-clone link or a copied install; with a plugin install, set `WORKBENCH_ROOT`.
 ## `verify-reconnect.mjs`: MCP connection resilience
 
 Runs the real canvas UI against the behavioral MCP runtime model in
-[`test/fake-runtime.mjs`](../extensions/jira-workbench/test/fake-runtime.mjs) and
+[`test/fake-runtime.mjs`](../com.github.copilot/extensions/jira-workbench/test/fake-runtime.mjs) and
 proves, with no clicks: a stopped Atlassian server is named with an
 automatic-retry hint, the project loads within seconds of the server starting, a
 silent token refresh never reaches the user, and a drop keeps the last good data
@@ -78,7 +78,7 @@ server shows **Sign in** and reloads once it is connected again. Nothing real is
 contacted.
 
 ```sh
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node verification/verify-reconnect.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-reconnect.mjs
 ```
 
 It caught a real usability bug: the UI polled every 5s even while reconnecting, so a
@@ -109,7 +109,8 @@ synthetic fixture, so the guide can be republished without exposing real Jira,
 session, or repository data. Run it after any UI change:
 
 ```sh
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node docs/screenshots.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs
 ```
 
-Images are written to `docs/images/`; `SCREENSHOT_DIR` overrides the destination.
+Images are written to `docs/images/`, and the plugin listing image to
+`assets/preview.png`; `SCREENSHOT_DIR` overrides both destinations.

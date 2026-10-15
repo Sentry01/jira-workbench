@@ -13,16 +13,16 @@
 <!-- Paste the output, not just the claim. -->
 
 ```text
-node --test extensions/jira-workbench/test/*.test.mjs
+node --test com.github.copilot/extensions/jira-workbench/test/*.test.mjs
 <output>
 
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node verification/verify-canvas.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-canvas.mjs
 <output>
 ```
 
 ## Screenshots
 
-<!-- For UI changes. Regenerate with: WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node docs/screenshots.mjs -->
+<!-- For UI changes. Regenerate with: WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs -->
 
 ## Checklist
 

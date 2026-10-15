@@ -58,7 +58,7 @@ These properties are deliberate. They are useful context for a report:
   sign-in probes and starts, server restarts, Jira reads and native navigation all
   give up after a fixed time, so a stalled runtime cannot hang the panel. The
   bounds are listed in the
-  [extension README](extensions/jira-workbench/README.md#keeping-the-atlassian-mcp-connection-alive).
+  [extension README](com.github.copilot/extensions/jira-workbench/README.md#keeping-the-atlassian-mcp-connection-alive).
 - **Jira text is rendered as text.** It is never injected as HTML, and the UI does
   not evaluate issue content.
 - **Sessions are never created silently.** A launch requires an explicit, reviewed,

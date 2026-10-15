@@ -130,6 +130,31 @@ Copilot app, open the plugin's **...** menu and choose **Update**.
 Sessions that are already running keep the old build until they reload. New
 sessions start on the new build.
 
+### Upgrading to 2.0.0
+
+Version 2.0.0 moves the canvas in the repository from `extensions/jira-workbench/`
+to `com.github.copilot/extensions/jira-workbench/`, the layout the Copilot plugin
+format expects. Your saved data in your Copilot home is not affected.
+
+- **Plugin installs.** Builds before 2.0.0 look for the old folder, so the panel
+  cannot offer this update. Run `copilot plugin update jira-workbench@jira-workbench`
+  once, or choose **Update** in the app. Later updates work from the panel again.
+- **Git-clone installs.** After you pull, the link in your Copilot home still
+  points at the old folder, which now holds only your saved data. Move that data
+  and re-point the link from a macOS or Linux shell:
+
+  ```sh
+  COPILOT_DIR="${COPILOT_HOME:-$HOME/.copilot}"
+  LINK="$COPILOT_DIR/extensions/jira-workbench"
+  OLD=$(readlink "$LINK")         # the clone's old extensions/jira-workbench folder
+  NEW="$(cd "$OLD/../.." && pwd)/com.github.copilot/extensions/jira-workbench"
+  if [ -d "$OLD/artifacts" ]; then mv "$OLD/artifacts" "$NEW/"; fi
+  ln -sfn "$NEW" "$LINK"
+  rmdir "$OLD" 2>/dev/null || true
+  ```
+
+  Then ask Copilot to reload extensions.
+
 ## Switching from a git clone or a copied install
 
 Earlier instructions linked a git clone into your Copilot home, usually at
@@ -143,7 +168,7 @@ From a macOS or Linux shell:
 ```sh
 COPILOT_DIR="${COPILOT_HOME:-$HOME/.copilot}"
 LINK="$COPILOT_DIR/extensions/jira-workbench"
-CLONE=$(readlink "$LINK")      # the clone's extensions/jira-workbench folder
+CLONE=$(readlink "$LINK")      # the clone's com.github.copilot/extensions/jira-workbench folder
 rm "$LINK"                      # removes only the link; the clone is untouched
 mkdir -p "$LINK/artifacts"
 cp -Rp "$CLONE/artifacts/.local" "$LINK/artifacts/"

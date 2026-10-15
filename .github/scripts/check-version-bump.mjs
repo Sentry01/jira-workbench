@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 const base = process.argv[2] || "HEAD^1";
 const root = resolve(process.argv[3] || ".");
 const PLUGIN_FILE = ".github/plugin/plugin.json";
-const SHIPPED = "extensions/jira-workbench/";
+const SHIPPED = "com.github.copilot/extensions/jira-workbench/";
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
 const fail = (message, file = PLUGIN_FILE) => {

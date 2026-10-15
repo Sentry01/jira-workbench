@@ -78,11 +78,11 @@ pull:
 
 ```sh
 git clone https://github.com/Sentry01/jira-workbench.git
-ln -s "$PWD/jira-workbench/extensions/jira-workbench" ~/.copilot/extensions/jira-workbench
+ln -s "$PWD/jira-workbench/com.github.copilot/extensions/jira-workbench" ~/.copilot/extensions/jira-workbench
 ```
 
 **As a one-off copy.** Ask Copilot to *install the canvas extension from
-`https://github.com/Sentry01/jira-workbench/tree/main/extensions/jira-workbench`*.
+`https://github.com/Sentry01/jira-workbench/tree/main/com.github.copilot/extensions/jira-workbench`*.
 The panel reports newer builds, but a copy can only be updated by installing it
 again.
 
@@ -146,7 +146,7 @@ states. None of them means the work is done.
 | --- | --- |
 | [Install](docs/install.md) | Prerequisites, Atlassian MCP setup, plugin install, checking the install, updating, switching from a clone, uninstalling, troubleshooting |
 | [Guide](docs/guide.md) | Setup, the daily loop, launch briefs, traceability and troubleshooting, with screenshots |
-| [Behavior reference](extensions/jira-workbench/README.md) | Execution semantics, freshness rules, the read-only boundary, known prototype limits |
+| [Behavior reference](com.github.copilot/extensions/jira-workbench/README.md) | Execution semantics, freshness rules, the read-only boundary, known prototype limits |
 | [Contributing](CONTRIBUTING.md) | Setup, the verification commands, and the rules reviewers check |
 | [Security](SECURITY.md) | Private reporting, design boundaries, and where your local data lives |
 | [Verification](verification/README.md) | The three browser harnesses, what CI runs, and the shared synthetic fixture |
@@ -162,7 +162,7 @@ states. None of them means the work is done.
 ## Layout
 
 ```text
-extensions/jira-workbench/   The installable canvas; this is what you share
+com.github.copilot/extensions/jira-workbench/   The installable canvas; this is what you share
   extension.mjs              Entry point; declares the canvas and its actions
   lib/                       Gateway, model, execution classifier, briefs, store, server, updater, plus:
     connection.mjs           The one supervisor of the Atlassian MCP connection
@@ -174,6 +174,7 @@ extensions/jira-workbench/   The installable canvas; this is what you share
     runtime.mjs              Shared, time-bounded helpers for Copilot runtime calls
   ui/                        Canvas renderer
   test/                      A node:test suite: no framework, no dependencies
+assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
 docs/                        Install guide, user guide, screenshots, and their generator
 verification/                Browser harnesses and the shared synthetic fixture
 ```
@@ -185,7 +186,7 @@ me". Start with [CONTRIBUTING.md](CONTRIBUTING.md). Everything runs with `node`,
 and there is nothing to install:
 
 ```sh
-node --test extensions/jira-workbench/test/*.test.mjs
+node --test com.github.copilot/extensions/jira-workbench/test/*.test.mjs
 ```
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).

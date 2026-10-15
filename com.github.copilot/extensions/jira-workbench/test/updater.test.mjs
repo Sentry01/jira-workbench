@@ -40,7 +40,7 @@ const gitScript = (overrides = {}) => ({
     ...overrides,
 });
 const gitIdentity = { kind: "git", head: HEAD, commit: HEAD.slice(0, 7), date: "2026-09-28", dirty: false, tree: null, version: "1.0.0", repo: "example/demo" };
-const install = { kind: "git", root: "/repo/extensions/jira-workbench", repoRoot: "/repo" };
+const install = { kind: "git", root: "/repo/com.github.copilot/extensions/jira-workbench", repoRoot: "/repo" };
 const fakeSession = () => {
     const calls = [];
     return {
@@ -79,7 +79,7 @@ test("tree hash matches git's tree object ID, ignoring local-only files", async 
 test("install detection ignores an enclosing repository and recognises plugin installs", async t => {
     const home = await mkdtemp(join(tmpdir(), "jw-home-"));
     t.after(() => rm(home, { recursive: true, force: true }));
-    const root = join(home, "installed-plugins", "jira-workbench", "jira-workbench", "extensions", "jira-workbench");
+    const root = join(home, "installed-plugins", "jira-workbench", "jira-workbench", "com.github.copilot", "extensions", "jira-workbench");
     await mkdir(root, { recursive: true });
     const nested = fakeRun({ "rev-parse --show-toplevel": home });
     assert.equal((await detectInstall({ root, run: nested.run, copilotHome: home })).kind, "plugin", "~/.copilot's own repository is not this checkout");
@@ -87,7 +87,7 @@ test("install detection ignores an enclosing repository and recognises plugin in
     assert.equal((await detectInstall({ root, run: pluginClone.run, copilotHome: home })).kind, "plugin", "a plugin that is a git clone is still updated by the plugin manager");
     const noGit = fakeRun({ "rev-parse --show-toplevel": new Error("not a repository") });
     assert.equal((await detectInstall({ root, run: noGit.run, copilotHome: join(home, "elsewhere") })).kind, "copy");
-    const checkout = join(home, "checkout", "extensions", "jira-workbench");
+    const checkout = join(home, "checkout", "com.github.copilot", "extensions", "jira-workbench");
     await mkdir(checkout, { recursive: true });
     const own = fakeRun({ "rev-parse --show-toplevel": join(home, "checkout") });
     assert.equal((await detectInstall({ root: checkout, run: own.run, copilotHome: home })).kind, "git");
@@ -96,7 +96,7 @@ test("install detection ignores an enclosing repository and recognises plugin in
 test("identity labels the loaded commit, and falls back to the tree when git is unavailable", async t => {
     const dir = await mkdtemp(join(tmpdir(), "jw-id-"));
     t.after(() => rm(dir, { recursive: true, force: true }));
-    const root = join(dir, "extensions", "jira-workbench");
+    const root = join(dir, "com.github.copilot", "extensions", "jira-workbench");
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "extension.mjs"), "export {};\n");
     await mkdir(join(dir, ".github", "plugin"), { recursive: true });
@@ -207,7 +207,7 @@ test("plugin install: compares with the release the marketplace pins, not the de
     assert.equal(status.message, "Update available: v1.2.0 (ccccccc, 2026-10-03).");
     assert.equal(newer.gh.calls.length, 2);
     assert.deepEqual(newer.gh.calls[1].slice(4), ["-f", "owner=example", "-f", "name=demo",
-        "-f", "commit=v1.2.0", "-f", "folder=v1.2.0:extensions/jira-workbench", "-f", "manifest=v1.2.0:.github/plugin/plugin.json"]);
+        "-f", "commit=v1.2.0", "-f", "folder=v1.2.0:com.github.copilot/extensions/jira-workbench", "-f", "manifest=v1.2.0:.github/plugin/plugin.json"]);
 
     const released = pinned(headWith(tagged), releaseWith(TREE));
     assert.deepEqual([(await released.updater.check()).state, released.updater.status().label], ["current", "v1.2.0 · ccccccc · 2026-10-03"],
@@ -218,7 +218,7 @@ test("plugin install: compares with the release the marketplace pins, not the de
 
     const bySha = pinned(headWith(marketplaceWith({ source: "github", repo: "example/demo", sha: OTHER })), releaseWith(REMOTE_TREE));
     await bySha.updater.check();
-    assert.ok(bySha.gh.calls[1].includes(`folder=${OTHER}:extensions/jira-workbench`));
+    assert.ok(bySha.gh.calls[1].includes(`folder=${OTHER}:com.github.copilot/extensions/jira-workbench`));
 
     const unpinned = pinned(headWith(marketplaceWith("./")), releaseWith(TREE));
     const status2 = await unpinned.updater.check();

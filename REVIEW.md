@@ -1,7 +1,7 @@
 # Review instructions
 
 Jira Workbench is a dependency-free Copilot app canvas: a Node loopback server
-(`extensions/jira-workbench/lib/`) and a vanilla DOM UI (`extensions/jira-workbench/ui/`).
+(`com.github.copilot/extensions/jira-workbench/lib/`) and a vanilla DOM UI (`com.github.copilot/extensions/jira-workbench/ui/`).
 It reads Jira, launches Copilot sessions on explicit confirmation, and traces
 issues to sessions and pull requests. Review changed lines for the six areas
 below. Read `CONTRIBUTING.md` (review rules) and `SECURITY.md` (design
@@ -42,7 +42,7 @@ Naming, refactors and wording are Low at most.
 ## Functionality
 
 - New behavior needs a focused `node:test` case in
-  `extensions/jira-workbench/test/`. Panel display rules belong in
+  `com.github.copilot/extensions/jira-workbench/test/`. Panel display rules belong in
   `lib/view-model.mjs` with a unit test, not in `ui/app.mjs`.
 - Every Copilot runtime call (tools, MCP servers, sign-in, Jira reads,
   navigation) must be wrapped in `bounded()` from `lib/runtime.mjs`.
@@ -53,11 +53,11 @@ Naming, refactors and wording are Low at most.
 - No new runtime dependencies; the extension must run from a plain `cp -R`.
 - If `.github/plugin/plugin.json` changes version, `marketplace.json` must
   change `version` and `ref` to the same `v<version>`.
-- A change to `extensions/jira-workbench/` outside `test/` and Markdown must
+- A change to `com.github.copilot/extensions/jira-workbench/` outside `test/` and Markdown must
   raise that version, unless the PR explains why it should not release. Check
   the size of the raise: patch for fixes, minor for new behavior, major when
   users must act.
-- When behavior changes, `docs/guide.md` or `extensions/jira-workbench/README.md`
+- When behavior changes, `docs/guide.md` or `com.github.copilot/extensions/jira-workbench/README.md`
   must change with it. Flag docs that the diff makes wrong.
 
 ## Usability

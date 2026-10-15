@@ -2,7 +2,7 @@ import { REPO } from "./validate.mjs";
 import { buildLabel, execFileAsync, gitIn, treeHash } from "./version.mjs";
 
 const PLUGIN = "jira-workbench";
-const EXTENSION_PATH = "extensions/jira-workbench";
+const EXTENSION_PATH = "com.github.copilot/extensions/jira-workbench";
 const MARKETPLACE_PATH = ".github/plugin/marketplace.json";
 const PLUGIN_MANIFEST_PATH = ".github/plugin/plugin.json";
 const SHA = /^[0-9a-f]{40}$/;

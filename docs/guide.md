@@ -389,12 +389,12 @@ Both files describe your private work. They are git-ignored and excluded from
 
 ## Further reading
 
-- [`extensions/jira-workbench/README.md`](../extensions/jira-workbench/README.md):
+- [`com.github.copilot/extensions/jira-workbench/README.md`](../com.github.copilot/extensions/jira-workbench/README.md):
   the full reference, covering execution semantics, freshness rules, the
   read-only boundary, and known prototype limits.
 - [`verification/README.md`](../verification/README.md): the browser harnesses.
 - To regenerate these screenshots after a UI change:
 
   ```sh
-  WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node docs/screenshots.mjs
+  WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs
   ```

@@ -27,13 +27,13 @@ Atlassian MCP and the GitHub CLI.
 ## Open and use
 
 For a screenshot-led walkthrough of install, setup, and the daily loop, see
-[`docs/guide.md`](../../docs/guide.md) in the repository. The steps below are the
+[`docs/guide.md`](../../../docs/guide.md) in the repository. The steps below are the
 condensed version.
 
 1. Install it: `copilot plugin marketplace add Sentry01/jira-workbench`, then
    `copilot plugin install jira-workbench@jira-workbench`, then start a new
    Copilot session (a session loads plugins when it starts). The full install
-   guide, with prerequisites, is [`docs/install.md`](../../docs/install.md).
+   guide, with prerequisites, is [`docs/install.md`](../../../docs/install.md).
    A git clone linked into `~/.copilot/extensions/jira-workbench/`, or an
    `install_extension` copy of this folder, also works; see the repository README.
 2. Ask Copilot to open the `jira-workbench` canvas with an empty input object.
@@ -371,7 +371,7 @@ Both delegated writes are bounded **by the kickoff prompt only**. The extension
 validates every identifier it puts into the prompt, but a launched session runs
 with your Atlassian MCP access, and nothing technical stops it from making other
 Jira writes. Treat any change to the kickoff wording as a security change. See
-[SECURITY.md](../../SECURITY.md).
+[SECURITY.md](../../../SECURITY.md).
 
 The prototype writes local repository mappings, UI preferences, trace links,
 reviewed briefs, and launch receipts. Confirmed launches are sent to the owning agent, which uses
@@ -411,7 +411,7 @@ $COPILOT_HOME/extensions/jira-workbench/artifacts/.local/cache.json
 type. If `~/.copilot/extensions/jira-workbench` is a link to a git clone, the state
 lives inside that clone's `artifacts/`; when you switch to the plugin, remove the
 link and move that `artifacts/.local` to `~/.copilot/extensions/jira-workbench/artifacts/.local`
-before installing (exact commands: [Switching from a git clone](../../docs/install.md#switching-from-a-git-clone-or-a-copied-install)). Links are keyed by Jira site ID, project ID,
+before installing (exact commands: [Switching from a git clone](../../../docs/install.md#switching-from-a-git-clone-or-a-copied-install)). Links are keyed by Jira site ID, project ID,
 and stable issue ID, not canvas panel IDs. Atomic writes and a short-lived file
 lock protect `state.json` updates from multiple extension processes.
 
@@ -454,7 +454,7 @@ acknowledgements, request expiry, clearing and late receipts, execution
 classification, duplicate prevention, native and fallback navigation, receipt
 identity, historical PR retention, source-specific concurrent updates, loopback
 boundaries and body caps, the panel's view-model rules, the updater, and GitHub
-validation. The browser harnesses in [`verification/`](../../verification/README.md)
+validation. The browser harnesses in [`verification/`](../../../verification/README.md)
 run the real UI against fake Jira, Copilot and GitHub services.
 
 ## Sharing

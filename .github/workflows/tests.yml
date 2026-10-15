@@ -27,13 +27,13 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Run the test suite
-        run: node --test extensions/jira-workbench/test/*.test.mjs
+        run: node --test com.github.copilot/extensions/jira-workbench/test/*.test.mjs
 
   browser:
     name: Browser harnesses
     runs-on: ubuntu-latest
     env:
-      WORKBENCH_ROOT: ${{ github.workspace }}/extensions/jira-workbench
+      WORKBENCH_ROOT: ${{ github.workspace }}/com.github.copilot/extensions/jira-workbench
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

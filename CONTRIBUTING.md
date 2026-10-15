@@ -21,7 +21,7 @@ To run your working copy inside Copilot instead of the installed one, link it
 into your Copilot home:
 
 ```sh
-ln -s "$PWD/extensions/jira-workbench" ~/.copilot/extensions/jira-workbench
+ln -s "$PWD/com.github.copilot/extensions/jira-workbench" ~/.copilot/extensions/jira-workbench
 ```
 
 Before you create the link:
@@ -30,7 +30,7 @@ Before you create the link:
    so only one install registers the canvas.
 2. If `~/.copilot/extensions/jira-workbench` exists as a real folder, it holds
    your saved data. Move its `artifacts/` folder into your clone's
-   `extensions/jira-workbench/`, then delete the folder. Otherwise `ln -s` puts
+   `com.github.copilot/extensions/jira-workbench/`, then delete the folder. Otherwise `ln -s` puts
    the link inside it.
 
 Then ask Copilot to reload extensions.
@@ -42,14 +42,14 @@ pull request. Step 3 is only for UI changes.
 
 ```sh
 # 1. Unit tests (fast, no browser, no network)
-node --test extensions/jira-workbench/test/*.test.mjs
+node --test com.github.copilot/extensions/jira-workbench/test/*.test.mjs
 
 # 2. Isolated browser workflow and MCP reconnect UX, against fake services
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node verification/verify-canvas.mjs
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node verification/verify-reconnect.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-canvas.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-reconnect.mjs
 
 # 3. Only if you changed the UI: regenerate the guide screenshots
-WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node docs/screenshots.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs
 ```
 
 The browser steps need the `playwright-core` driver and a Chromium-based browser.
@@ -113,7 +113,7 @@ Reviewers check these first. A change that breaks one will not be merged.
 
 New behavior needs a test. The suite is plain `node:test` with no framework:
 
-- Unit tests live in `extensions/jira-workbench/test/`.
+- Unit tests live in `com.github.copilot/extensions/jira-workbench/test/`.
 - Prefer a focused test per behavior, including the edge case that made you write it.
 - Panel display rules (freshness labels, search, launch state, default modes,
   banners) belong in `lib/view-model.mjs` with a unit test; `ui/app.mjs` only wires
@@ -129,7 +129,7 @@ New behavior needs a test. The suite is plain `node:test` with no framework:
 - Copilot code review runs on every push and follows [`REVIEW.md`](REVIEW.md);
   its comments are advisory and do not block merging.
 - Update the docs you invalidated: [`docs/guide.md`](docs/guide.md) for user-facing
-  behavior, [`extensions/jira-workbench/README.md`](extensions/jira-workbench/README.md)
+  behavior, [`com.github.copilot/extensions/jira-workbench/README.md`](com.github.copilot/extensions/jira-workbench/README.md)
   for semantics and boundaries.
 
 Commit messages: a short imperative subject line, then a paragraph on the reasoning.
@@ -167,7 +167,7 @@ node .github/scripts/check-release.mjs
 CI runs the same check on every pull request.
 
 A pull request that changes the shipped canvas must also raise the version. The
-shipped canvas is every file under `extensions/jira-workbench/` except `test/`
+shipped canvas is every file under `com.github.copilot/extensions/jira-workbench/` except `test/`
 and Markdown files. CI compares `plugin.json` with the base branch and fails
 when the version does not rise. To check a committed branch before you push:
 
@@ -177,8 +177,14 @@ node .github/scripts/check-version-bump.mjs "$(git merge-base origin/main HEAD)"
 
 If a change should wait for a later release, say so in the pull request; a
 maintainer adds the `no-release` label, which skips this check. The `version` in
-`extensions/jira-workbench/copilot-extension.json` is the extension manifest's
+`com.github.copilot/extensions/jira-workbench/copilot-extension.json` is the extension manifest's
 schema version, not the release version.
+
+`plugin.json` follows the [Agent Plugins](https://agent-plugins.org/) format: the
+Copilot app loads the canvas from `com.github.copilot/extensions/`, and
+`extensions.com.github.copilot.logo` names `assets/preview.png` as the listing
+image. Keep both paths; the Awesome Copilot marketplace checks them when it
+reviews a release.
 
 When the pull request merges, the
 `release` workflow creates the matching `v<version>` tag on the merge commit and
@@ -192,7 +198,7 @@ publishing a new version.
 ## Where things live
 
 ```text
-extensions/jira-workbench/   The installable canvas; this is the product
+com.github.copilot/extensions/jira-workbench/   The installable canvas; this is the product
   lib/                       Gateway, model, execution classifier, briefs, store, server, build identity and updater, plus:
     connection.mjs           The one supervisor of the Atlassian MCP connection (connecting / ready / signin / down)
     workbench.mjs            Panel state; hands launches and traces to the two modules below
@@ -203,6 +209,7 @@ extensions/jira-workbench/   The installable canvas; this is the product
     runtime.mjs              Shared, time-bounded helpers for Copilot runtime calls
   ui/                        Canvas renderer
   test/                      Node test suite, split along module ownership
+assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
 docs/                        Install guide, user guide, screenshots, and their generator
 .github/plugin/              Plugin and marketplace manifests; the marketplace pins the released version
 .github/scripts/             Release checks: the two manifests name one release, and a shipped change raises it
@@ -211,7 +218,7 @@ verification/                Browser harnesses and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
 
-Start with [`extensions/jira-workbench/README.md`](extensions/jira-workbench/README.md).
+Start with [`com.github.copilot/extensions/jira-workbench/README.md`](com.github.copilot/extensions/jira-workbench/README.md).
 It documents the execution semantics, freshness rules, the read-only boundary,
 and the known prototype limits, which reviewers will expect you to know.
 

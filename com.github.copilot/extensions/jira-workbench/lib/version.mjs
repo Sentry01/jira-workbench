@@ -45,7 +45,8 @@ export async function treeHash(dir) {
 // plugin: a copy managed by `copilot plugin`; copy: anything else, such as an install_extension folder.
 export async function detectInstall({ root = extensionRoot, run = execFileAsync, copilotHome = process.env.COPILOT_HOME || join(homedir(), ".copilot") } = {}) {
     const real = await realpath(root).catch(() => resolve(root));
-    const repoRoot = resolve(real, "..", "..");
+    // The canvas lives at <repo>/com.github.copilot/extensions/jira-workbench.
+    const repoRoot = resolve(real, "..", "..", "..");
     // First: a marketplace plugin can itself be a git clone, but only the plugin manager may update it.
     const plugins = await realpath(join(copilotHome, "installed-plugins")).catch(() => null);
     if (plugins && real.startsWith(plugins + sep)) return { kind: "plugin", root: real, repoRoot };

@@ -78,7 +78,7 @@ test("build status flags a process running an older commit than the installed ch
     let head = "a".repeat(40);
     const run = async (exe, args) => ({ stdout: args.includes("rev-parse") ? `${head}\n` : "" });
     const identity = { kind: "git", head, commit: head.slice(0, 7), date: "2026-09-30", dirty: false, tree: null, version: null, repo: "example/demo" };
-    const updater = new Updater({ install: { kind: "git", root: "/repo/extensions/jira-workbench", repoRoot: "/repo" }, identity, run });
+    const updater = new Updater({ install: { kind: "git", root: "/repo/com.github.copilot/extensions/jira-workbench", repoRoot: "/repo" }, identity, run });
     const server = await startServer({ snapshot: async () => ({}) }, { updater });
     t.after(() => server.close());
     const url = new URL(server.url), headers = { "x-workbench-token": url.hash.slice(1) };

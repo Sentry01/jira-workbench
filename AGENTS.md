@@ -8,7 +8,7 @@ are not negotiable. These steps apply to every pull request.
 Plugin users install tagged releases, not `main`. A change to the shipped canvas
 reaches them only when the version rises.
 
-The shipped canvas is every file under `extensions/jira-workbench/` except
+The shipped canvas is every file under `com.github.copilot/extensions/jira-workbench/` except
 `test/` and Markdown files. If the pull request changes any of them:
 
 1. Raise `version` in `.github/plugin/plugin.json` using Semantic Versioning: a
@@ -24,7 +24,7 @@ The shipped canvas is every file under `extensions/jira-workbench/` except
    node .github/scripts/check-version-bump.mjs "$(git merge-base origin/main HEAD)"
    ```
 
-The `version` in `extensions/jira-workbench/copilot-extension.json` is the
+The `version` in `com.github.copilot/extensions/jira-workbench/copilot-extension.json` is the
 extension manifest's schema version, not the release version. Leave it alone.
 
 If the change should not publish a release on its own, do not raise the version.
@@ -37,10 +37,10 @@ Full details are in [Releasing](CONTRIBUTING.md#releasing).
 Update the docs the change makes wrong, in the same pull request:
 
 - `docs/guide.md` for user-facing behavior.
-- `extensions/jira-workbench/README.md` for semantics and boundaries.
+- `com.github.copilot/extensions/jira-workbench/README.md` for semantics and boundaries.
 - `README.md` when what users see or install changes.
 - Guide screenshots after UI changes:
-  `WORKBENCH_ROOT="$PWD/extensions/jira-workbench" node docs/screenshots.mjs`.
+  `WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs`.
 
 ## Open the pull request
 

@@ -6,7 +6,7 @@ import {
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
 } from "../lib/view-model.mjs";
-import { issues as fixtureIssues } from "../../../verification/fixture.mjs";
+import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
 const time = value => value ? `at ${value}` : "not refreshed";
 const NOW = Date.parse("2026-10-02T06:00:00.000Z");

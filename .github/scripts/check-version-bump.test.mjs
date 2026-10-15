@@ -24,8 +24,8 @@ async function check({ from = "1.2.0", to = from, files = {}, env = {} }) {
     try {
         await git("init", "-q");
         await write(PLUGIN, plugin(from));
-        await write("extensions/jira-workbench/lib/model.mjs", "export const a = 1;\n");
-        await write("extensions/jira-workbench/README.md", "# Demo\n");
+        await write("com.github.copilot/extensions/jira-workbench/lib/model.mjs", "export const a = 1;\n");
+        await write("com.github.copilot/extensions/jira-workbench/README.md", "# Demo\n");
         await git("add", "-A");
         await git("commit", "-q", "-m", "base");
         if (to !== from) await write(PLUGIN, plugin(to));
@@ -42,12 +42,12 @@ async function check({ from = "1.2.0", to = from, files = {}, env = {} }) {
     }
 }
 
-const code = { "extensions/jira-workbench/lib/model.mjs": "export const a = 2;\n" };
+const code = { "com.github.copilot/extensions/jira-workbench/lib/model.mjs": "export const a = 2;\n" };
 
 test("a change that ships nothing passes without a new version", async () => {
     const files = {
-        "extensions/jira-workbench/README.md": "# Demo, revised\n",
-        "extensions/jira-workbench/test/model.test.mjs": "// test\n",
+        "com.github.copilot/extensions/jira-workbench/README.md": "# Demo, revised\n",
+        "com.github.copilot/extensions/jira-workbench/test/model.test.mjs": "// test\n",
         "docs/guide.md": "Guide\n",
         ".github/workflows/tests.yml": "name: tests\n",
     };
@@ -72,12 +72,12 @@ test("a shipped change that keeps or lowers the version fails and names the file
 
 test("added, deleted and moved shipped files count as shipped changes", async () => {
     const cases = [
-        { "extensions/jira-workbench/ui/new.css": "body {}\n" },
-        { "extensions/jira-workbench/lib/model.mjs": null },
+        { "com.github.copilot/extensions/jira-workbench/ui/new.css": "body {}\n" },
+        { "com.github.copilot/extensions/jira-workbench/lib/model.mjs": null },
         // Identical content, so git sees a rename out of the extension.
-        { "extensions/jira-workbench/lib/model.mjs": null, "scripts/model.mjs": "export const a = 1;\n" },
+        { "com.github.copilot/extensions/jira-workbench/lib/model.mjs": null, "scripts/model.mjs": "export const a = 1;\n" },
         // Git quotes non-ASCII paths unless the output is NUL-separated.
-        { "extensions/jira-workbench/ui/caf\u00e9.css": "body {}\n" },
+        { "com.github.copilot/extensions/jira-workbench/ui/caf\u00e9.css": "body {}\n" },
     ];
     for (const files of cases) assert.equal((await check({ files })).code, 1, Object.keys(files)[0]);
 });

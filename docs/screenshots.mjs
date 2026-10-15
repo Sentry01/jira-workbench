@@ -9,7 +9,7 @@ import { launchBrowser } from "../verification/browser.mjs";
 import { createFixture, seedProject } from "../verification/fixture.mjs";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const images = process.env.SCREENSHOT_DIR || fileURLToPath(new URL("./images/", import.meta.url));
@@ -47,6 +47,11 @@ try {
     await page.waitForFunction(() => document.body.innerText.includes("Answer question"));
     await dismissNotices();
     await shot("02-execution.png");
+    // The plugin's listing image (extensions.com.github.copilot.logo in plugin.json), cropped to 16:9.
+    const preview = process.env.SCREENSHOT_DIR ? join(images, "preview.png") : fileURLToPath(new URL("../assets/preview.png", import.meta.url));
+    await mkdir(dirname(preview), { recursive: true });
+    await page.screenshot({ path: preview, clip: { x: 0, y: 0, width: 1440, height: 810 } });
+    console.log(`Wrote the plugin preview to ${preview}`);
 
     await page.locator("#search").fill("Work item 8");
     await page.getByRole("button", { name: "Prepare implementation", exact: true }).first().click();
