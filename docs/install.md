@@ -118,6 +118,12 @@ While a panel is open, the Workbench checks for a new release every ten minutes.
 When it finds one, a banner offers **Update & reload**, which updates the plugin
 and restarts the panel on the new release.
 
+If you installed from another marketplace, such as Awesome Copilot, the panel
+does not offer updates. That marketplace lists the release its maintainers
+reviewed, which can be older than the latest one here. Update with
+`copilot plugin update jira-workbench@<marketplace>`, or move to this repository's
+marketplace ([step 2](#2-install-the-plugin)) for the latest release.
+
 To update from the terminal instead:
 
 ```sh

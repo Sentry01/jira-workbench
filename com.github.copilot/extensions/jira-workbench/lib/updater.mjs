@@ -2,6 +2,8 @@ import { REPO } from "./validate.mjs";
 import { buildLabel, execFileAsync, gitIn, treeHash } from "./version.mjs";
 
 const PLUGIN = "jira-workbench";
+// The marketplace this repository serves from MARKETPLACE_PATH; only its pin describes what an update installs.
+const OWN_MARKETPLACE = "jira-workbench";
 const EXTENSION_PATH = "com.github.copilot/extensions/jira-workbench";
 const MARKETPLACE_PATH = ".github/plugin/marketplace.json";
 const PLUGIN_MANIFEST_PATH = ".github/plugin/plugin.json";
@@ -142,6 +144,12 @@ export class Updater {
     async checkPackaged() {
         const moved = await this.moved();
         if (moved) return moved;
+        // Another marketplace (such as awesome-copilot) pins its own reviewed release, which this repository's
+        // marketplace does not describe; offering ours would reinstall theirs on every click.
+        if (this.identity.kind === "plugin") {
+            const marketplace = (await this.installEntry().catch(() => null))?.marketplace;
+            if (marketplace && marketplace !== OWN_MARKETPLACE) return quiet("managed");
+        }
         this.remote = await this.readRemote();
         if (!this.identity.tree || this.remote.tree === this.identity.tree) return quiet("current");
         const target = { commit: this.remote.commit.slice(0, 7), date: this.remote.date, version: this.remote.version || null };
@@ -211,11 +219,16 @@ export class Updater {
     }
 
     // Server-level plugin RPC is reachable only through the session's connection; without it, point at the CLI.
-    async updatePlugin() {
+    async installEntry() {
         const connection = this.session?.connection;
         if (typeof connection?.sendRequest !== "function") throw new Error(`run \`copilot plugin update ${PLUGIN}\``);
         const { plugins = [] } = await connection.sendRequest("plugins.list", {});
-        const entry = plugins.find(plugin => plugin.name === PLUGIN);
+        return plugins.find(plugin => plugin.name === PLUGIN) ?? null;
+    }
+
+    async updatePlugin() {
+        const connection = this.session?.connection;
+        const entry = await this.installEntry();
         if (!entry) throw new Error(`the ${PLUGIN} plugin is not installed`);
         await connection.sendRequest("plugins.update", { name: entry.marketplace ? `${entry.name}@${entry.marketplace}` : entry.name });
     }

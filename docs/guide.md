@@ -76,6 +76,10 @@ newer build, a banner appears above the work queue:
 - **... has local changes** means a git checkout has uncommitted edits. The
   Workbench never updates it for you; commit or stash the edits, then pull.
 
+An install from another marketplace, such as Awesome Copilot, never shows the
+update banner, because that marketplace decides which release it offers. See
+[Updating](install.md#updating).
+
 The small label under the panel names the running build. A git clone shows its
 own commit and date. A plugin install shows the version, commit and date of the
 release it matches, such as `v1.2.1 · 1a2b3c4 · 2026-10-08`, and
