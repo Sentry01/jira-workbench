@@ -140,18 +140,27 @@ format expects. Your saved data in your Copilot home is not affected.
   cannot offer this update. Run `copilot plugin update jira-workbench@jira-workbench`
   once, or choose **Update** in the app. Later updates work from the panel again.
 - **Git-clone installs.** After you pull, the link in your Copilot home still
-  points at the old folder, which now holds only your saved data. Move that data
-  and re-point the link from a macOS or Linux shell:
+  points at the old folder. That folder holds only your saved data, or is gone
+  if you had none. Move the data and re-point the link from a macOS or Linux
+  shell:
 
   ```sh
   COPILOT_DIR="${COPILOT_HOME:-$HOME/.copilot}"
   LINK="$COPILOT_DIR/extensions/jira-workbench"
-  OLD=$(readlink "$LINK")         # the clone's old extensions/jira-workbench folder
-  NEW="$(cd "$OLD/../.." && pwd)/com.github.copilot/extensions/jira-workbench"
-  if [ -d "$OLD/artifacts" ]; then mv "$OLD/artifacts" "$NEW/"; fi
-  ln -sfn "$NEW" "$LINK"
-  rmdir "$OLD" 2>/dev/null || true
+  OLD=$(readlink "$LINK"); OLD="${OLD%/}"   # the clone's old extensions/jira-workbench folder
+  CLONE="${OLD%/extensions/jira-workbench}"
+  NEW="$CLONE/com.github.copilot/extensions/jira-workbench"
+  if [ "$CLONE" != "$OLD" ] && [ -d "$NEW" ]; then
+    if [ -d "$OLD/artifacts" ]; then mv "$OLD/artifacts" "$NEW/"; fi
+    ln -sfn "$NEW" "$LINK"
+    rmdir "$OLD" 2>/dev/null || true
+  else
+    echo "Not changed: $LINK does not point at a clone that has 2.0.0 pulled."
+  fi
   ```
+
+  The paths are worked out from the link's text, not by entering the old
+  folder, so the commands also work when that folder no longer exists.
 
   Then ask Copilot to reload extensions.
 
