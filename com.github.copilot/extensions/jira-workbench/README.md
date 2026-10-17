@@ -319,6 +319,7 @@ Every Copilot runtime call the extension makes is time-bounded:
 | Server restart (`mcp.restartServer`) | 30s |
 | Starting sign-in (`mcp.oauth.login`) | 30s |
 | Native navigation: tool list, then the navigation call | 8s, then 30s |
+| Installed plugin list (`plugins.list`), for the update check | 5s |
 
 A Jira-side timeout fails as retryable ("Copilot did not answer ... within Ns.
 Retrying automatically.") and the supervisor tries again. A navigation timeout

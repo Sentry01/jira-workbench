@@ -197,6 +197,16 @@ test("plugin install from another marketplace: offers nothing, because that mark
     const moved = new Updater({ install: { ...install, kind: "plugin" }, identity, session: fakeSession("awesome-copilot"), run: gh.run, hash: async () => REMOTE_TREE });
     assert.equal((await moved.check()).action, "reload");
 
+    // A plugin list that never answers times out into the same fallback, so checks finish and a later
+    // build on disk is still found.
+    let disk = TREE;
+    const stalled = new Updater({ install: { ...install, kind: "plugin" }, identity, session: { connection: { sendRequest: () => new Promise(() => {}) } },
+        run: fakeRun({ "gh api graphql": remote }).run, hash: async () => disk, listTimeoutMs: 20 });
+    assert.equal((await stalled.check()).state, "available");
+    assert.equal((await stalled.check()).state, "available", "the timed-out check does not stay pending");
+    disk = REMOTE_TREE;
+    assert.equal((await stalled.local()).action, "reload");
+
     // A direct install, or one whose marketplace cannot be read, keeps comparing with this repository.
     for (const other of [fakeSession(""), { connection: { sendRequest: async () => { throw new Error("offline"); } } }, null]) {
         const fallback = new Updater({ install: { ...install, kind: "plugin" }, identity, session: other, run: fakeRun({ "gh api graphql": remote }).run, hash: async () => TREE });

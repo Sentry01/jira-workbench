@@ -1,3 +1,4 @@
+import { bounded } from "./runtime.mjs";
 import { REPO } from "./validate.mjs";
 import { buildLabel, execFileAsync, gitIn, treeHash } from "./version.mjs";
 
@@ -46,8 +47,8 @@ function manifestVersion(text) {
 // Watches for a newer build of this extension and applies it on request, then reloads the session's
 // extensions; the host re-opens every open panel against the new process.
 export class Updater {
-    constructor({ install, identity, session = null, run = execFileAsync, hash = treeHash, checkEveryMs = 10 * 60_000, firstCheckMs = 15_000, reloadDelayMs = 300, restartTimeoutMs = 20_000 }) {
-        Object.assign(this, { install, identity, session, run, hash, checkEveryMs, firstCheckMs, reloadDelayMs, restartTimeoutMs });
+    constructor({ install, identity, session = null, run = execFileAsync, hash = treeHash, checkEveryMs = 10 * 60_000, firstCheckMs = 15_000, reloadDelayMs = 300, restartTimeoutMs = 20_000, listTimeoutMs = 5_000 }) {
+        Object.assign(this, { install, identity, session, run, hash, checkEveryMs, firstCheckMs, reloadDelayMs, restartTimeoutMs, listTimeoutMs });
         this.git = gitIn(install.root, run);
         this.remote = null;
         this.state = { state: "unknown", action: null, message: null, target: null };
@@ -222,7 +223,8 @@ export class Updater {
     async installEntry() {
         const connection = this.session?.connection;
         if (typeof connection?.sendRequest !== "function") throw new Error(`run \`copilot plugin update ${PLUGIN}\``);
-        const { plugins = [] } = await connection.sendRequest("plugins.list", {});
+        // Bounded: a check waiting on a stalled list would hold `checking` and stop every later check.
+        const { plugins = [] } = await bounded(Promise.resolve().then(() => connection.sendRequest("plugins.list", {})), this.listTimeoutMs, "the plugin list request");
         return plugins.find(plugin => plugin.name === PLUGIN) ?? null;
     }
 
