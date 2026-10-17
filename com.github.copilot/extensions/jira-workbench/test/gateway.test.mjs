@@ -215,3 +215,18 @@ test("a project read fails over across Atlassian versions when the v2 connector 
     assert.deepEqual(runtime.calls.map(call => [call.server, call.name]), [["atlassian", "getVisibleJiraProjects"]]);
     assert.equal(gateway.answered, "atlassian");
 });
+
+test("only a rebuilt tool list with none of the app's session tools means no session is behind the panel", async () => {
+    // Observed live: a sidebar canvas's runtime lists no tools until a rebuild adds the CLI built-ins, and nothing else.
+    assert.equal(await new Gateway(fakeRuntime({ sidebar: true }).session).sessionless(), true);
+    assert.equal(await new Gateway(fakeRuntime().session).sessionless(), false);
+    assert.equal(await new Gateway(fakeRuntime({ status: null }).session).sessionless(), false, "a session without Atlassian still has a session");
+    // A snapshot built before the app registered its session tools is rebuilt before it is believed.
+    let registered = false, rebuilds = 0;
+    const session = { rpc: { tools: {
+        getCurrentMetadata: async () => ({ tools: [{ name: "bash" }, ...(registered ? [{ name: "list_projects" }] : [])] }),
+        initializeAndValidate: async () => { rebuilds++; registered = true; },
+    } } };
+    assert.equal(await new Gateway(session).sessionless(), false);
+    assert.equal(rebuilds, 1);
+});

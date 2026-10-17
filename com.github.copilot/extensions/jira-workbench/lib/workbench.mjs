@@ -1,7 +1,7 @@
 import { buildTree, projectStatuses, scopeKey } from "./model.mjs";
 import { deriveExecution } from "./execution.mjs";
 import { Launches } from "./launches.mjs";
-import { objects, settle } from "./runtime.mjs";
+import { objects, settle, standaloneError } from "./runtime.mjs";
 import { Trace } from "./trace.mjs";
 
 export class Workbench {
@@ -72,6 +72,10 @@ export class Workbench {
         if (!this.connection) throw new Error("Sign-in is not available in this panel.");
         return this.connection.signIn();
     }
+    // No Copilot session behind the panel: session work cannot start or be observed. Refusing it also keeps this
+    // panel's failed observations out of the store that panels in real sessions share.
+    standalone() { return this.connection?.current?.state === "standalone"; }
+    inSession(run) { return this.standalone() ? Promise.reject(standaloneError()) : run(); }
     close() {
         this.closed = true;
         this.queued = false;
@@ -257,7 +261,7 @@ export class Workbench {
             scope: this.site && this.project ? this.selectedScope() : null,
             site: this.site || null, project: this.project || null,
             sites: this.sites, appProjects: this.appProjects, catalogErrors: this.catalogErrors,
-            retryAt: connection && connection.state !== "ready" ? connection.nextCheckAt : null,
+            retryAt: connection && !["ready", "standalone"].includes(connection.state) ? connection.nextCheckAt : null,
             connection: connection ? { state: connection.state, reason: connection.reason, server: connection.server, connector: connection.connector, nextCheckAt: connection.nextCheckAt } : null,
             signIn: connection?.state === "signin" ? { server: connection.server, connector: connection.connector } : null,
             projects: this.site ? this.projectLists.get(this.site.id) || [] : [],
@@ -324,16 +328,16 @@ export class Workbench {
         return this.snapshot();
     }
     // Delegates: F-owned; C must not edit; L may append clearRequest
-    prepare(input) { return this.launches.prepare(input); }
-    launch(input) { return this.launches.launch(input); }
-    syncJira() { return this.launches.syncJira(); }
+    prepare(input) { return this.inSession(() => this.launches.prepare(input)); }
+    launch(input) { return this.inSession(() => this.launches.launch(input)); }
+    syncJira() { return this.inSession(() => this.launches.syncJira()); }
     recordSession(input) { return this.launches.recordSession(input); }
     failRequest(input) { return this.launches.failRequest(input); }
-    refreshExecution(options) { return this.trace.refreshExecution(options); }
-    refreshTrace(nodeId) { return this.trace.refreshTrace(nodeId); }
+    refreshExecution(options) { return this.inSession(() => this.trace.refreshExecution(options)); }
+    refreshTrace(nodeId) { return this.inSession(() => this.trace.refreshTrace(nodeId)); }
     attach(scope, sessionId, projectId, requestId) { return this.trace.attach(scope, sessionId, projectId, requestId); }
-    linkSession(input) { return this.trace.linkSession(input); }
-    openSession(input) { return this.trace.openSession(input); }
-    openPr(input) { return this.trace.openPr(input); }
+    linkSession(input) { return this.inSession(() => this.trace.linkSession(input)); }
+    openSession(input) { return this.inSession(() => this.trace.openSession(input)); }
+    openPr(input) { return this.inSession(() => this.trace.openPr(input)); }
     clearRequest(input) { return this.launches.clearRequest(input); }
 }

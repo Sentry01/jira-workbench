@@ -4,7 +4,7 @@ import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS }
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
-    descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
+    descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
@@ -261,6 +261,26 @@ test("the banner follows the connection state: sign-in, automatic retry, or plai
         "Background refresh failed: disk full", "Parent cycle",
         "Execution snapshot references unavailable work items: 9. Refresh the workbench to reconcile the sources.",
     ]);
+});
+
+test("a panel with no Copilot session behind it shows one explanation, no per-source failures and no retry promise", () => {
+    const reason = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions.";
+    const standalone = { state: "standalone", reason, server: null, nextCheckAt: new Date(NOW + 60_000).toISOString() };
+    const failing = {
+        catalogErrors: ["Jira: getAccessibleAtlassianResources is unavailable.", "Copilot projects: Copilot did not offer list_projects; update or restart Copilot."],
+        error: "searchJiraIssuesUsingJql is unavailable", backgroundError: "timeout", warming: false, tree: { warnings: [] },
+        issues: [{ id: "1" }], connection: standalone,
+    };
+    assert.equal(standaloneHost(failing), true);
+    assert.equal(standaloneHost({ connection: { ...standalone, state: "down" } }), false);
+    assert.equal(standaloneHost({ connection: null }), false);
+    assert.deepEqual(banner(failing, { now: NOW }), { signIn: null, errors: [`${reason} The data shown is the last saved copy.`] });
+    assert.deepEqual(banner({ ...failing, warming: true }, { now: NOW }).errors, [`${reason} The data shown is the last saved copy.`], "no Reconnecting now either");
+    assert.deepEqual(banner({ ...failing, issues: [] }, { now: NOW }).errors, [reason], "no saved data, no claim about it");
+    assert.deepEqual(banner({ ...failing, tree: { warnings: ["Parent cycle"] } }, { now: NOW, unavailable: ["9"] }).errors, [
+        `${reason} The data shown is the last saved copy.`, "Parent cycle",
+        "Execution snapshot references unavailable work items: 9. Refresh the workbench to reconcile the sources.",
+    ], "problems in the saved data itself still show");
 });
 
 test("the status filter groups each project's own workflow statuses under their category", () => {

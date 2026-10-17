@@ -99,6 +99,11 @@ Ask Copilot:
 
 > Open the jira-workbench canvas
 
+> [!NOTE]
+> Open the canvas from a Copilot session, as above. If you open it from
+> **Canvases** in the app's sidebar, no session is behind it: the panel shows
+> your last saved data but cannot reach Jira or your sessions, and says so.
+
 The panel opens empty, with three pickers along the top.
 
 ![The canvas before a project is chosen](images/01-connect.png)
@@ -277,6 +282,9 @@ Jira work item to the checks.
 
 ![The three-step traceability chain](images/05-trace.png)
 
+The detail panel is as tall as the canvas and stays in view while you scroll the
+page. Only a trace longer than the canvas scrolls inside the panel.
+
 The three steps are always in the same order:
 
 1. **Jira work item**: the issue and its status. Requirements live here, whether
@@ -372,7 +380,7 @@ navigation.
 ## 10. When something looks wrong
 
 Start with the Atlassian connection. The canvas keeps one connection for all its
-panels, and it is always in one of four states:
+panels, and it is always in one of five states:
 
 | State | What you see | What to do |
 | --- | --- | --- |
@@ -380,6 +388,7 @@ panels, and it is always in one of four states:
 | **Ready** | A green Jira dot and no banner | Nothing. While a panel is open, a light read every 4 minutes keeps your sign-in fresh |
 | **Sign-in needed** | **Atlassian needs you to sign in**, with **Sign in to Atlassian** | Sign in. Until you do, the canvas keeps the last good data and sends no Jira requests from the panel unless you press **Refresh**. It checks for your sign-in at most once per interval, starting at 5 seconds and slowing to 5 minutes, and reloads by itself when you finish |
 | **Down** | The server and its state, such as "MCP server atlassian is stopped", and "Reconnecting automatically in about Ns" | Usually nothing. The canvas keeps the last good data, retries, and restarts a failed server up to 3 times. A stopped or disabled server needs `/mcp` |
+| **No session** | "This panel is not running in a Copilot session..." and no retry countdown | Open Jira Workbench from a Copilot session. This panel shows the last saved data, disables every action that needs Jira or a session except **Reload connections**, and checks again only once a minute |
 
 Then find the message you see:
 
@@ -391,6 +400,7 @@ Then find the message you see:
 | "atlassian failed to connect" | Usually nothing: the canvas restarts the server itself, up to 3 times. If it keeps failing, restart it with `/mcp` |
 | "Reconnecting automatically in about Ns" | Nothing. The canvas retries by itself; you never need **Reload connections** |
 | "...while MCP servers finish connecting" | Nothing. The canvas retries while the server starts |
+| "This panel is not running in a Copilot session" | The canvas was opened from **Canvases** in the app's sidebar, which starts it without a session, Atlassian connection or sign-in. Close it and ask Copilot in a session to open the jira-workbench canvas |
 | No Jira sites or projects listed | Check the connection state above. The canvas lists only projects you can browse |
 | No repositories in the third picker | Add the repository as a project in the Copilot app |
 | A pull request is missing from the trace | Press **Refresh GitHub**. Pull requests come from session metadata and must be verified on GitHub |

@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption,
+    signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -254,7 +254,7 @@ function updateActionControl(control) {
     const pending = action && ["pending", "queued", "uncertain"].includes(action.status);
     const launchPending = control.dataset.prepareNode && nodePending(control.dataset.prepareNode);
     control.disabled = control.dataset.baseDisabled === "true" || Boolean(pending) || Boolean(launchPending) ||
-        (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed));
+        (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed || standaloneHost(state)));
     control.textContent = pending ? action.status === "pending" ? "Working..." : action.status === "queued" ? "Queued" : "Check receipt" : control.dataset.baseLabel;
     control.setAttribute("aria-busy", String(action?.status === "pending"));
 }
@@ -266,7 +266,7 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
     const scope = global ? null : state.scope, epoch = scopeEpoch;
     const key = actionKey(kind, target, scope), previous = actions.get(key);
     if (previous && ["pending", "queued", "uncertain"].includes(previous.status)) return;
-    if ((selecting || !scopeConfirmed) && !global) return;
+    if ((selecting || !scopeConfirmed || standaloneHost(state)) && !global) return;
     if (kind === "prepare" && nodePending(nodeId)) return;
     const record = { kind, scope, nodeId, previewId, status: "pending", message: `${label}...`, dismissed: false };
     actions.set(key, record);
@@ -1335,7 +1335,7 @@ async function poll() {
     pollPending = true;
     const epoch = scopeEpoch;
     try {
-        if (state.project && scopeConfirmed && !state.warming && !state.refreshing && Date.now() - lastSessionPoll >= 4500) {
+        if (state.project && scopeConfirmed && !state.warming && !state.refreshing && !standaloneHost(state) && Date.now() - lastSessionPoll >= 4500) {
             lastSessionPoll = Date.now();
             await refreshExecution("sessions", epoch);
         }
@@ -1351,7 +1351,7 @@ async function poll() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void poll(); });
 function warmingMessage() {
-    connectionMessage("warming", state.warming && !signInNeeded(state) ? state.project
+    connectionMessage("warming", state.warming && !signInNeeded(state) && !standaloneHost(state) ? state.project
         ? state.issues.length ? `Showing ${state.cached ? "the cached" : "the last"} ${state.project.key} snapshot while Jira and Copilot reconnect...`
             : `Loading ${state.project.key} from Jira...`
         : "Connecting to Jira and Copilot..." : "");
@@ -1422,7 +1422,7 @@ warmingMessage();
 // Decided each tick, because a failure can arrive through an action response between polls.
 let lastPoll = 0;
 setInterval(() => {
-    const reconnecting = state.catalogErrors.length || state.error || state.warming || state.retryAt;
+    const reconnecting = !standaloneHost(state) && (state.catalogErrors.length || state.error || state.warming || state.retryAt);
     if (!reconnecting && Date.now() - lastPoll < 5000) return;
     lastPoll = Date.now();
     void poll();

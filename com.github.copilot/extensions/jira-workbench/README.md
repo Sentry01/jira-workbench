@@ -270,6 +270,8 @@ stateDiagram-v2
   ready --> connecting: a Jira tool vanished or is no longer offered
   ready --> down: a read still fails after its retries
   signin --> ready: sign-in completed, or a verify read works
+  connecting --> standalone: no Jira server and none of the app's session tools
+  standalone --> ready: a Jira server connects and a verify read works
 ```
 
 | State | Meaning | What the Workbench does |
@@ -278,9 +280,11 @@ stateDiagram-v2
 | `ready` | A Jira read worked | No polling. While a panel is open, one keepalive read every 4 minutes, so the runtime refreshes an expiring OAuth token before you hit it |
 | `signin` | The Atlassian sign-in expired, or the server reports `needs-auth` | Panel reads fail fast without reaching the runtime, and the panel shows **Sign in to Atlassian**. A probe answer of 401 or `needs-auth` makes no read at all. An unclear answer, such as Atlassian v2's 400, allows **at most one single-attempt verify read per backoff step** (5s, doubling to 5 minutes). Finishing sign-in (`mcp.oauth_completed`), an `authenticated` probe, or the server going from `needs-auth` to `connected` verifies at once. An explicit **Refresh** makes exactly one attempt |
 | `down` | The server failed, is stopped or disabled, none is configured, or reads keep failing | Keeps the last good data and keeps polling. A `failed` server is restarted at most 3 times, after 2s, 15s and 60s, and that budget is restored only after a Jira read works. `stopped` and `disabled` servers are left to you |
+| `standalone` | No Jira server is configured and the runtime offers none of the Copilot app's session tools (`list_projects`, `get_sessions_status`, `get_session`): the panel is not running in an app session, as when it is opened from **Canvases** in the app's sidebar | Panel reads fail fast without reaching the runtime, and the panel shows one explanation instead of per-source errors and a retry countdown. The server refuses session work (launches, **Update Jira**, session and trace refreshes, linking, opening sessions and pull requests), so the panel never writes failed observations into the store that panels in real sessions share. Checks run once a minute; an MCP event or **Reload connections** checks at once |
 
 While Jira is not `ready`, the supervisor polls `mcp.list` (about 4ms, no Jira
-call) every second for 30 seconds after any change, then every 2s, doubling to 60s.
+call) every second for 30 seconds after any change, then every 2s, doubling to 60s
+(once a minute in `standalone`).
 An MCP event, a panel attaching, a failed read, or **Sign in** schedules a check
 after a 500ms debounce, so a burst of triggers costs one check. With no panel open
 there is no polling and no keepalive.
@@ -309,6 +313,7 @@ The design follows from these runtime behaviors, each observed live:
 | `tools.getCurrentMetadata()` and `mcp.list` can stop answering for minutes | Every runtime call is time-bounded (below). A stalled call is reused rather than repeated, and the last tool list is used while there is one |
 | The Copilot app's **Atlassian Rovo connector** is listed by `mcp.list` as `cc-_<id>`, with no display name or source, and offers the same Atlassian v2 tools as an `atlassian` MCP server | A server offering `getAccessibleAtlassianResources` counts as a Jira server whatever its name. While no Jira server is known to be connected, a check waits up to 1.5s for the tool list to find one. When several servers offer a Jira tool, the gateway reads from the most usable one (by status, then preferring the connector), switches to another after a failed attempt (for the project list, to the other Atlassian version when the servers differ), and keeps this choice per tool list. The connection reports the server that last answered |
 | The app signs in its connector itself; `/mcp auth` and `mcp.oauth.login` do not apply to it | When the connector needs sign-in, the panel asks you to reconnect it in the Copilot app, shows no **Sign in to Atlassian** button, and never starts an OAuth login for it |
+| A canvas opened from **Canvases** in the app's sidebar runs in its own Copilot runtime with an empty home: no MCP servers, no sign-in, and none of the app's session tools. Its tool list is empty until a rebuild adds only the CLI built-ins, yet the extension still reads the saved data in `~/.copilot` | The `standalone` state above: the panel shows the saved data and says to open it from a session |
 
 Every Copilot runtime call the extension makes is time-bounded:
 

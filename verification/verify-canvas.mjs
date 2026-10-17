@@ -261,6 +261,22 @@ try {
     await page.getByRole("treeitem", { name: /DEMO-2 / }).click();
     await byName("Execution");
     await page.screenshot({ path: screenshotPath("execution.png"), fullPage: true });
+    // The trace panel fills its column up to the viewport's height, and stays fully in view while the page scrolls.
+    const inspectorFit = () => page.evaluate(() => {
+        const inspector = document.getElementById("inspector").getBoundingClientRect(), main = document.getElementById("workbench").getBoundingClientRect();
+        return { top: Math.round(inspector.top), bottom: Math.round(inspector.bottom), height: Math.round(inspector.height),
+            column: Math.round(Math.min(main.height - 2, innerHeight)), mainTop: Math.round(main.top), mainHeight: Math.round(main.height), viewport: innerHeight };
+    });
+    const fit = await inspectorFit();
+    assert.ok(Math.abs(fit.height - fit.column) <= 1, `the trace panel fills its column: ${JSON.stringify(fit)}`);
+    await page.setViewportSize({ width: 1440, height: 560 });
+    const short = await inspectorFit();
+    assert.ok(short.mainHeight - 2 > short.viewport, `the work column outgrows a short canvas: ${JSON.stringify(short)}`);
+    await page.evaluate(top => scrollTo(0, scrollY + top + 40), short.mainTop);
+    const scrolled = await inspectorFit();
+    assert.ok(scrolled.top === 0 && scrolled.bottom <= scrolled.viewport && scrolled.height === scrolled.viewport,
+        `the trace panel stays pinned and whole while the page scrolls: ${JSON.stringify(scrolled)}`);
+    await page.evaluate(() => scrollTo(0, 0));
     await page.setViewportSize({ width: 600, height: 960 });
     const back = page.getByRole("button", { name: /Back to work/i });
     if (await back.isVisible()) await back.click();
@@ -273,7 +289,7 @@ try {
     await page.screenshot({ path: screenshotPath("narrow.png"), fullPage: true });
     assert.equal(sent.length, 2, "Only the explicitly confirmed fake launches are queued");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), and narrow layout. External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, and narrow layout. External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();

@@ -38,6 +38,13 @@ export function signInError(server = "atlassian") {
         { kind: "auth", retryable: false, needsSignIn: true, server: target.name });
 }
 
+// The Copilot app offers these tools to its own sessions only.
+export const SESSION_TOOLS = ["list_projects", "get_sessions_status", "get_session"];
+// Observed live (GitHub Copilot app, Oct 2026): a canvas opened from Canvases in the app's sidebar runs in an empty
+// runtime with no MCP servers, no sign-in and none of the session tools, so nothing the Workbench does can connect it.
+export const STANDALONE = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions. This happens when Jira Workbench is opened from Canvases in the sidebar; open it from a session instead.";
+export const standaloneError = () => Object.assign(new Error(STANDALONE), { kind: "unavailable", retryable: false, standalone: true });
+
 export function bounded(promise, ms, what) {
     let timer;
     const timeout = new Promise((_, reject) => {

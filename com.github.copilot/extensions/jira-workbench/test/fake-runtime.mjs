@@ -43,13 +43,16 @@ export function rawIssue(n, projectId = "42") {
 }
 
 // status: the atlassian MCP server's status (null: not configured); connector: the app connector's status (null: none).
-export function fakeRuntime({ status = "connected", connector = null, rebuildMs = 0, callMs = 0, issueCount = 3, onRestart, events = true, v2 = false, probeWhenExpired = v2 ? 400 : 401 } = {}) {
+// sidebar: a canvas opened from Canvases in the Copilot app's sidebar, observed live 2026-10-17 (Copilot 1.0.99): an empty
+// runtime with no MCP servers and none of the app's session tools, whose tool list is empty until a rebuild adds the
+// CLI built-ins. A server added later with set() connects like anywhere else.
+export function fakeRuntime({ status = "connected", connector = null, rebuildMs = 0, callMs = 0, issueCount = 3, onRestart, events = true, v2 = false, probeWhenExpired = v2 ? 400 : 401, sidebar = false } = {}) {
     const handlers = new Map();
     const counters = { rebuilds: 0, maxConcurrentRebuilds: 0, executes: 0, jiraExecutes: 0, restarts: 0, list: 0, oauthRequests: 0, probes: 0, logins: 0 };
     let activeRebuilds = 0;
     const runtime = {
         calls: [],
-        servers: new Map([...(status ? [["atlassian", status]] : []), ...(connector ? [[CONNECTOR, connector]] : []),
+        servers: new Map(sidebar ? [] : [...(status ? [["atlassian", status]] : []), ...(connector ? [[CONNECTOR, connector]] : []),
             ["github", "connected"], ["unrelated-sso", "needs-auth"]]),
         snapshot: [],
         tokenExpired: false,
@@ -69,7 +72,8 @@ export function fakeRuntime({ status = "connected", connector = null, rebuildMs 
         set(name, next) { runtime.servers.set(name, next); if (events) runtime.emit("session.mcp_server_status_changed", { serverName: name, status: next }); },
         listeners() { return [...handlers.values()].reduce((n, set) => n + set.size, 0); },
     };
-    const builtins = ["list_projects", "list_sessions_and_chats", "get_sessions_status", "get_session"].map(name => ({ name }));
+    const builtins = sidebar ? [] : ["list_projects", "list_sessions_and_chats", "get_sessions_status", "get_session"].map(name => ({ name }));
+    const cliTools = sidebar ? ["bash", "view", "grep"].map(name => ({ name })) : [];
     const searchSchema = v2 => ({ type: "object", properties: Object.fromEntries(
         ["cloudId", "jql", "fields", "maxResults", "nextPageToken", "responseContentFormat", ...(v2 ? ["view"] : [])].map(key => [key, {}])) });
     const toolsOf = (server, v2) => (v2 ? V2_TOOLS : JIRA_TOOLS).map(name => ({ name: `${server}-${name}`, mcpToolName: name, mcpServerName: server,
@@ -119,14 +123,14 @@ export function fakeRuntime({ status = "connected", connector = null, rebuildMs 
                     counters.maxConcurrentRebuilds = Math.max(counters.maxConcurrentRebuilds, ++activeRebuilds);
                     await delay(rebuildMs);
                     activeRebuilds--;
-                    runtime.snapshot = [...(runtime.servers.get("atlassian") === "connected" ? jiraTools : []),
+                    runtime.snapshot = [...cliTools, ...(runtime.servers.get("atlassian") === "connected" ? jiraTools : []),
                         ...(runtime.servers.get(CONNECTOR) === "connected" ? connectorTools : [])];
                 },
                 execute: async ({ name, arguments: args }) => {
                     counters.executes++;
                     if (callMs) await delay(callMs);
-                    if (name === "list_projects") return ok([{ id: "copilot-uuid", name: "Demo repository", github_repo: "example/demo" }]);
-                    if (name === "get_sessions_status") return ok({ sessions: [] });
+                    if (name === "list_projects" && !sidebar) return ok([{ id: "copilot-uuid", name: "Demo repository", github_repo: "example/demo" }]);
+                    if (name === "get_sessions_status" && !sidebar) return ok({ sessions: [] });
                     const tool = [...jiraTools, ...connectorTools].find(t => t.name === name);
                     if (!tool) return { resultType: "failure", error: `Tool ${name} not found` };
                     counters.jiraExecutes++;

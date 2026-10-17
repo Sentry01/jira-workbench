@@ -140,9 +140,62 @@ try {
     const connectorMs = await within("reload after the app reconnected the connector", async () => !(await page.isVisible("#sign-in")) && !(await banner()) && (await rows()) === 12);
     assert.equal(runtime.counters.logins, logins, "no OAuth login was started for the connector");
 
+    // 9. The same canvas opened from Canvases in the app's sidebar (observed live: an empty runtime with no MCP servers
+    //    and none of the app's session tools) shares this panel's saved data on disk. It explains once, shows that
+    //    data, offers no session or Jira action, and never writes failed observations into the shared store.
+    const sidebarRuntime = fakeRuntime({ sidebar: true });
+    const sidebarConnection = new Connection(sidebarRuntime.session, { restartDelaysMs: [], keepaliveMs: 0 }).start();
+    const sidebar = new Workbench({
+        gateway: sidebarConnection.gateway, store: new Store(directory), cache: new Cache(directory),
+        github: async () => null, send: async () => { throw new Error("a sidebar panel must not send prompts"); }, instanceId: "sidebar",
+    });
+    let sidebarServer;
+    try {
+        assert.ok(await sidebar.hydrate(), "the sidebar panel paints the saved project from disk");
+        sidebarServer = await startServer(sidebar);
+        sidebarConnection.attach(sidebar);
+        void sidebar.background(() => sidebar.warm(null));
+        // View preferences (the selected row) are the panel's own; session evidence and launches must not change.
+        const evidence = async () => { const { mappings, links, requests } = await sidebar.store.read(); return JSON.stringify({ mappings, links, requests }); };
+        const before = await evidence();
+        const sidebarPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+        sidebarPage.on("pageerror", error => errors.push(error.message));
+        const sidebarBanner = () => sidebarPage.evaluate(() => document.querySelector("#errors").hidden ? "" : document.querySelector("#errors").innerText);
+        await sidebarPage.goto(sidebarServer.url);
+        const started = Date.now();
+        while (!/not running in a Copilot session/.test(await sidebarBanner())) {
+            if (Date.now() - started > 15_000) throw new Error(`Timed out waiting for the standalone notice. Banner: ${await sidebarBanner()}`);
+            await sidebarPage.waitForTimeout(200);
+        }
+        await sidebarPage.waitForTimeout(6000);
+        const notice = await sidebarBanner();
+        assert.equal(notice.trim().split("\n").filter(Boolean).length, 1, `one explanation only: ${notice}`);
+        assert.match(notice, /open it from a session instead\. The data shown is the last saved copy\./);
+        assert.doesNotMatch(notice, /Reconnecting|did not offer|is unavailable/, "no retry promise and no per-source failures");
+        assert.equal(new Set((await sidebarPage.innerText("#tree")).match(/DEMO-\d+/g) || []).size, 12, "the saved hierarchy is shown");
+        const disabled = await sidebarPage.evaluate(() => Object.fromEntries(["project-start", "sync-jira", "refresh", "refresh-execution", "connections"]
+            .map(id => [id, document.getElementById(id).disabled])));
+        assert.deepEqual(disabled, { "project-start": true, "sync-jira": true, refresh: true, "refresh-execution": true, connections: false },
+            "only Reload connections, the explicit re-check, stays enabled");
+        await sidebarPage.evaluate(() => document.querySelector("#tree [data-node-id]").click());
+        await sidebarPage.waitForSelector("#inspector-content .inspector-head");
+        const enabled = await sidebarPage.evaluate(() => [...document.querySelectorAll("#tree [data-action-key], #inspector-content [data-action-key]")]
+            .filter(control => !control.disabled).map(control => control.textContent));
+        assert.deepEqual(enabled, [], "every row and inspector action is disabled");
+        assert.equal(await evidence(), before, "no session evidence or launch was written to the shared store");
+        assert.equal(sidebarRuntime.counters.executes, 0, "no tool was executed");
+        assert.equal(await banner(), "", "the panel in a real session is unaffected");
+        await sidebarPage.screenshot({ path: screenshotPath("reconnect-7-sidebar.png") });
+    } finally {
+        await sidebarServer?.close();
+        sidebarConnection.stop();
+        sidebar.close();
+        await sidebar.idle();
+    }
+
     assert.ok(healMs < 4000 && recoverMs < 4000, `recovery must show within seconds (${healMs}ms, ${recoverMs}ms)`);
     assert.deepEqual(errors, []);
-    console.log(`PASS: stopped server named with an automatic-retry hint, project loaded ${healMs}ms after connect with no click, silent token refresh invisible, drop kept data and healed ${recoverMs}ms after reconnect, expired sign-in showed one Sign in action with no request storm and reloaded ${signInMs}ms after sign-in, needs-auth showed Sign in and reloaded ${needsAuthMs}ms after the server connected, the Atlassian Rovo connector served reads beside the atlassian server, and its sign-in pointed to the Copilot app and reloaded ${connectorMs}ms after it reconnected. External services were fake.`);
+    console.log(`PASS: stopped server named with an automatic-retry hint, project loaded ${healMs}ms after connect with no click, silent token refresh invisible, drop kept data and healed ${recoverMs}ms after reconnect, expired sign-in showed one Sign in action with no request storm and reloaded ${signInMs}ms after sign-in, needs-auth showed Sign in and reloaded ${needsAuthMs}ms after the server connected, the Atlassian Rovo connector served reads beside the atlassian server, its sign-in pointed to the Copilot app and reloaded ${connectorMs}ms after it reconnected, and a panel opened from the sidebar explained once, showed the saved data, disabled every session and Jira action and left the shared store untouched. External services were fake.`);
 } finally {
     await browser.close();
     await server.close();

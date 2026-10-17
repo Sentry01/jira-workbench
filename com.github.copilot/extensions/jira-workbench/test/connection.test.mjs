@@ -893,3 +893,65 @@ test("a connector that needs sign-in points to the Copilot app and never starts 
     runtime.set(CONNECTOR, "connected");
     await until(t, () => connection.status().state === "ready" && loaded(workbench), { what: "reload once the app reconnects it" });
 });
+
+// A canvas opened from Canvases in the Copilot app's sidebar runs with no Copilot session behind it.
+test("a panel with no Copilot session behind it explains why, fails reads fast and drops to a slow check", async t => {
+    const runtime = fakeRuntime({ sidebar: true });
+    const { connection, workbench, open } = await harness(t, runtime);
+    await open();
+    await until(t, () => connection.status().state === "standalone", { what: "standalone" });
+    await workbench.idle();
+    const snapshot = await workbench.snapshot();
+    assert.match(snapshot.connection.reason, /not running in a Copilot session.*opened from Canvases in the sidebar/);
+    assert.deepEqual([snapshot.retryAt, snapshot.signIn], [null, null], "no reconnect countdown and no Sign in");
+    await workbench.catalog();
+    assert.match(workbench.catalogErrors.find(message => message.startsWith("Jira:")), /not running in a Copilot session/);
+    await workbench.catalog({ fresh: true });
+    assert.match(workbench.catalogErrors.find(message => message.startsWith("Jira:")), /not running in a Copilot session/, "Reload connections tries once and explains the same way");
+    assert.equal(runtime.counters.executes, 0, "no tool was ever executed");
+    await sleep(30);
+    const checks = runtime.counters.list;
+    await sleep(240);
+    // The harness watch is 10ms; a standalone panel waits the 80ms backoff cap between checks.
+    assert.ok(runtime.counters.list - checks <= 4, `${runtime.counters.list - checks} server-list checks in 240ms`);
+    assert.equal(connection.status().state, "standalone");
+});
+
+test("a panel with no Copilot session behind it starts, observes and opens no session work", async t => {
+    const runtime = fakeRuntime({ sidebar: true });
+    const { connection, workbench, open } = await harness(t, runtime);
+    await open();
+    await until(t, () => connection.status().state === "standalone", { what: "standalone" });
+    const before = JSON.stringify(await workbench.store.read());
+    const sent = [];
+    workbench.send = async options => { sent.push(options); };
+    for (const [name, run] of Object.entries({
+        prepare: () => workbench.prepare({ nodeId: "project" }), launch: () => workbench.launch({ previewId: "p" }),
+        syncJira: () => workbench.syncJira(), refreshExecution: () => workbench.refreshExecution({ source: "sessions" }),
+        refreshTrace: () => workbench.refreshTrace("project"), linkSession: () => workbench.linkSession({ nodeId: "project", sessionId: "s" }),
+        openSession: () => workbench.openSession({ nodeId: "project", sessionId: "s" }), openPr: () => workbench.openPr({ nodeId: "project", repo: "example/demo", number: 1 }),
+    })) await assert.rejects(run(), /not running in a Copilot session/, name);
+    assert.deepEqual(sent, [], "no prompt was sent");
+    assert.equal(JSON.stringify(await workbench.store.read()), before, "the store that panels in real sessions share is untouched");
+});
+
+test("a panel with no session behind it leaves standalone as soon as a Jira server connects", async t => {
+    const runtime = fakeRuntime({ sidebar: true });
+    const { connection, workbench, open } = await harness(t, runtime);
+    await open();
+    await until(t, () => connection.status().state === "standalone", { what: "standalone" });
+    runtime.set("atlassian", "connected");
+    await until(t, () => connection.status().state === "ready", { what: "ready" });
+    await until(t, () => workbench.sites.length === 1, { what: "Jira sites" });
+    assert.ok(workbench.catalogErrors.some(message => /Copilot did not offer list_projects/.test(message)), "Jira works; sessions stay unavailable");
+});
+
+test("an app session with no Atlassian connection is down with a setup hint, never standalone", async t => {
+    const runtime = fakeRuntime({ status: null });
+    const { connection, open } = await harness(t, runtime);
+    await open();
+    await until(t, () => connection.status().state === "down", { what: "down" });
+    assert.match(connection.status().reason, /No Atlassian connection is set up/);
+    await sleep(40);
+    assert.equal(connection.status().state, "down");
+});

@@ -220,16 +220,26 @@ export function smartCommitOption(node) {
 export const signInNeeded = snapshot => snapshot.connection?.state === "signin"
     ? { server: snapshot.connection.server, connector: Boolean(snapshot.connection.connector) } : null;
 
+// No Copilot session behind the panel (opened from Canvases in the sidebar): nothing reconnects it, so the panel
+// shows the saved data, explains once, and disables the actions that need a session or Jira.
+export const standaloneHost = snapshot => snapshot.connection?.state === "standalone";
+
 // The sign-in call to action and the error banner. An expired sign-in is one clear call to action, not a pile of
-// per-source failures and a retry promise. `unavailable` lists execution node IDs with no loaded work item.
+// per-source failures and a retry promise; a panel with no session behind it is one explanation.
+// `unavailable` lists execution node IDs with no loaded work item.
 export function banner(snapshot, { now = Date.now(), unavailable = [] } = {}) {
     const signIn = signInNeeded(snapshot), connection = snapshot.connection;
+    const data = [
+        ...snapshot.tree.warnings,
+        ...(unavailable.length ? [`Execution snapshot references unavailable work items: ${unavailable.join(", ")}. Refresh the workbench to reconcile the sources.`] : []),
+    ];
+    if (standaloneHost(snapshot))
+        return { signIn: null, errors: [`${connection.reason}${snapshot.issues?.length ? " The data shown is the last saved copy." : ""}`, ...data] };
     const errors = [
         ...(signIn ? snapshot.catalogErrors.filter(message => !message.startsWith("Jira:")) : snapshot.catalogErrors),
         ...(snapshot.error && !signIn ? [`Jira refresh failed: ${snapshot.error}. Last good data retained.`] : []),
         ...(snapshot.backgroundError && !(signIn && /sign-in has expired/.test(snapshot.backgroundError)) ? [`Background refresh failed: ${snapshot.backgroundError}`] : []),
-        ...snapshot.tree.warnings,
-        ...(unavailable.length ? [`Execution snapshot references unavailable work items: ${unavailable.join(", ")}. Refresh the workbench to reconcile the sources.`] : []),
+        ...data,
     ];
     const retryAt = connection && connection.state !== "ready" ? connection.nextCheckAt : null;
     if (!signIn && (snapshot.catalogErrors.length || snapshot.error) && (snapshot.warming || retryAt))

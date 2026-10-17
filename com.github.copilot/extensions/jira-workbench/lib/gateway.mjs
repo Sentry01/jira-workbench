@@ -1,5 +1,5 @@
 import { findSprintField, normalizeIssue, parseToolResult } from "./model.mjs";
-import { bounded, classify, JIRA_SERVER, matchesTool, preferred, serverLabel, signInError, SITE_TOOL, toolError } from "./runtime.mjs";
+import { bounded, classify, JIRA_SERVER, matchesTool, preferred, serverLabel, SESSION_TOOLS, signInError, SITE_TOOL, toolError } from "./runtime.mjs";
 import { open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,6 +116,15 @@ export class Gateway {
         this.toolsAt = Date.now();
         for (const tool of this.tools) if (tool.mcpServerName && matching(SITE_TOOL)(tool)) this.jiraKnown.add(tool.mcpServerName);
         return this.tools;
+    }
+    // True when the tool list answered but offers none of the Copilot app's session tools, so the panel is not
+    // running in an app session. Throws like metadata().
+    async sessionless() {
+        const offered = tools => SESSION_TOOLS.some(name => tools.some(matching(name)));
+        if (offered(await this.metadata())) return false;
+        // As for any missing tool: a cached list must not hide tools registered since it was built.
+        if (this.rebuilding || Date.now() - (this.rebuiltAt || 0) >= this.rebuildMinMs) return !offered(await this.metadata({ force: true }));
+        return true;
     }
     // The servers that serve Jira: named for Atlassian or Jira, or known to offer Atlassian's site lookup (the app's
     // Atlassian Rovo connector has an opaque name).

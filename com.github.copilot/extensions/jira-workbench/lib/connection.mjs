@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { Gateway } from "./gateway.mjs";
-import { bounded, isConnector, preferred, serverLabel, signInError } from "./runtime.mjs";
+import { bounded, isConnector, preferred, serverLabel, signInError, STANDALONE, standaloneError } from "./runtime.mjs";
 
 // Session events after which a tool that was missing or failing may work again.
 export const RECONNECT_EVENTS = [
@@ -15,6 +15,8 @@ const VERIFY = ["getAccessibleAtlassianResources", {}];
 //   ready       a Jira read worked; while a panel is open, a keepalive read every few minutes
 //   signin      the Atlassian sign-in expired or the server waits for one; panel reads fail fast
 //   down        the server failed, is stopped or disabled, or reads keep failing
+//   standalone  no Jira server and none of the Copilot app's session tools: the panel is not running in an app
+//               session (it was opened from Canvases in the sidebar); panel reads fail fast and checks slow down
 export class Connection {
     constructor(session, options = {}) {
         this.session = session;
@@ -89,20 +91,21 @@ export class Connection {
         if (!this.panels.size) this.schedule();
     }
 
-    // Every panel Jira read goes through here. While sign-in is required, an ordinary read fails fast without
-    // reaching the runtime; an explicit user action (fresh) makes exactly one attempt.
+    // Every panel Jira read goes through here. While sign-in is required, or no session is behind the panel, an
+    // ordinary read fails fast without reaching the runtime; an explicit user action (fresh) makes exactly one attempt.
     async read(run, { fresh = false } = {}) {
-        const signin = this.current.state === "signin";
+        const signin = this.current.state === "signin", standalone = this.current.state === "standalone";
         if (signin && !fresh) throw signInError(this.server(this.current.server || "atlassian"));
+        if (standalone && !fresh) throw standaloneError();
         try {
-            const value = await run(signin ? { fresh: true, retries: 0 } : { fresh });
+            const value = await run(signin || standalone ? { fresh: true, retries: 0 } : { fresh });
             this.reached();
             return value;
         } catch (error) {
             if (signin && error?.kind === "auth") this.signInMissed();
             const reported = await this.failed(error);
             if (error?.kind && error.kind !== "permanent") this.kick();
-            throw reported;
+            throw this.current.state === "standalone" ? standaloneError() : reported;
         }
     }
     // Runs only when the user presses Sign in: the runtime returns an authorization URL and completes the flow in
@@ -140,6 +143,8 @@ export class Connection {
         if (this.stopped || !error?.kind) return error;
         const server = error.server || this.current.server || "atlassian";
         const state = this.current.state;
+        // Only a check can tell that a session or a Jira server appeared; a failed read says nothing new.
+        if (state === "standalone") return error;
         if (error.kind === "auth") {
             // The server itself waits for sign-in: its status says so, no probe needed.
             if (error.needsSignIn) { this.set("signin", { reason: error.message, server }, "status"); return error; }
@@ -232,7 +237,10 @@ export class Connection {
         if (signature !== this.seen) { this.seen = signature; this.resetVerify(); }
         if (due.has("event") || due.has("signedIn")) this.resetVerify();
         if (jira?.status !== "failed") this.restartAt = null;
-        if (!jira) return this.set("down", { reason: "No Atlassian connection is set up. Connect the Atlassian Rovo connector in the Copilot app or add an Atlassian MCP server; the Workbench connects on its own.", server: null });
+        if (!jira) {
+            if (await this.gateway.sessionless()) return this.set("standalone", { reason: STANDALONE, server: null });
+            return this.set("down", { reason: "No Atlassian connection is set up. Connect the Atlassian Rovo connector in the Copilot app or add an Atlassian MCP server; the Workbench connects on its own.", server: null });
+        }
         const { name, status } = jira, label = serverLabel(jira);
         if (status === "connected") {
             if (state === "ready") return;
@@ -351,6 +359,8 @@ export class Connection {
     changed() { this.changedAt = Date.now(); this.slow = 0; this.checkAt = Date.now() + this.watchMs; }
     resetVerify() { this.verifyAt = 0; this.verifyDelay = this.backoffMs[0]; }
     cadence() {
+        // Polling cannot attach a session; an MCP event or Reload connections checks at once, this only self-heals.
+        if (this.current.state === "standalone") return this.backoffMs[1];
         if (Date.now() - this.changedAt < this.watchForMs) return this.watchMs;
         return Math.min(this.backoffMs[0] * 2 ** this.slow++, this.backoffMs[1]);
     }
