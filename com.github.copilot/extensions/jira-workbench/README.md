@@ -90,10 +90,15 @@ installed but no panel open never runs `git` or `gh`. What it compares and what
 | --- | --- | --- |
 | Git checkout on a tracking branch | the branch's upstream, after `git fetch` | `git merge --ff-only @{u}`, then reloads the session's extensions |
 | Plugin | the extension folder of the release pinned in the default branch's marketplace manifest, or of the default branch when unpinned (`gh api graphql`) | `plugins.update` for `jira-workbench`, then reloads plugins and extensions |
+| Plugin from another marketplace (such as `awesome-copilot`) | nothing: that marketplace pins its own reviewed release | nothing: `copilot plugin update` installs what that marketplace lists |
 | Copy | as for a plugin | nothing: reinstall to update |
 
 A checkout with local changes, a branch that has diverged from its upstream, or a
 detached HEAD is never updated.
+
+The plugin rows read the marketplace from `plugins.list`. A direct install (no
+marketplace), or one whose marketplace cannot be read, is treated as a plugin from
+this repository's marketplace.
 
 Each Copilot session keeps its own extension process for its whole lifetime, so a
 session opened before a `git pull` or `copilot plugin update` keeps running the
@@ -317,6 +322,7 @@ Every Copilot runtime call the extension makes is time-bounded:
 | Server restart (`mcp.restartServer`) | 30s |
 | Starting sign-in (`mcp.oauth.login`) | 30s |
 | Native navigation: tool list, then the navigation call | 8s, then 30s |
+| Installed plugin list (`plugins.list`), for the update check | 5s |
 
 A Jira-side timeout fails as retryable ("Copilot did not answer ... within Ns.
 Retrying automatically.") and the supervisor tries again. A navigation timeout

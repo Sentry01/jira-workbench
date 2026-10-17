@@ -41,13 +41,13 @@ const gitScript = (overrides = {}) => ({
 });
 const gitIdentity = { kind: "git", head: HEAD, commit: HEAD.slice(0, 7), date: "2026-09-28", dirty: false, tree: null, version: "1.0.0", repo: "example/demo" };
 const install = { kind: "git", root: "/repo/com.github.copilot/extensions/jira-workbench", repoRoot: "/repo" };
-const fakeSession = () => {
+const fakeSession = (marketplace = "jira-workbench") => {
     const calls = [];
     return {
         calls,
         connection: { sendRequest: async (method, params) => {
             calls.push([method, params]);
-            return method === "plugins.list" ? { plugins: [{ name: "other" }, { name: "jira-workbench", marketplace: "jira-workbench" }] } : {};
+            return method === "plugins.list" ? { plugins: [{ name: "other" }, { name: "jira-workbench", marketplace }] } : {};
         } },
         rpc: {
             extensions: { reload: async () => { calls.push(["extensions.reload"]); } },
@@ -171,12 +171,47 @@ test("plugin install: compares the folder tree with GitHub and updates through t
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.deepEqual(session.calls, [
         ["plugins.list", {}],
+        ["plugins.list", {}],
+        ["plugins.list", {}],
         ["plugins.update", { name: "jira-workbench@jira-workbench" }],
         ["plugins.reload", { reloadMcp: false }],
-    ]);
+    ], "check and apply's re-check confirm the marketplace before updating");
     const matching = JSON.stringify({ data: { repository: { defaultBranchRef: { target: { oid: OTHER, committedDate: "2026-09-30T01:16:20Z", file: { oid: TREE } } } } } });
     const upToDate = new Updater({ install: { ...install, kind: "plugin" }, identity, run: fakeRun({ "gh api graphql": matching }).run, hash: async () => TREE });
     assert.deepEqual([(await upToDate.check()).state, upToDate.status().label], ["current", "ccccccc · 2026-09-30"]);
+});
+
+test("plugin install from another marketplace: offers nothing, because that marketplace pins its own release", async () => {
+    const remote = JSON.stringify({ data: { repository: { defaultBranchRef: { target: { oid: OTHER, committedDate: "2026-09-30T01:16:20Z", file: { oid: REMOTE_TREE } } } } } });
+    const identity = { kind: "plugin", head: null, commit: null, date: null, dirty: false, tree: TREE, version: "1.0.0", repo: "example/demo" };
+    const gh = fakeRun({ "gh api graphql": remote });
+    const session = fakeSession("awesome-copilot");
+    const updater = new Updater({ install: { ...install, kind: "plugin" }, identity, session, run: gh.run, hash: async () => TREE });
+    const status = await updater.check();
+    assert.deepEqual([status.state, status.action, status.message], ["managed", null, null]);
+    assert.equal(gh.calls.length, 0, "GitHub is not read for an install this repository's marketplace does not serve");
+    await assert.rejects(updater.apply());
+    assert.ok(!session.calls.some(([method]) => method === "plugins.update"));
+
+    // A build installed on disk by that marketplace still asks for a reload.
+    const moved = new Updater({ install: { ...install, kind: "plugin" }, identity, session: fakeSession("awesome-copilot"), run: gh.run, hash: async () => REMOTE_TREE });
+    assert.equal((await moved.check()).action, "reload");
+
+    // A plugin list that never answers times out into the same fallback, so checks finish and a later
+    // build on disk is still found.
+    let disk = TREE;
+    const stalled = new Updater({ install: { ...install, kind: "plugin" }, identity, session: { connection: { sendRequest: () => new Promise(() => {}) } },
+        run: fakeRun({ "gh api graphql": remote }).run, hash: async () => disk, listTimeoutMs: 20 });
+    assert.equal((await stalled.check()).state, "available");
+    assert.equal((await stalled.check()).state, "available", "the timed-out check does not stay pending");
+    disk = REMOTE_TREE;
+    assert.equal((await stalled.local()).action, "reload");
+
+    // A direct install, or one whose marketplace cannot be read, keeps comparing with this repository.
+    for (const other of [fakeSession(""), { connection: { sendRequest: async () => { throw new Error("offline"); } } }, null]) {
+        const fallback = new Updater({ install: { ...install, kind: "plugin" }, identity, session: other, run: fakeRun({ "gh api graphql": remote }).run, hash: async () => TREE });
+        assert.equal((await fallback.check()).state, "available");
+    }
 });
 
 // The marketplace on the default branch pins the release that `copilot plugin update` installs; unreleased
