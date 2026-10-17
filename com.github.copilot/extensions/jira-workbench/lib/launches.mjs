@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { launchPrompt, jiraSyncPrompt, descendants, projectStatuses, requestStatus } from "./model.mjs";
+import { launchPrompt, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue } from "./model.mjs";
 import { createBrief, acknowledgeBrief } from "./brief.mjs";
 import { dependencyWarnings } from "./execution.mjs";
 
@@ -7,15 +7,15 @@ import { dependencyWarnings } from "./execution.mjs";
 // Panel state (selection, issues, previews, store, send) stays on the Workbench and is read through it.
 export class Launches {
     constructor(workbench) { this.workbench = workbench; }
-    makeBrief(node, mode, fields, mapping) {
+    makeBrief(node, mode, fields, mapping, smartCommitComment = false) {
         const wb = this.workbench;
         return createBrief({
             node, parent: wb.issues.find(issue => issue.key === node.parentKey),
             children: descendants(wb.issues, node.id), mapping, siteUrl: wb.site.url, mode, fields,
-            dependencyWarnings: dependencyWarnings(node),
+            dependencyWarnings: dependencyWarnings(node), smartCommitComment,
         });
     }
-    async prepare({ nodeId, mode, fields }) {
+    async prepare({ nodeId, mode, fields, smartCommitComment = false }) {
         const wb = this.workbench;
         const scope = wb.selectedScope(nodeId), node = wb.node(nodeId);
         if (wb.error) throw new Error("Refresh Jira successfully before starting work from stale data.");
@@ -27,13 +27,15 @@ export class Launches {
         if (!wb.appProjects.some(p => p.id === mapping.id)) throw new Error("The mapped Copilot project is no longer available; choose another repository.");
         mode ||= node.level > 0 ? "plan" : "autopilot";
         if (!["plan", "autopilot"].includes(mode)) throw new Error("Choose Plan or Autopilot.");
+        if (typeof smartCommitComment !== "boolean") throw new Error("The Smart Commit comment choice must be true or false.");
+        if (smartCommitComment && !writableIssue(node, wb.site.id)) throw new Error("A Smart Commit comment is available only for a single Jira issue.");
         const children = descendants(wb.issues, nodeId).map(child => ({ id: child.id, key: child.key, summary: child.summary, status: child.status }));
         if (children.length > 500) throw new Error("This scope contains more than 500 descendants. Select a smaller epic or issue.");
         const preview = {
-            id: randomUUID(), scope, node, children, mapping, mode, expiresAt: Date.now() + 300_000,
+            id: randomUUID(), scope, node, children, mapping, mode, smartCommitComment, expiresAt: Date.now() + 300_000,
             existing: data.links[scope]?.sessions || [],
             cloudId: wb.site.id, jiraProjectId: wb.project.id, siteUrl: wb.site.url,
-            brief: this.makeBrief(node, mode, fields, mapping),
+            brief: this.makeBrief(node, mode, fields, mapping, smartCommitComment),
         };
         for (const [id, p] of wb.previews) if (p.expiresAt < Date.now()) wb.previews.delete(id);
         wb.previews.set(preview.id, preview);
@@ -49,14 +51,15 @@ export class Launches {
         const currentData = await wb.store.read();
         const currentMapping = currentData.mappings[wb.selectedScope()];
         if (!currentMapping || currentMapping.id !== preview.mapping.id) throw new Error("Repository mapping changed after preview.");
-        const currentBrief = this.makeBrief(wb.node(preview.node.id), preview.mode, preview.brief.fields, currentMapping);
+        const currentBrief = this.makeBrief(wb.node(preview.node.id), preview.mode, preview.brief.fields, currentMapping, preview.smartCommitComment);
         if (currentBrief.hash !== preview.brief.hash) throw new Error("Source context or warnings changed. Review a new preview before launching.");
         const acknowledged = acknowledgeBrief(preview.brief, { contextHash, acknowledgedWarnings });
         const requestId = randomUUID();
         const request = {
             requestId, previewId: preview.id, scope: preview.scope, nodeId: preview.node.id, issueKey: preview.node.key,
             cloudId: preview.cloudId, jiraProjectId: preview.jiraProjectId,
-            copilotProjectId: preview.mapping.id, mode: preview.mode, status: "queued", at: new Date().toISOString(),
+            copilotProjectId: preview.mapping.id, mode: preview.mode, smartCommitComment: preview.smartCommitComment,
+            status: "queued", at: new Date().toISOString(),
             // Descendants are kept as keys only: the UI never shows their summaries, and contextHash covers them.
             contextHash: preview.brief.hash, acknowledgedWarnings: acknowledged,
             brief: { ...structuredClone(preview.brief), children: preview.brief.children.map(child => child.key) },

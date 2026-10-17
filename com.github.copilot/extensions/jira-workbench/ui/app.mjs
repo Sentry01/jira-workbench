@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
+    signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -1067,6 +1067,11 @@ function setReviewedPreview(value) {
     const criteria = fields.acceptanceCriteria ?? brief.acceptanceCriteria ?? [];
     $("launch-criteria").value = Array.isArray(criteria) ? criteria.join("\n") : criteria;
     $("launch-constraints").value = fields.constraints ?? brief.constraints ?? "";
+    const smartComment = smartCommitOption(preview.node);
+    $("launch-smart-comment-row").hidden = !smartComment;
+    $("launch-smart-comment-text").textContent = smartComment?.label || "";
+    $("launch-smart-comment-hint").textContent = smartComment?.hint || "";
+    $("launch-smart-comment").checked = Boolean(smartComment && preview.smartCommitComment);
     $("launch-warning-ack").checked = false;
     $("launch-error").hidden = true;
     $("launch-error").textContent = "";
@@ -1117,7 +1122,7 @@ function updateLaunchControls() {
     $("confirm-launch").textContent = launching ? "Submitting..." : implement ? "Start Implement session" : "Start Plan session";
     $("confirm-launch").disabled = !preview || previewDirty || reviewing || launching || pending || !scopeConfirmed || selecting || previewScope !== state.scope ||
         submittedPreviews.has(preview.id) || (implement && warnings.length > 0 && !$("launch-warning-ack").checked);
-    for (const id of ["launch-mode", "launch-objective", "launch-criteria", "launch-constraints"]) $(id).disabled = launching;
+    for (const id of ["launch-mode", "launch-objective", "launch-criteria", "launch-constraints", "launch-smart-comment"]) $(id).disabled = launching;
     $("cancel-launch").textContent = launching ? "Close" : "Cancel";
     $("launch-status").textContent = reviewing ? "Reviewing the edited context..." : previewDirty ? "Changes are not reviewed. Choose Review changes before starting." :
         preview ? `Reviewed ${implement ? "implementation" : "planning"} context. One session will be queued after confirmation.` : "";
@@ -1126,12 +1131,12 @@ async function reviewChanges() {
     if (!preview || reviewing || launching || !previewDirty || previewScope !== state.scope) return;
     const currentPreview = preview, scope = previewScope, revision = formRevision, version = previewVersion;
     const fields = { objective: $("launch-objective").value, acceptanceCriteria: $("launch-criteria").value, constraints: $("launch-constraints").value };
-    const mode = $("launch-mode").value;
+    const mode = $("launch-mode").value, smartCommitComment = !$("launch-smart-comment-row").hidden && $("launch-smart-comment").checked;
     reviewing = true;
     $("launch-error").hidden = true;
     updateLaunchControls();
     try {
-        const result = validatePreview(await api("prepare", { nodeId: currentPreview.node.id, mode, fields }));
+        const result = validatePreview(await api("prepare", { nodeId: currentPreview.node.id, mode, fields, smartCommitComment }));
         if (scope !== state.scope || version !== previewVersion || !preview) return;
         if (revision === formRevision) setReviewedPreview(result);
         else {
@@ -1155,6 +1160,7 @@ function closePreview() {
     reviewing = false;
     launching = false;
     for (const id of ["launch-objective", "launch-criteria", "launch-constraints"]) $(id).value = "";
+    $("launch-smart-comment").checked = false;
     $("launch-warning-ack").checked = false;
     $("launch-sources").open = false;
     if ($("launch-dialog").open) $("launch-dialog").close();
@@ -1307,6 +1313,7 @@ $("repository").addEventListener("change", () => {
 });
 for (const id of ["launch-objective", "launch-criteria", "launch-constraints"]) $(id).addEventListener("input", markPreviewDirty);
 $("launch-mode").addEventListener("change", markPreviewDirty);
+$("launch-smart-comment").addEventListener("change", markPreviewDirty);
 $("launch-warning-ack").addEventListener("change", updateLaunchControls);
 $("review-changes").addEventListener("click", () => void reviewChanges());
 $("cancel-launch").addEventListener("click", closePreview);

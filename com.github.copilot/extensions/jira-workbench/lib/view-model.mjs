@@ -206,6 +206,15 @@ export function defaultMode(item, execution) {
     return item.id === "project" || item.level > 0 ? "plan" : "autopilot";
 }
 
+// The opt-in Smart Commit comment in the launch brief: offered only for a single issue; the server re-validates it.
+export function smartCommitOption(node) {
+    if (!node || node.id === "project" || !node.key) return null;
+    return {
+        label: `Smart Commit comment: let the session comment on ${node.key} once, from its final commit (${node.key} #comment ...).`,
+        hint: "Jira's GitHub integration posts the comment when the commit is pushed. It needs Smart Commits enabled and a commit email that matches your Jira account, and reverting the commit does not remove it.",
+    };
+}
+
 // { server, connector } while the Atlassian sign-in is needed (the server name can be unknown), otherwise null.
 // A connector is the Copilot app's Atlassian connection: the app signs it in, not the Workbench or /mcp auth.
 export const signInNeeded = snapshot => snapshot.connection?.state === "signin"

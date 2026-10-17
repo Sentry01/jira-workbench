@@ -78,3 +78,12 @@ test("valid textarea criteria round-trip through their normalized array without 
     const brief = createBrief({ ...base, fields: { acceptanceCriteria: "x".repeat(2500) } });
     assert.equal(createBrief({ ...base, fields: brief.fields }).hash, brief.hash);
 });
+
+
+test("the Smart Commit comment choice is part of the reviewed brief hash", () => {
+    const off = createBrief(base), on = createBrief({ ...base, smartCommitComment: true });
+    assert.equal(off.smartCommitComment, false);
+    assert.equal(on.smartCommitComment, true);
+    assert.notEqual(off.hash, on.hash);
+    assert.throws(() => createBrief({ ...base, smartCommitComment: "true" }), /Smart Commit/);
+});

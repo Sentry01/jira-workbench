@@ -37,7 +37,11 @@ These properties are deliberate. They are useful context for a report:
   issue session may move only its selected issue (validated key, outside the
   untrusted Jira context) to In Progress when implementation begins, and a
   confirmed **Update Jira** session may make status transitions (never
-  reopening done issues, no other edits) within the selected project only.
+  reopening done issues, no other edits) within the selected project only. When
+  the user ticks **Smart Commit comment** in the brief, an issue session may also
+  add one `<KEY> #comment` line to its final commit for the selected issue; Jira's
+  GitHub integration posts it on push. Otherwise the kickoff forbids Smart Commit
+  commands in commit messages, branch names and PR titles.
 - **Those delegated writes are bounded by prompt only.** A launched session runs
   with your Atlassian MCP access, and the Update Jira session runs in Autopilot
   with project-wide transition authority. The limits above are instructions in

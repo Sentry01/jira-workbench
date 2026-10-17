@@ -92,8 +92,9 @@ Reviewers check these first. A change that breaks one will not be merged.
    comment on or create issues, or change sprints. The gateway allows only Jira
    reads; keep it that way. Jira writes are delegated only through launched
    sessions' kickoff prompts: one In Progress transition of the selected issue,
-   or the confirmed Update Jira status-only sync within the selected project. Do
-   not widen either. These limits exist only as kickoff wording, so review any
+   one opt-in Smart Commit `#comment` on the selected issue, or the confirmed
+   Update Jira status-only sync within the selected project. Do
+   not widen any of them. These limits exist only as kickoff wording, so review any
    change to that wording as a security change.
 2. **No new runtime dependencies.** The extension must keep running from a plain
    `cp -R` with no install step. Development-only tools are negotiable; explain

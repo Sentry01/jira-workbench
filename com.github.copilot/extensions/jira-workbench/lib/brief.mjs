@@ -19,8 +19,9 @@ export function criteriaFromDescription(description = "") {
     return output;
 }
 
-export function createBrief({ node, parent, children = [], mapping, siteUrl, mode, fields = {}, dependencyWarnings = [] }) {
+export function createBrief({ node, parent, children = [], mapping, siteUrl, mode, fields = {}, dependencyWarnings = [], smartCommitComment = false }) {
     if (!["plan", "autopilot"].includes(mode)) throw new Error("A valid brief intent is required.");
+    if (typeof smartCommitComment !== "boolean") throw new Error("The Smart Commit comment choice must be true or false.");
     if (!fields || typeof fields !== "object" || Array.isArray(fields)
         || Object.keys(fields).some(key => !["objective", "acceptanceCriteria", "constraints"].includes(key)))
         throw new Error("Brief fields must contain only objective, acceptance criteria and constraints.");
@@ -50,7 +51,7 @@ export function createBrief({ node, parent, children = [], mapping, siteUrl, mod
         version: 1, intent: mode === "plan" ? "plan" : "implement", objective, acceptanceCriteria, constraints,
         repository: { projectId: mapping.id, repo: mapping.repo }, nodeId: node.id,
         sources, children: children.map(child => ({ id: child.id, key: child.key, summary: child.summary, status: child.status })),
-        dependencies: node.dependencies || [], warnings,
+        dependencies: node.dependencies || [], warnings, smartCommitComment,
     };
     return {
         ...content, fields: { objective, acceptanceCriteria, constraints },

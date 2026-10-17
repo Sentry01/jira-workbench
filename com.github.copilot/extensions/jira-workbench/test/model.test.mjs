@@ -136,6 +136,39 @@ test("project-level and malformed-key launches keep the session fully Jira read-
 });
 
 
+test("issue launches reference the key in commits and allow a Smart Commit comment only when opted in", () => {
+    const base = { requestId: "r", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", copilotProjectId: "p", repo: "example/demo", siteUrl: "https://example.atlassian.net", node: rows[1], children: [rows[2]], mode: "autopilot" };
+    const rule = kickoff => kickoff.split("\n\n").find(part => part.startsWith("Commit references:"));
+    const off = kickoffOf(launchPrompt(base));
+    assert.match(rule(off), /DEMO-2 in the branch name/);
+    assert.match(rule(off), /Never write a Jira Smart Commit command/);
+    assert.match(rule(off), /did not authorize Smart Commit comments/);
+    assert.doesNotMatch(off, /#comment "/);
+    assert.match(off, /no field edits, comments,/);
+    assert.ok(off.indexOf(rule(off)) < off.indexOf("\n\n<jira-context>\n\n"), "rule is trusted text outside untrusted context");
+    const onPrompt = launchPrompt({ ...base, smartCommitComment: true });
+    const on = kickoffOf(onPrompt);
+    assert.match(rule(on), /"DEMO-2 #comment "/);
+    assert.match(rule(on), /once per session, only for DEMO-2, and only #comment/);
+    assert.doesNotMatch(rule(on), /DEMO-3/);
+    assert.match(on, /no comments other than the one Smart Commit comment/);
+    assert.match(onPrompt, /single Smart Commit comment described in its kickoff/);
+    assert.doesNotMatch(kickoffOf(launchPrompt({ ...base, smartCommitComment: "yes" })), /#comment "/, "only a literal true opts in");
+});
+
+
+test("project-level and malformed-key launches get no Smart Commit authorization", () => {
+    const base = { requestId: "r", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", copilotProjectId: "p", repo: "example/demo", siteUrl: "https://example.atlassian.net", mode: "autopilot", smartCommitComment: true };
+    for (const node of [{ id: "project", key: "DEMO", summary: "Demo" }, { ...rows[1], key: "DEMO-2 #close" }]) {
+        const prompt = launchPrompt({ ...base, node }), kickoff = kickoffOf(prompt);
+        assert.match(kickoff, /Do not write Jira Smart Commit commands/);
+        assert.doesNotMatch(kickoff, /#comment "/);
+        assert.doesNotMatch(kickoff, /Commit references:/);
+        assert.doesNotMatch(prompt, /Smart Commit comment described/);
+    }
+});
+
+
 test("Jira sync kickoff authorizes only status transitions within the selected project", () => {
     const input = {
         requestId: "sync-1", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", projectKey: "DEMO",

@@ -5,6 +5,7 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, banner, statusFilterGroups, sprintOptions, appliedSprint,
+    smartCommitOption,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -278,4 +279,14 @@ test("the status filter groups each project's own workflow statuses under their 
     assert.deepEqual(statusFilterGroups([], "status:PR Waiting").at(-1), { label: null, options: [{ value: "status:PR Waiting", label: "PR Waiting (not listed)" }] },
         "a saved status the project no longer lists stays selectable");
     assert.equal(statusFilterGroups(statuses, "status:PR Waiting").length, 4, "a listed status adds no extra option");
+});
+
+
+test("the Smart Commit comment option is offered only for a single issue", () => {
+    assert.equal(smartCommitOption({ id: "project", key: "DEMO" }), null);
+    assert.equal(smartCommitOption({ id: "2" }), null);
+    assert.equal(smartCommitOption(null), null);
+    const option = smartCommitOption({ id: "2", key: "DEMO-2" });
+    assert.match(option.label, /DEMO-2 #comment/);
+    assert.match(option.hint, /does not remove it/);
 });

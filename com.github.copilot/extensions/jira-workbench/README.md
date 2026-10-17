@@ -51,7 +51,10 @@ Every Start button opens the brief in the same default mode: **Plan** for the
 project and parent issues, and **Implement** (Autopilot) for leaf work items. That
 covers a queue row's prepare action, the inspector's **Start session** and
 **Start follow-up**, and **Start project session**. You can change the mode in the
-brief. Every launch requests exactly one session, nested under the canvas-owning
+brief. Issue briefs also offer an opt-in **Smart Commit comment**; see
+[Read-only boundary](#read-only-boundary).
+
+Every launch requests exactly one session, nested under the canvas-owning
 session; there is no automatic child fan-out.
 
 Existing sessions can be opened, explicitly linked by app session ID, or followed
@@ -334,7 +337,7 @@ preserve unrelated source updates and historical PR links.
 The gateway allowlists Jira reads. The extension implements no Jira issue edits,
 status transitions, comments, sprint changes, or creation.
 
-One write is delegated to launched sessions. For an issue launch, the kickoff
+Writes are delegated to launched sessions only. For an issue launch, the kickoff
 authorizes the new session to move **only the selected issue** to a status in the
 `indeterminate` (In Progress) category, once, when it begins implementing:
 before its first repository change in Autopilot, after plan approval in Plan mode.
@@ -367,7 +370,24 @@ site ID, project ID, project key and `owner/repo` repository are format-checked,
 the selected project is re-checked when the request is saved, and the sync
 refuses to start on invalid values or stale or cached Jira data.
 
-Both delegated writes are bounded **by the kickoff prompt only**. The extension
+**Smart Commit comment** is the third delegated write, and it is opt-in. Every
+issue launch tells the session to include the selected issue key in its branch
+name, every commit subject and the PR title, so Jira's GitHub integration links
+the work. A key alone writes nothing. The kickoff forbids Smart Commit commands
+(`#comment`, `#time`, `#<transition>`) in branch names, PR titles and any commit
+line that carries an issue key. When the user ticks **Smart Commit comment** in the
+brief, the kickoff instead allows exactly one `<KEY> #comment <summary>` line in
+the commit that completes the session's work: once, only for the selected issue,
+only `#comment`, with no other keys or `#` characters in the summary, and never
+amending, rebasing or force-pushing that commit after it is pushed. Jira's
+integration, not the session's Atlassian MCP access, posts the comment when the
+commit is pushed, as the Jira user whose email matches the commit author. The
+choice is part of the brief hash, so changing it needs a new review; it is
+recorded on the launch request, and the server rejects it for project-level
+launches. Project-level launches and malformed keys get no commit references and
+no Smart Commit authorization.
+
+All delegated writes are bounded **by the kickoff prompt only**. The extension
 validates every identifier it puts into the prompt, but a launched session runs
 with your Atlassian MCP access, and nothing technical stops it from making other
 Jira writes. Treat any change to the kickoff wording as a security change. See

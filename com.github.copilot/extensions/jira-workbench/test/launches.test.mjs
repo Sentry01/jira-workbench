@@ -155,6 +155,24 @@ test("receipt persists actual session and PR without changing Jira status or los
 });
 
 
+test("an opted-in Smart Commit comment is reviewed, recorded and sent only for a single issue", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await assert.rejects(workbench.prepare({ nodeId: "project", mode: "plan", smartCommitComment: true }), /single Jira issue/);
+    await assert.rejects(workbench.prepare({ nodeId: "2", mode: "plan", smartCommitComment: "yes" }), /true or false/);
+    const plain = await workbench.prepare({ nodeId: "2", mode: "plan" });
+    assert.equal(plain.smartCommitComment, false);
+    const preview = await workbench.prepare({ nodeId: "2", mode: "plan", smartCommitComment: true });
+    assert.notEqual(preview.brief.hash, plain.brief.hash);
+    await assert.rejects(workbench.launch({ previewId: preview.id, contextHash: plain.brief.hash }), /changed|hash/i);
+    const queued = await confirm(workbench, await workbench.prepare({ nodeId: "2", mode: "plan", smartCommitComment: true }));
+    const request = (await store.read()).requests[queued.requestId];
+    assert.equal(request.smartCommitComment, true);
+    assert.equal(request.brief.smartCommitComment, true);
+    assert.match(sent.at(-1).prompt, /DEMO-2 #comment/);
+});
+
+
 test("a session from the wrong Copilot project cannot be linked by a launch receipt", async t => {
     const { workbench, store } = await fixture(t, { wrongProject: true });
     await workbench.map({ copilotProjectId: copilot.id });

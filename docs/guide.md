@@ -30,6 +30,12 @@ implementing: immediately in Autopilot, or after you approve the plan in Plan
 mode. Project-level launches make no Jira changes. Refresh Jira in the canvas to
 see the new status.
 
+An issue session also puts the issue key in its branch name, commit subjects and
+pull request title, so Jira's GitHub integration links the work to the issue. It
+writes no Smart Commit commands unless you tick **Smart Commit comment** in the
+brief, which lets it add one `KEY #comment` line to its final commit. See
+[Smart Commit comment](#smart-commit-comment).
+
 **Update Jira** (top right) is the only project-wide write, and it runs only
 after you confirm. It starts one Copilot session that checks every issue in the
 project against its linked sessions, pull requests, branches and commits, then
@@ -159,6 +165,8 @@ The brief is the spec the agent will work from:
   tick the acknowledgement.
 - You can edit any field. Editing clears an earlier acknowledgement, so you
   cannot approve one brief and then start a different one.
+- **Smart Commit comment** (single issues only, off by default) is described
+  below. Changing it, like any field, needs **Review changes** before you start.
 
 Nothing is queued until you press **Start Plan session** or
 **Start Implement session**.
@@ -177,6 +185,37 @@ start.
 
 Each launch creates exactly one session, nested under the canvas session. Child
 issues never get sessions automatically.
+
+### Smart Commit comment
+
+Every issue session includes the issue key (for example `DEMO-2`) in its branch
+name, commit subjects and pull request title. Jira's GitHub integration uses the
+key to show the branch, commits and pull request on the issue. A key on its own
+changes nothing in Jira, and the session is told never to write Smart Commit
+commands such as `#comment`, `#time`, `#done` or a transition name.
+
+Tick **Smart Commit comment** in the brief to allow one exception. In the commit
+that completes its work, the session adds a single line to the message body:
+
+```
+DEMO-2 #comment Added loading and error states to the results panel
+```
+
+When the commit is pushed, Jira posts the text after `#comment` as a comment on
+the issue, authored by the Jira user whose email matches the commit author.
+
+Before you rely on it:
+
+- A Jira admin must connect GitHub to Jira (the GitHub for Jira app) with Smart
+  Commits enabled.
+- Your commit email must match your Jira account email. A GitHub private
+  `noreply` address does not match, and Jira ignores the command without telling
+  anyone.
+- The comment cannot be withdrawn by reverting or deleting the commit. Delete it
+  in Jira if needed.
+- If the pull request is squash-merged with the default message, remove the
+  `#comment` line from the squash message, or Jira posts the comment again.
+- The comment text stays in the repository's history.
 
 ### When a launch never reports back
 
@@ -356,7 +395,7 @@ Then find the message you see:
 
 ## 11. What it does not do
 
-- **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves only its own issue to In Progress, and a confirmed **Update Jira** session may change statuses across the project.
+- **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves only its own issue to In Progress, and a confirmed **Update Jira** session may change statuses across the project. An issue session comments on its own issue only when you tick **Smart Commit comment**, and then only once, through its final commit.
 - **No fan-out.** One confirmed launch creates one session.
 - **No auto-merge or auto-approve.** Review actions open the real Copilot surface, and you decide.
 - **No pending action shown as finished.** A pending navigation is labeled as

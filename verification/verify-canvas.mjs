@@ -98,6 +98,11 @@ try {
     await page.locator("#launch-dialog[open]").waitFor();
     assert.equal(await page.locator("#launch-mode").inputValue(), "autopilot", "A story with subtasks keeps the implementation default");
     assert.equal(await page.getByRole("textbox", { name: "Acceptance criteria", exact: true }).inputValue(), "Display the result");
+    const smartComment = page.locator("#launch-smart-comment");
+    assert.equal(await smartComment.isVisible(), true, "An issue launch offers the Smart Commit comment");
+    assert.equal(await smartComment.isChecked(), false, "The Smart Commit comment is off by default");
+    await smartComment.check();
+    assert.equal(await page.locator("#confirm-launch").isDisabled(), true, "Opting in needs a reviewed brief");
     await page.locator("#cancel-launch").click();
     await page.locator("#search").fill("");
 
@@ -105,12 +110,13 @@ try {
     await page.locator("#launch-dialog[open]").waitFor();
     assert.equal(await page.locator("#launch-mode").inputValue(), "plan");
     assert.equal(await page.locator("#confirm-launch").isEnabled(), true, "Planning must allow missing criteria");
+    assert.equal(await page.locator("#launch-smart-comment").isVisible(), false, "A project launch has no issue to comment on");
     await page.locator("#launch-mode").selectOption("autopilot");
     assert.equal(await page.locator("#confirm-launch").isDisabled(), true);
     let reviewed = page.waitForResponse(response => response.url().endsWith("/api/prepare") && response.ok());
     await page.getByRole("button", { name: "Review changes", exact: true }).click();
     await (await reviewed).finished();
-    const warning = page.locator("#launch-dialog").getByRole("checkbox");
+    const warning = page.locator("#launch-warning-ack");
     await warning.waitFor();
     assert.equal(await page.locator("#confirm-launch").isDisabled(), true);
     await warning.check();
