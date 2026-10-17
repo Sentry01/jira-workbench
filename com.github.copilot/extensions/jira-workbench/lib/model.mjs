@@ -200,7 +200,8 @@ function jiraStatusRule({ node, cloudId, mode, smartCommitComment }) {
 }
 
 // Jira's GitHub integration runs Smart Commit commands (#comment, #time, #<transition>) from pushed commit messages,
-// so commit text is a Jira write path too. Keys alone only link the work; commands are allowed only when opted in.
+// so commit text is a Jira write path too. Keys are not commands, though a site's own workflow triggers or Automation
+// rules may still act on them; the only command a session may write is the opted-in #comment.
 function smartCommitRule({ node, cloudId, smartCommitComment }) {
     if (!writableIssue(node, cloudId))
         return "Do not write Jira Smart Commit commands (a # word such as #comment, #time, #done or a transition name) in commit messages, branch names or PR titles.";
