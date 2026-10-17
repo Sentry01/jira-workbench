@@ -41,7 +41,10 @@ These properties are deliberate. They are useful context for a report:
   the user ticks **Smart Commit comment** in the brief, an issue session may also
   add one `<KEY> #comment` line to its final commit for the selected issue; Jira's
   GitHub integration posts it on push. Otherwise the kickoff forbids Smart Commit
-  commands in commit messages, branch names and PR titles.
+  commands in commit messages, branch names and PR titles. Issue sessions always
+  put the issue key in their branch, commits and PR title, so a Jira site's own
+  workflow triggers or Automation rules on development events (for example,
+  Done on merge) can change the issue beyond these limits.
 - **Those delegated writes are bounded by prompt only.** A launched session runs
   with your Atlassian MCP access, and the Update Jira session runs in Autopilot
   with project-wide transition authority. The limits above are instructions in

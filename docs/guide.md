@@ -190,9 +190,14 @@ issues never get sessions automatically.
 
 Every issue session includes the issue key (for example `DEMO-2`) in its branch
 name, commit subjects and pull request title. Jira's GitHub integration uses the
-key to show the branch, commits and pull request on the issue. A key on its own
-changes nothing in Jira, and the session is told never to write Smart Commit
-commands such as `#comment`, `#time`, `#done` or a transition name.
+key to show the branch, commits and pull request on the issue. The session is
+told never to write Smart Commit commands such as `#comment`, `#time`, `#done` or
+a transition name.
+
+The key alone can still change Jira if your site uses workflow triggers or
+Automation rules on development events, such as moving an issue to Done when its
+pull request merges. Those rules belong to your Jira site, not to the Workbench,
+and they run on the session's branch, commits and pull request like any other.
 
 Tick **Smart Commit comment** in the brief to allow one exception. In the commit
 that completes its work, the session adds a single line to the message body:

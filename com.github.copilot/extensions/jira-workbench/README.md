@@ -373,7 +373,11 @@ refuses to start on invalid values or stale or cached Jira data.
 **Smart Commit comment** is the third delegated write, and it is opt-in. Every
 issue launch tells the session to include the selected issue key in its branch
 name, every commit subject and the PR title, so Jira's GitHub integration links
-the work. A key alone writes nothing. The kickoff forbids Smart Commit commands
+the work. A key is not a Smart Commit command, but a Jira site whose workflow
+triggers or Automation rules react to development events (branch created, commit
+pushed, PR merged) can change the issue from the key alone, for example moving it
+to Done on merge. Those changes come from the site's own configuration, outside
+the kickoff's limits. The kickoff forbids Smart Commit commands
 (`#comment`, `#time`, `#<transition>`) in branch names, PR titles and any commit
 line that carries an issue key. When the user ticks **Smart Commit comment** in the
 brief, the kickoff instead allows exactly one `<KEY> #comment <summary>` line in
