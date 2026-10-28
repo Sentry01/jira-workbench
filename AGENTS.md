@@ -11,7 +11,7 @@ reaches them only when the version rises.
 The shipped canvas is every file under `com.github.copilot/extensions/jira-workbench/` except
 `test/` and Markdown files. If the pull request changes any of them:
 
-1. Raise `version` in `.github/plugin/plugin.json` using Semantic Versioning: a
+1. Raise `version` in `plugin.json` at the repository root using Semantic Versioning: a
    patch for fixes, a minor version for new behavior, a major version for
    changes that need users to act. Compare against the version on `main`, not a
    previous commit on the branch, and raise it once per pull request.

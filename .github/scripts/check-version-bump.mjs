@@ -8,7 +8,9 @@ import { join, resolve } from "node:path";
 
 const base = process.argv[2] || "HEAD^1";
 const root = resolve(process.argv[3] || ".");
-const PLUGIN_FILE = ".github/plugin/plugin.json";
+const PLUGIN_FILE = "plugin.json";
+// Where releases up to v2.1.2 kept the manifest; a base branch from before the move is read from here.
+const LEGACY_PLUGIN_FILE = ".github/plugin/plugin.json";
 const SHIPPED = "com.github.copilot/extensions/jira-workbench/";
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
@@ -66,8 +68,10 @@ const compare = (a, b) => {
 };
 
 let baseText;
-try { baseText = git("show", `${base}:${PLUGIN_FILE}`); }
-catch (error) { fail(`Cannot read ${PLUGIN_FILE} at ${base}: ${String(error.stderr || error.message).trim()}`); }
+for (const file of [PLUGIN_FILE, LEGACY_PLUGIN_FILE]) {
+    try { baseText = git("show", `${base}:${file}`); break; }
+    catch (error) { if (file === LEGACY_PLUGIN_FILE) fail(`Cannot read ${PLUGIN_FILE} at ${base}: ${String(error.stderr || error.message).trim()}`); }
+}
 let headText;
 try { headText = readFileSync(join(root, PLUGIN_FILE), "utf8"); }
 catch (error) { fail(`${PLUGIN_FILE} cannot be read: ${error.message}`); }

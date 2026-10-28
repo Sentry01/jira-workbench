@@ -16,12 +16,14 @@ const marketplace = (version = "1.2.0", source = { source: "github", repo: "exam
 const raw = value => ({ raw: value });
 
 // Runs the checker on a scratch repository holding the two manifests; returns its exit code, output and GITHUB_OUTPUT.
-async function check(pluginJson, marketplaceJson) {
+// legacy: also leave a manifest at .github/plugin/plugin.json, where releases up to v2.1.2 kept it.
+async function check(pluginJson, marketplaceJson, { legacy = false } = {}) {
     const root = await mkdtemp(join(tmpdir(), "jw-release-"));
     try {
         await mkdir(join(root, ".github", "plugin"), { recursive: true });
-        const write = (name, value) => writeFile(join(root, ".github", "plugin", name), value?.raw ?? JSON.stringify(value));
-        await Promise.all([write("plugin.json", pluginJson), write("marketplace.json", marketplaceJson)]);
+        const write = (file, value) => writeFile(join(root, file), value?.raw ?? JSON.stringify(value));
+        await Promise.all([write("plugin.json", pluginJson), write(".github/plugin/marketplace.json", marketplaceJson),
+            ...(legacy ? [write(".github/plugin/plugin.json", pluginJson)] : [])]);
         const output = join(root, "github-output");
         await writeFile(output, "");
         const result = await exec(process.execPath, [SCRIPT, root], { env: { ...process.env, GITHUB_OUTPUT: output } })
@@ -71,4 +73,11 @@ test("manifests that disagree, or a release that is not pinned, fail", async () 
         assert.match(result.stdout, message);
         assert.equal(result.outputs, "", `${message} writes no tag`);
     }
+});
+
+test("a second manifest at .github/plugin/plugin.json fails, even when it agrees", async () => {
+    const result = await check(plugin(), marketplace(), { legacy: true });
+    assert.equal(result.code, 1);
+    assert.match(result.stdout, /^::error file=\.github\/plugin\/plugin\.json::.*must not exist: the only plugin manifest is plugin\.json at the repository root/m);
+    assert.equal(result.outputs, "", "no tag while two manifests exist");
 });

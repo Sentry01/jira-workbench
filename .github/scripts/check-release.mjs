@@ -1,11 +1,13 @@
 // Checks that the plugin and marketplace manifests describe one release, and prints its tag.
 // Usage: node .github/scripts/check-release.mjs [repository-root]
 // CI runs it on every pull request; the release workflow runs it before creating the tag.
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(process.argv[2] || ".");
-const PLUGIN_FILE = ".github/plugin/plugin.json";
+// Agent Plugins: exactly one manifest, at the plugin root (the repository root here).
+const PLUGIN_FILE = "plugin.json";
+const LEGACY_PLUGIN_FILE = ".github/plugin/plugin.json";
 const MARKETPLACE_FILE = ".github/plugin/marketplace.json";
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const errors = [];
@@ -22,6 +24,8 @@ const read = file => {
 
 const plugin = read(PLUGIN_FILE);
 const marketplace = read(MARKETPLACE_FILE);
+// Tools that look there first (the Awesome Copilot intake among them) would read it instead of the root manifest.
+if (existsSync(join(root, LEGACY_PLUGIN_FILE))) fail(LEGACY_PLUGIN_FILE, `must not exist: the only plugin manifest is ${PLUGIN_FILE} at the repository root.`);
 let tag = null;
 
 if (plugin) {

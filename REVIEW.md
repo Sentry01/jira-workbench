@@ -51,7 +51,7 @@ Naming, refactors and wording are Low at most.
 - Links between an issue, a session and a PR need evidence. Flag matching by
   similar titles or branch names.
 - No new runtime dependencies; the extension must run from a plain `cp -R`.
-- If `.github/plugin/plugin.json` changes version, `marketplace.json` must
+- If `plugin.json` changes version, `.github/plugin/marketplace.json` must
   change `version` and `ref` to the same `v<version>`.
 - A change to `com.github.copilot/extensions/jira-workbench/` outside `test/` and Markdown must
   raise that version, unless the PR explains why it should not release. Check

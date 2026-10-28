@@ -9,12 +9,13 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL("./check-version-bump.mjs", import.meta.url));
-const PLUGIN = ".github/plugin/plugin.json";
+const PLUGIN = "plugin.json";
+const LEGACY_PLUGIN = ".github/plugin/plugin.json";
 const plugin = version => JSON.stringify({ name: "demo", version });
 
 // Builds a scratch repository with a base commit and a change on top, then runs the checker against HEAD^1.
-// `files` maps a path to its new content, or to null to delete it.
-async function check({ from = "1.2.0", to = from, files = {}, env = {} }) {
+// `files` maps a path to its new content, or to null to delete it. `baseManifest` is where the base keeps plugin.json.
+async function check({ from = "1.2.0", to = from, files = {}, env = {}, baseManifest = PLUGIN }) {
     const root = await mkdtemp(join(tmpdir(), "jw-bump-"));
     const git = (...args) => exec("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: root });
     const write = async (file, content) => {
@@ -23,11 +24,12 @@ async function check({ from = "1.2.0", to = from, files = {}, env = {} }) {
     };
     try {
         await git("init", "-q");
-        await write(PLUGIN, plugin(from));
+        await write(baseManifest, plugin(from));
         await write("com.github.copilot/extensions/jira-workbench/lib/model.mjs", "export const a = 1;\n");
         await write("com.github.copilot/extensions/jira-workbench/README.md", "# Demo\n");
         await git("add", "-A");
         await git("commit", "-q", "-m", "base");
+        if (baseManifest !== PLUGIN) await git("mv", baseManifest, PLUGIN);
         if (to !== from) await write(PLUGIN, plugin(to));
         for (const [file, content] of Object.entries(files)) {
             if (content === null) await git("rm", "-q", file);
@@ -64,7 +66,7 @@ test("a shipped change that keeps or lowers the version fails and names the file
     for (const [from, to, label] of cases) {
         const result = await check({ from, to, files: code });
         assert.equal(result.code, 1, label);
-        assert.match(result.stdout, /^::error file=\.github\/plugin\/plugin\.json::/, label);
+        assert.match(result.stdout, /^::error file=plugin\.json::/, label);
         assert.match(result.stdout, /extensions\/jira-workbench\/lib\/model\.mjs/, label);
         assert.match(result.stdout, /Releasing in CONTRIBUTING\.md/, label);
     }
@@ -94,6 +96,15 @@ test("a shipped change that raises the version passes", async () => {
         assert.equal(result.code, 0, `${from} -> ${to}: ${result.stdout}`);
         assert.match(result.stdout, new RegExp(`from ${from.replaceAll(".", "\\.")} to ${to.replaceAll(".", "\\.")}`));
     }
+});
+
+test("a base that keeps the manifest at .github/plugin/plugin.json is still compared", async () => {
+    const raised = await check({ from: "1.2.0", to: "1.2.1", files: code, baseManifest: LEGACY_PLUGIN });
+    assert.equal(raised.code, 0, raised.stdout);
+    assert.match(raised.stdout, /from 1\.2\.0 to 1\.2\.1/);
+    const kept = await check({ files: code, baseManifest: LEGACY_PLUGIN });
+    assert.equal(kept.code, 1, "moving the manifest without raising the version still fails");
+    assert.match(kept.stdout, /not higher than "1\.2\.0"/);
 });
 
 test("the no-release label skips the check", async () => {

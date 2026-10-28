@@ -99,8 +99,7 @@ test("identity labels the loaded commit, and falls back to the tree when git is 
     const root = join(dir, "com.github.copilot", "extensions", "jira-workbench");
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "extension.mjs"), "export {};\n");
-    await mkdir(join(dir, ".github", "plugin"), { recursive: true });
-    await writeFile(join(dir, ".github", "plugin", "plugin.json"), JSON.stringify({ version: "1.2.0", repository: "https://github.com/example/demo" }));
+    await writeFile(join(dir, "plugin.json"), JSON.stringify({ version: "1.2.0", repository: "https://github.com/example/demo" }));
     const git = fakeRun({ "rev-parse HEAD": HEAD, "log -1 --format=%cs": "2026-09-27", "status --porcelain --untracked-files=no": " M ui/app.mjs" });
     const identity = await readIdentity({ kind: "git", root, repoRoot: dir }, git.run);
     assert.equal(identity.repo, "example/demo");
@@ -242,7 +241,7 @@ test("plugin install: compares with the release the marketplace pins, not the de
     assert.equal(status.message, "Update available: v1.2.0 (ccccccc, 2026-10-03).");
     assert.equal(newer.gh.calls.length, 2);
     assert.deepEqual(newer.gh.calls[1].slice(4), ["-f", "owner=example", "-f", "name=demo",
-        "-f", "commit=v1.2.0", "-f", "folder=v1.2.0:com.github.copilot/extensions/jira-workbench", "-f", "manifest=v1.2.0:.github/plugin/plugin.json"]);
+        "-f", "commit=v1.2.0", "-f", "folder=v1.2.0:com.github.copilot/extensions/jira-workbench", "-f", "manifest=v1.2.0:plugin.json"]);
 
     const released = pinned(headWith(tagged), releaseWith(TREE));
     assert.deepEqual([(await released.updater.check()).state, released.updater.status().label], ["current", "v1.2.0 · ccccccc · 2026-10-03"],

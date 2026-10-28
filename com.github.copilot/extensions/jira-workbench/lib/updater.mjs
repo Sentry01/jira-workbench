@@ -7,7 +7,9 @@ const PLUGIN = "jira-workbench";
 const OWN_MARKETPLACE = "jira-workbench";
 const EXTENSION_PATH = "com.github.copilot/extensions/jira-workbench";
 const MARKETPLACE_PATH = ".github/plugin/marketplace.json";
-const PLUGIN_MANIFEST_PATH = ".github/plugin/plugin.json";
+// Agent Plugins puts the one manifest at the plugin root. Releases up to v2.1.2 kept it at .github/plugin/plugin.json;
+// a pin to one of those reads no manifest, so its update is offered without a version number.
+const PLUGIN_MANIFEST_PATH = "plugin.json";
 const SHA = /^[0-9a-f]{40}$/;
 // A tag or branch name; never an expression (no ":", "^", "~", "@{", "..") and never an option.
 const REF = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,100}$/;

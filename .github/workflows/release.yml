@@ -6,7 +6,7 @@ name: release
 on:
   push:
     branches: [main]
-    paths: [".github/plugin/**"]
+    paths: ["plugin.json", ".github/plugin/**"]
   workflow_dispatch:
 
 permissions:

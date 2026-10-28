@@ -60,7 +60,7 @@ export async function detectInstall({ root = extensionRoot, run = execFileAsync,
 
 async function readManifest(repoRoot) {
     try {
-        const manifest = JSON.parse(await readFile(join(repoRoot, ".github", "plugin", "plugin.json"), "utf8"));
+        const manifest = JSON.parse(await readFile(join(repoRoot, "plugin.json"), "utf8"));
         const repo = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(manifest.repository || "")?.[1];
         return { version: typeof manifest.version === "string" ? manifest.version : null, repo: REPO.test(repo || "") ? repo : null };
     } catch {

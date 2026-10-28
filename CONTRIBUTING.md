@@ -146,7 +146,7 @@ panel) installs exactly that tag.
 To publish a release, change these two files in a pull request, either on their
 own or together with the change you are releasing:
 
-1. In `.github/plugin/plugin.json`, raise `version`, for example from `1.1.0` to
+1. In `plugin.json` at the repository root, raise `version`, for example from `1.1.0` to
    `1.2.0`. This is the version users see in `copilot plugin list` and in the
    app. Use [Semantic Versioning](https://semver.org/): a patch for fixes, a
    minor version for new behavior, a major version for changes that need users
@@ -181,10 +181,13 @@ maintainer adds the `no-release` label, which skips this check. The `version` in
 `com.github.copilot/extensions/jira-workbench/copilot-extension.json` is the extension manifest's
 schema version, not the release version.
 
-`plugin.json` follows the [Agent Plugins](https://agent-plugins.org/) format: the
-Copilot app loads the canvas from `com.github.copilot/extensions/`, and
+`plugin.json` follows the [Agent Plugins](https://agent-plugins.org/) format,
+which requires exactly one manifest, at the plugin root: here, the repository
+root. Do not add another `plugin.json` under `.github/plugin/`; tools that look
+there first would read it instead, and `check-release.mjs` fails if one exists.
+The Copilot app loads the canvas from `com.github.copilot/extensions/`, and
 `extensions.com.github.copilot.logo` names `assets/preview.png` as the listing
-image. Keep both paths; the Awesome Copilot marketplace checks them when it
+image. Keep these paths; the Awesome Copilot marketplace checks them when it
 reviews a release.
 
 When the pull request merges, the
@@ -212,7 +215,8 @@ com.github.copilot/extensions/jira-workbench/   The installable canvas; this is 
   test/                      Node test suite, split along module ownership
 assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
 docs/                        Install guide, user guide, screenshots, and their generator
-.github/plugin/              Plugin and marketplace manifests; the marketplace pins the released version
+plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
+.github/plugin/              The marketplace manifest, which pins the released version
 .github/scripts/             Release checks: the two manifests name one release, and a shipped change raises it
 .github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks) and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
