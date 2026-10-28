@@ -233,7 +233,7 @@ test("only a rebuilt tool list with none of the app's session tools means no ses
 
 test("Copilot repositories come from list_repositories, or list_projects on older app builds", async () => {
     // Observed live (Oct 2026): list_repositories answers with a prose line before the JSON array.
-    const repos = [{ id: "uuid", name: "TCC", container_kind: "repository", github_repo: "Sentry01/TCC" }];
+    const repos = [{ id: "uuid", name: "Demo repository", container_kind: "repository", github_repo: "example/demo" }];
     const host = offered => {
         const executed = [];
         const session = { rpc: { tools: {
