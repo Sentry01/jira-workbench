@@ -36,7 +36,7 @@ function services(overrides = {}) {
         },
         call: async (name, args) => {
             calls.push(name);
-            if (name === "list_projects") return [copilot];
+            if (name === "list_repositories") return [copilot];
             if (name === "get_sessions_status") return { sessions: [] };
             if (name === "get_session") return { id: args.project_session_id, project_id: copilot.id, name: "Work", created_pr_number: 9, created_pr_repo: "example/demo" };
             throw new Error(`Unexpected call ${name}`);
@@ -265,13 +265,13 @@ test("gateway reuses tool metadata and rebuilds the stale snapshot only when a t
         initializeAndValidate: async () => { rebuilds++; snapshot = connected; },
         getCurrentMetadata: async () => {
             reads++;
-            return { tools: [{ name: "list_projects" }, ...(snapshot ? [{ name: "atlassian-getAccessibleAtlassianResources", mcpToolName: "getAccessibleAtlassianResources" }] : [])] };
+            return { tools: [{ name: "list_repositories" }, ...(snapshot ? [{ name: "atlassian-getAccessibleAtlassianResources", mcpToolName: "getAccessibleAtlassianResources" }] : [])] };
         },
         execute: async () => ({ resultType: "success", textResultForLlm: "[]" }),
     } } };
     const gateway = new Gateway(session);
-    await gateway.call("list_projects", {});
-    await gateway.call("list_projects", {});
+    await gateway.call("list_repositories", {});
+    await gateway.call("list_repositories", {});
     assert.equal(reads, 1);
     assert.equal(rebuilds, 0);
     await assert.rejects(gateway.call("getAccessibleAtlassianResources", {}), /unavailable/);
@@ -290,7 +290,7 @@ test("gateway reuses tool metadata and rebuilds the stale snapshot only when a t
 test("gateway explains why a Jira tool is missing and only retries while MCP is still connecting", async () => {
     let servers;
     const gateway = new Gateway({ rpc: {
-        tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: [{ name: "list_projects" }] }) },
+        tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: [{ name: "list_repositories" }] }) },
         mcp: { list: async () => ({ servers }) },
     } });
     const failure = () => gateway.call("getAccessibleAtlassianResources", {}, { fresh: true }).then(() => null, error => error);
@@ -431,7 +431,7 @@ test("preparing work requires the Copilot repository catalog to be confirmed in 
     await first.idle();
 
     const { gateway } = services();
-    const next = make(path, { ...gateway, call: async (name, args) => name === "list_projects" ? Promise.reject(new Error("host busy")) : gateway.call(name, args) });
+    const next = make(path, { ...gateway, call: async (name, args) => name === "list_repositories" ? Promise.reject(new Error("host busy")) : gateway.call(name, args) });
     await next.hydrate();
     await next.warm();
     await assert.rejects(next.prepare({ nodeId: "2" }), /Copilot repository projects are not confirmed/);

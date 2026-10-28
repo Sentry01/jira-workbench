@@ -33,7 +33,7 @@ function runtime(respond) {
         getCurrentMetadata: async () => ({ tools: [
             ...["getAccessibleAtlassianResources", "getVisibleJiraProjects", "searchJiraIssuesUsingJql", "getJiraIssue"]
                 .map(name => ({ name: `atlassian-${name}`, mcpToolName: name })),
-            ...["list_projects", "list_sessions_and_chats", "get_sessions_status", "get_session"].map(name => ({ name })),
+            ...["list_repositories", "list_sessions_and_chats", "get_sessions_status", "get_session"].map(name => ({ name })),
         ] }),
         execute: async ({ name, arguments: args }) => ({
             resultType: "success", textResultForLlm: JSON.stringify(await respond(name, args)),
@@ -133,8 +133,8 @@ test("a missing host tool is named as Copilot's, never blamed on the Jira server
         },
         mcp: { list: async () => { lists++; return { servers: [{ name: "atlassian", status: "needs-auth" }] }; } },
     } }, { rebuildMinMs: 0 });
-    const error = await gateway.call("list_projects", {}).then(() => null, e => e);
-    assert.match(error.message, /^Copilot did not offer list_projects; update or restart Copilot\.$/);
+    const error = await gateway.call("list_repositories", {}).then(() => null, e => e);
+    assert.match(error.message, /^Copilot did not offer list_repositories; update or restart Copilot\.$/);
     assert.doesNotMatch(error.message, /atlassian|sign-in|MCP server/i);
     assert.equal(error.needsSignIn, undefined);
     assert.equal(error.kind, "unavailable");
@@ -224,9 +224,32 @@ test("only a rebuilt tool list with none of the app's session tools means no ses
     // A snapshot built before the app registered its session tools is rebuilt before it is believed.
     let registered = false, rebuilds = 0;
     const session = { rpc: { tools: {
-        getCurrentMetadata: async () => ({ tools: [{ name: "bash" }, ...(registered ? [{ name: "list_projects" }] : [])] }),
+        getCurrentMetadata: async () => ({ tools: [{ name: "bash" }, ...(registered ? [{ name: "list_repositories" }] : [])] }),
         initializeAndValidate: async () => { rebuilds++; registered = true; },
     } } };
     assert.equal(await new Gateway(session).sessionless(), false);
     assert.equal(rebuilds, 1);
+});
+
+test("Copilot repositories come from list_repositories, or list_projects on older app builds", async () => {
+    // Observed live (Oct 2026): list_repositories answers with a prose line before the JSON array.
+    const repos = [{ id: "uuid", name: "TCC", container_kind: "repository", github_repo: "Sentry01/TCC" }];
+    const host = offered => {
+        const executed = [];
+        const session = { rpc: { tools: {
+            initializeAndValidate: async () => {},
+            getCurrentMetadata: async () => ({ tools: offered.map(name => ({ name })) }),
+            execute: async ({ name }) => { executed.push(name); return { resultType: "success", textResultForLlm: `Found 1 configured container(s):\n${JSON.stringify(repos)}` }; },
+        } } };
+        return { gateway: new Gateway(session, { rebuildMinMs: 0 }), executed };
+    };
+    for (const [offered, expected] of [[["list_repositories", "list_projects"], "list_repositories"], [["list_projects"], "list_projects"]]) {
+        const { gateway, executed } = host(offered);
+        assert.deepEqual(await gateway.call("list_repositories", {}), repos);
+        assert.deepEqual(executed, [expected]);
+        assert.equal(await gateway.sessionless(), false, `${expected} marks an app session`);
+    }
+    const error = await host(["get_session"]).gateway.call("list_repositories", {}).then(() => null, e => e);
+    assert.match(error.message, /^Copilot did not offer list_repositories; update or restart Copilot\.$/);
+    await assert.rejects(host(["list_projects"]).gateway.call("list_projects", {}), /read-only; list_projects is not allowed/);
 });

@@ -46,7 +46,7 @@ const session = await joinSession({
             action("record_session", "Record the actual session returned by create_session for a queued Workbench launch.", schema({ requestId: string, sessionId: string }), (w, input) => w.recordSession(input)),
             action("fail_request", "Record why a queued session launch could not be completed.", schema({ requestId: string, message: string }), (w, input) => w.failRequest(input)),
             action("record_navigation", "Acknowledge the actual native navigation result for a queued fallback request.", schema({ requestId: string, ok: { type: "boolean" }, message: string }), (w, input) => w.hostActions.acknowledge(input)),
-            action("inspect_connections", "List available integration tool names for troubleshooting; does not execute them.", schema(), async w => (await w.gateway.metadata()).filter(t => /Jira|Atlassian|list_projects|get_session|list_sessions|navigate_to/.test(t.name)).map(t => ({ name: t.name, mcpToolName: t.mcpToolName }))),
+            action("inspect_connections", "List available integration tool names for troubleshooting; does not execute them.", schema(), async w => (await w.gateway.metadata()).filter(t => /Jira|Atlassian|list_repositories|list_projects|get_session|list_sessions|navigate_to/.test(t.name)).map(t => ({ name: t.name, mcpToolName: t.mcpToolName }))),
         ],
         open: async ctx => {
             await ready;

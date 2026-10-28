@@ -38,8 +38,11 @@ export function signInError(server = "atlassian") {
         { kind: "auth", retryable: false, needsSignIn: true, server: target.name });
 }
 
+// Observed live (GitHub Copilot app, Oct 2026): list_projects was renamed list_repositories with the same fields
+// (id, name, github_repo). Older app builds still offer only list_projects.
+export const HOST_FALLBACKS = { list_repositories: ["list_projects"] };
 // The Copilot app offers these tools to its own sessions only.
-export const SESSION_TOOLS = ["list_projects", "get_sessions_status", "get_session"];
+export const SESSION_TOOLS = ["list_repositories", "list_projects", "get_sessions_status", "get_session"];
 // Observed live (GitHub Copilot app, Oct 2026): a canvas opened from Canvases in the app's sidebar runs in an empty
 // runtime with no MCP servers, no sign-in and none of the session tools, so nothing the Workbench does can connect it.
 export const STANDALONE = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions. This happens when Jira Workbench is opened from Canvases in the sidebar; open it from a session instead.";

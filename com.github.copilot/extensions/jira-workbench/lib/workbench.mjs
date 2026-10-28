@@ -160,7 +160,7 @@ export class Workbench {
             const generation = ++this.catalogGeneration;
             const [sites, apps] = await Promise.allSettled([
                 this.jira(options => this.gateway.sites(options), fresh),
-                this.gateway.call("list_projects", {}, { fresh }),
+                this.gateway.call("list_repositories", {}, { fresh }),
             ]);
             // A slower, older discovery must not overwrite what a newer one already found.
             if (generation !== this.catalogGeneration) return { sites: this.sites, appProjects: this.appProjects, errors: this.catalogErrors };

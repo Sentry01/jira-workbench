@@ -943,7 +943,7 @@ test("a panel with no session behind it leaves standalone as soon as a Jira serv
     runtime.set("atlassian", "connected");
     await until(t, () => connection.status().state === "ready", { what: "ready" });
     await until(t, () => workbench.sites.length === 1, { what: "Jira sites" });
-    assert.ok(workbench.catalogErrors.some(message => /Copilot did not offer list_projects/.test(message)), "Jira works; sessions stay unavailable");
+    assert.ok(workbench.catalogErrors.some(message => /Copilot did not offer list_repositories/.test(message)), "Jira works; sessions stay unavailable");
 });
 
 test("an app session with no Atlassian connection is down with a setup hint, never standalone", async t => {

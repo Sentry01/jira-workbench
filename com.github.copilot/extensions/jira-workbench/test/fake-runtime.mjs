@@ -72,7 +72,7 @@ export function fakeRuntime({ status = "connected", connector = null, rebuildMs 
         set(name, next) { runtime.servers.set(name, next); if (events) runtime.emit("session.mcp_server_status_changed", { serverName: name, status: next }); },
         listeners() { return [...handlers.values()].reduce((n, set) => n + set.size, 0); },
     };
-    const builtins = sidebar ? [] : ["list_projects", "list_sessions_and_chats", "get_sessions_status", "get_session"].map(name => ({ name }));
+    const builtins = sidebar ? [] : ["list_repositories", "list_sessions_and_chats", "get_sessions_status", "get_session"].map(name => ({ name }));
     const cliTools = sidebar ? ["bash", "view", "grep"].map(name => ({ name })) : [];
     const searchSchema = v2 => ({ type: "object", properties: Object.fromEntries(
         ["cloudId", "jql", "fields", "maxResults", "nextPageToken", "responseContentFormat", ...(v2 ? ["view"] : [])].map(key => [key, {}])) });
@@ -129,7 +129,7 @@ export function fakeRuntime({ status = "connected", connector = null, rebuildMs 
                 execute: async ({ name, arguments: args }) => {
                     counters.executes++;
                     if (callMs) await delay(callMs);
-                    if (name === "list_projects" && !sidebar) return ok([{ id: "copilot-uuid", name: "Demo repository", github_repo: "example/demo" }]);
+                    if (name === "list_repositories" && !sidebar) return ok([{ id: "copilot-uuid", name: "Demo repository", github_repo: "example/demo" }]);
                     if (name === "get_sessions_status" && !sidebar) return ok({ sessions: [] });
                     const tool = [...jiraTools, ...connectorTools].find(t => t.name === name);
                     if (!tool) return { resultType: "failure", error: `Tool ${name} not found` };

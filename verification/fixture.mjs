@@ -70,7 +70,7 @@ export async function createFixture({ directory, root = resolveRoot() }) {
             { name: "PR Waiting", category: "indeterminate" }, { name: "Done", category: "done" },
         ] : null,
         call: async (name, args) => {
-            if (name === "list_projects") return [{ id: "app-project", name: "Example repo", github_repo: "example/demo" }];
+            if (name === "list_repositories") return [{ id: "app-project", name: "Example repo", github_repo: "example/demo" }];
             if (name === "get_sessions_status") return { sessions: sessionIds.map((id, index) => ({
                 id, activity: { status: index === 1 ? "busy" : "idle" },
                 awaiting_user_input: index === 0,

@@ -22,7 +22,7 @@ async function fixture(t, options = {}) {
         sites: async () => [site], projects: async () => [project],
         issues: async () => ({ issues: rows, fetchedAt: new Date().toISOString() }),
         call: async (name, args) => {
-            if (name === "list_projects") return [copilot];
+            if (name === "list_repositories") return [copilot];
             if (name === "get_sessions_status") return { sessions: [{ id: "session-1", activity: { status: "idle" } }] };
             if (name === "list_sessions_and_chats") return [{ id: "session-1", name: "Session", project_id: copilot.id }];
             if (name === "get_session") return {

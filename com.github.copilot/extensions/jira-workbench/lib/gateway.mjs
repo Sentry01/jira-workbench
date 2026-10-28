@@ -1,5 +1,5 @@
 import { findSprintField, normalizeIssue, parseToolResult } from "./model.mjs";
-import { bounded, classify, JIRA_SERVER, matchesTool, preferred, serverLabel, SESSION_TOOLS, signInError, SITE_TOOL, toolError } from "./runtime.mjs";
+import { bounded, classify, HOST_FALLBACKS, JIRA_SERVER, matchesTool, preferred, serverLabel, SESSION_TOOLS, signInError, SITE_TOOL, toolError } from "./runtime.mjs";
 import { open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { basename, dirname } from "node:path";
 
 const READ_TOOLS = new Set([
     "getAccessibleAtlassianResources", "getVisibleJiraProjects", "searchJiraIssuesUsingJql", "executeRead",
-    "list_projects", "get_sessions_status", "get_session",
+    "list_repositories", "get_sessions_status", "get_session",
 ]);
 // Atlassian MCP v2 serves most reads only through executeRead; just these operations may pass through it.
 const READ_OPERATIONS = new Set(["listJiraProjects", "listJiraStatuses"]);
@@ -144,9 +144,10 @@ export class Gateway {
         if (tools === this.tools) this.owner = { tools, name };
         return name;
     }
-    // The tools offering name. A Jira tool comes from the serving Jira server when that server offers it.
+    // The tools offering name, or else its older name on earlier app builds. A Jira tool comes from the serving
+    // Jira server when that server offers it.
     async resolve(tools, name) {
-        const matches = tools.filter(matching(name));
+        const matches = [name, ...(HOST_FALLBACKS[name] || [])].map(n => tools.filter(matching(n))).find(m => m.length) || [];
         if (matches.length < 2 || !JIRA_TOOLS.has(name)) return matches;
         const owner = await this.serving(tools);
         const own = matches.filter(t => t.mcpServerName === owner);

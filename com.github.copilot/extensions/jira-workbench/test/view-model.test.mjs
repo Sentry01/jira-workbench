@@ -267,7 +267,7 @@ test("a panel with no Copilot session behind it shows one explanation, no per-so
     const reason = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions.";
     const standalone = { state: "standalone", reason, server: null, nextCheckAt: new Date(NOW + 60_000).toISOString() };
     const failing = {
-        catalogErrors: ["Jira: getAccessibleAtlassianResources is unavailable.", "Copilot projects: Copilot did not offer list_projects; update or restart Copilot."],
+        catalogErrors: ["Jira: getAccessibleAtlassianResources is unavailable.", "Copilot projects: Copilot did not offer list_repositories; update or restart Copilot."],
         error: "searchJiraIssuesUsingJql is unavailable", backgroundError: "timeout", warming: false, tree: { warnings: [] },
         issues: [{ id: "1" }], connection: standalone,
     };
