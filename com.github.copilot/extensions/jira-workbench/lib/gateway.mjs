@@ -4,6 +4,8 @@ import { open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
+import { DEFAULT_SCOPE, scopeJql } from "./scope.mjs";
+import { ISSUE_KEY } from "./validate.mjs";
 
 const READ_TOOLS = new Set([
     "getAccessibleAtlassianResources", "getVisibleJiraProjects", "searchJiraIssuesUsingJql", "executeRead",
@@ -363,31 +365,100 @@ export class Gateway {
         if (field) this.sprintFields.set(cloudId, field);
         return field;
     }
-    async issues(cloudId, projectId, options) {
+    async issues(cloudId, projectId, options = {}) {
         if (!/^\d+$/.test(projectId)) throw invalid("A numeric Jira project ID is required.");
-        const sprintField = await this.sprintField(cloudId, projectId, options);
-        const issues = new Map(), cursors = new Set();
-        let nextPageToken;
-        for (let page = 0; page < 100; page++) {
-            const args = {
-                cloudId, jql: `project = ${projectId} ORDER BY key ASC`,
-                fields: sprintField ? [...FIELDS, sprintField] : FIELDS, maxResults: 100, responseContentFormat: "markdown",
-            };
-            if (nextPageToken) args.nextPageToken = nextPageToken;
-            // v2's default "compact" view drops project, parent, description, labels and links even when asked for.
-            const result = await this.call("searchJiraIssuesUsingJql", args, { ...options, optional: { view: "full" } });
-            if (!Array.isArray(result.issues)) throw invalid("Jira issue search returned an unsupported response.");
-            for (const raw of result.issues) {
-                const row = normalizeIssue(raw, { sprintField });
-                if (row.projectId !== projectId) throw invalid("Jira returned an issue outside the selected project.");
-                issues.set(row.id, row);
+        // The first page discovers the sprint field; continuation pages reuse that answer instead of probing again.
+        const sprintField = options.cursor ? this.sprintFields.get(cloudId) ?? null : await this.sprintField(cloudId, projectId, options);
+        const result = await this.issuePage(cloudId, scopeJql(projectId, options.scope || DEFAULT_SCOPE), { ...options, sprintField });
+        if (result.issues.some(row => row.projectId !== projectId)) throw invalid("Jira returned an issue outside the selected project.");
+        return result;
+    }
+    async issuePage(cloudId, jql, { cursor = null, sprintField = null, ...options } = {}) {
+        const args = { cloudId, jql, fields: sprintField ? [...FIELDS, sprintField] : FIELDS, maxResults: 100, responseContentFormat: "markdown" };
+        if (cursor) args.nextPageToken = cursor;
+        const result = await this.call("searchJiraIssuesUsingJql", args, { ...options, optional: { view: "full" } });
+        if (!Array.isArray(result.issues)) throw invalid("Jira issue search returned an unsupported response.");
+        const next = result.isLast === true ? null : result.nextPageToken || null;
+        if (!next && result.isLast !== true && !Number.isFinite(result.total))
+            throw invalid("Jira pagination did not report completion or a usable continuation.");
+        if (result.isLast !== true && (
+            next && (typeof next !== "string" || next === cursor) || result.isLast === false && !next
+            || !next && Number.isFinite(result.total) && result.total > (result.startAt || 0) + result.issues.length))
+            throw invalid("Jira pagination did not advance; no usable continuation was returned.");
+        if (next && !result.issues.length) throw invalid("Jira pagination returned an empty page before completion.");
+        return {
+            issues: result.issues.map(raw => normalizeIssue(raw, { sprintField })),
+            nextPageToken: result.isLast === true ? null : next,
+            total: Number.isFinite(result.total) ? result.total : null,
+            fetchedAt: new Date().toISOString(),
+        };
+    }
+    async lookupIssues(cloudId, projectId, ids, options = {}) {
+        if (!/^\d+$/.test(projectId) || ids.length > 300 || ids.some(id => !/^\d+$/.test(id)))
+            throw invalid("Issue identity lookup requires a numeric project and at most 300 numeric issue IDs.");
+        const issues = [];
+        for (let offset = 0; offset < ids.length; offset += 50) {
+            const batch = ids.slice(offset, offset + 50);
+            for await (const page of this.referencePages(cloudId, `project = ${projectId} AND id in (${batch.join(",")})`, batch, { ...options, sprintField: this.sprintFields.get(cloudId) })) {
+                if (page.issues.some(issue => issue.projectId !== projectId))
+                    throw invalid("Jira issue identity lookup returned unrelated project results.");
+                issues.push(...page.issues);
             }
-            if (result.isLast === true || (!result.nextPageToken && result.isLast !== false))
-                return { issues: [...issues.values()], fetchedAt: new Date().toISOString() };
-            if (!result.nextPageToken || cursors.has(result.nextPageToken)) throw invalid("Jira pagination did not advance; hierarchy is incomplete.");
-            cursors.add(result.nextPageToken);
-            nextPageToken = result.nextPageToken;
         }
-        throw invalid("Jira pagination exceeded 10,000 issues; hierarchy is incomplete.");
+        return issues;
+    }
+    async *referencePages(cloudId, jql, references, { read = run => run({}), ...options } = {}) {
+        let cursor = null, received = 0;
+        const seen = new Set();
+        do {
+            const page = await read(readOptions => this.issuePage(cloudId, jql, { ...options, ...readOptions, cursor }));
+            received += page.issues.length;
+            if (received > references.length) throw invalid("Jira reference lookup exceeded its distinct requested parents or issues.");
+            if (page.issues.some(issue => !references.includes(issue.key) && !references.includes(issue.id)))
+                throw invalid("Jira reference lookup returned an unrequested issue.");
+            yield page;
+            cursor = page.nextPageToken;
+            if (cursor && seen.has(cursor)) throw invalid("Jira reference pagination repeated a cursor.");
+            if (cursor) seen.add(cursor);
+        } while (cursor);
+    }
+    async ancestors(cloudId, seeds, { existing = [], attemptedParents = [], ...options } = {}) {
+        const known = new Set([...existing, ...seeds].flatMap(issue => [issue.key, issue.id]));
+        const attempted = new Set(attemptedParents), issues = [], warnings = [];
+        let frontier = seeds;
+        for (let depth = 0; frontier.length && depth < 32; depth++) {
+            const references = new Map();
+            for (const child of frontier) {
+                const ref = child.parentKey?.startsWith("id:") ? child.parentId : child.parentKey || child.parentId;
+                if (!ref || known.has(ref) || attempted.has(ref)) continue;
+                if (!ISSUE_KEY.test(ref) && !/^\d+$/.test(ref)) throw invalid("Jira returned an invalid parent reference.");
+                references.set(ref, child);
+            }
+            if (!references.size) return { issues, warnings, attemptedParents: [...attempted] };
+            const refs = [...references.keys()];
+            frontier = [];
+            for (let offset = 0; offset < refs.length; offset += 50) {
+                const batch = refs.slice(offset, offset + 50);
+                const keys = batch.filter(ref => ISSUE_KEY.test(ref)), ids = batch.filter(ref => /^\d+$/.test(ref));
+                const jql = [keys.length ? `key in (${keys.map(key => `"${key}"`).join(",")})` : "", ids.length ? `id in (${ids.join(",")})` : ""].filter(Boolean).join(" OR ");
+                try {
+                    for await (const page of this.referencePages(cloudId, jql, batch, { ...options, sprintField: this.sprintFields.get(cloudId) })) {
+                        for (const issue of page.issues) {
+                            if (known.has(issue.id) || known.has(issue.key)) continue;
+                            known.add(issue.id); known.add(issue.key);
+                            const context = { ...issue, contextOnly: true };
+                            issues.push(context); frontier.push(context);
+                        }
+                    }
+                    batch.forEach(ref => attempted.add(ref));
+                } catch (error) {
+                    warnings.push(`Parent lookup failed: ${error.message}`);
+                    if (error.kind && error.kind !== "permanent")
+                        return { issues, warnings, attemptedParents: [...attempted], connectionError: error.message };
+                }
+            }
+        }
+        if (frontier.length) warnings.push("Ancestor depth exceeded 32 levels; remaining parents are shown as unavailable.");
+        return { issues, warnings, attemptedParents: [...attempted] };
     }
 }

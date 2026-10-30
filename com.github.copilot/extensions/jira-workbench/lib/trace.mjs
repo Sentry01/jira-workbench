@@ -73,7 +73,7 @@ export class Trace {
         const detail = await wb.gateway.call("get_session", { project_session_id: sessionId });
         if (detail.project_id !== projectId) throw new Error("The session belongs to a different Copilot project than the selected repository.");
         const record = sessionRecord(detail, sessionId);
-        await wb.store.update(data => {
+        await wb.commit(data => {
             const link = data.links[scope] ||= { sessions: [], prs: [] };
             const index = link.sessions.findIndex(s => s.id === record.id);
             if (requestId) record.contextHash = data.requests[requestId].contextHash;
@@ -88,13 +88,14 @@ export class Trace {
     }
     async linkSession({ nodeId, sessionId }) {
         const wb = this.workbench;
-        wb.node(nodeId);
+        wb.traceNode(nodeId);
         const mapping = (await wb.store.read()).mappings[wb.selectedScope()];
         if (!mapping) throw new Error("Select a Copilot repository before linking a session.");
         return this.attach(wb.selectedScope(nodeId), sessionId, mapping.id);
     }
     async openSession({ nodeId, sessionId }) {
         const wb = this.workbench;
+        wb.traceNode(nodeId);
         const link = (await wb.store.read()).links[wb.selectedScope(nodeId)];
         if (!link?.sessions.some(s => s.id === sessionId)) throw new Error("This session is not linked to the selected item.");
         if (!wb.hostActions) throw new Error("Native session navigation is unavailable in this runtime.");
@@ -102,6 +103,7 @@ export class Trace {
     }
     async openPr({ nodeId, repo, number }) {
         const wb = this.workbench;
+        wb.traceNode(nodeId);
         const link = (await wb.store.read()).links[wb.selectedScope(nodeId)];
         if (!link?.prs.some(pr => pr.repo === repo && pr.number === number)) throw new Error("This PR is not linked to the selected trace.");
         if (!wb.hostActions) throw new Error("Native PR navigation is unavailable in this runtime.");
@@ -111,11 +113,14 @@ export class Trace {
     async refreshExecution({ source = "all" } = {}) {
         const wb = this.workbench;
         if (!["all", "sessions", "github"].includes(source)) throw new Error("Choose a supported execution source.");
-        const scope = wb.selectedScope(), key = `${scope}/${source}`;
+        const scope = wb.selectedScope(), generation = wb.refreshGeneration;
+        const key = `${wb.loadKey()}/${generation}/${source}`;
         if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key);
         const pending = (async () => {
             const data = await wb.store.read();
-            const targets = ["project", ...wb.issues.map(i => i.id)]
+            if (generation !== wb.refreshGeneration || scope !== wb.currentScope()) return wb.snapshot();
+            // Only this project's own issues: cross-project context has no trace under this project's mapping.
+            const targets = ["project", ...wb.issues.filter(issue => issue.projectId === wb.project.id).map(issue => issue.id)]
                 .map(nodeId => wb.selectedScope(nodeId))
                 .filter(scope => data.links[scope])
                 .map(scope => ({ scope, previous: data.links[scope] }));
@@ -137,7 +142,7 @@ export class Trace {
     }
     async refreshTrace(nodeId) {
         const wb = this.workbench;
-        wb.node(nodeId);
+        wb.traceNode(nodeId);
         const scope = wb.selectedScope(nodeId);
         const data = await wb.store.read();
         const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] } });

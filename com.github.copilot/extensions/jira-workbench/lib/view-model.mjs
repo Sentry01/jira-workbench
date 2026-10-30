@@ -1,8 +1,22 @@
 // Pure view-model helpers for the panel: every input is explicit, with no DOM and no node: imports.
 // The server serves this file as /view-model.mjs next to /model.mjs, which it imports.
-import { REQUEST_TTL_MS, jiraFreshness, requestStatus } from "./model.mjs";
+import { REQUEST_TTL_MS, jiraFreshness, requestStatus, issueIndex, issueParent } from "./model.mjs";
 
 export const humanize = value => String(value || "unknown").replace(/[_-]/g, " ");
+
+// Why a loaded row is not ordinary scope work; shown as a badge and in the row's accessible name.
+export function scopeLabel(item) {
+    if (item.contextOnly) return item.missing ? "Missing / restricted" : "Context only";
+    return item.tracked ? item.unverified ? "Linked, not re-read from Jira" : "Linked, outside scope" : "";
+}
+
+export function workingSetSummary({ issues = [], page = {}, fetchedAt, cached }) {
+    const loaded = issues.filter(issue => !issue.contextOnly && !issue.tracked).length;
+    const context = issues.filter(issue => issue.contextOnly).length;
+    const tracked = issues.filter(issue => issue.tracked && !issue.contextOnly).length;
+    const complete = Boolean(fetchedAt) && !cached && !page.nextPageToken;
+    return `${loaded} scope items loaded${page.total == null ? "" : ` of ${page.total} matching`}; ${context} context items${tracked ? `; ${tracked} linked items outside the loaded pages` : ""}. ${page.nextPageToken ? "More scope results remain." : complete ? "All scope pages loaded." : "Scope not yet verified."} Counts and progress describe loaded items, not complete child totals.`;
+}
 
 // Freshness of one live source across some traces. `time` formats a timestamp for display.
 export function sourceFreshness(traces, source, time) {
@@ -183,13 +197,13 @@ export function filterTree(roots, query = "", category = "all", sprint = "all") 
 // Distinct linked session IDs among each issue's descendants (as model.mjs descendants() defines them), for every
 // issue at once: one key index, then each linked issue walks up its own ancestors. Parent cycles stop at a repeat.
 export function descendantSessionCounts(issues, sessionIdsFor) {
-    const byKey = new Map(issues.map(issue => [issue.key, issue]));
+    const byKey = issueIndex(issues);
     const found = new Map();
     for (const issue of issues) {
         const ids = sessionIdsFor(issue.id);
         if (!ids.length) continue;
         const seen = new Set([issue.key]);
-        for (let parent = byKey.get(issue.parentKey); parent && !seen.has(parent.key); parent = byKey.get(parent.parentKey)) {
+        for (let parent = issueParent(issue, byKey); parent && !seen.has(parent.key); parent = issueParent(parent, byKey)) {
             seen.add(parent.key);
             if (!found.has(parent.id)) found.set(parent.id, new Set());
             for (const id of ids) found.get(parent.id).add(id);
@@ -231,6 +245,8 @@ export function banner(snapshot, { now = Date.now(), unavailable = [] } = {}) {
     const signIn = signInNeeded(snapshot), connection = snapshot.connection;
     const data = [
         ...snapshot.tree.warnings,
+        ...(snapshot.ancestorWarnings || []),
+        ...(snapshot.pageError ? [snapshot.pageError] : []),
         ...(unavailable.length ? [`Execution snapshot references unavailable work items: ${unavailable.join(", ")}. Refresh the workbench to reconcile the sources.`] : []),
     ];
     if (standaloneHost(snapshot))

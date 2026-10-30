@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { launchPrompt, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue } from "./model.mjs";
+import { launchPrompt, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue, issueParent, issueIndex } from "./model.mjs";
 import { createBrief, acknowledgeBrief } from "./brief.mjs";
 import { dependencyWarnings } from "./execution.mjs";
+
+// The loaded working set can miss children when the scope filters items or more pages remain.
+const partialScope = wb => ({ filtered: wb.workingScope.kind !== "project", more: Boolean(wb.page.nextPageToken) });
 
 // Launch and request lifecycle: briefs, previews, queued requests and their receipts, failures or clears.
 // Panel state (selection, issues, previews, store, send) stays on the Workbench and is read through it.
@@ -9,19 +12,30 @@ export class Launches {
     constructor(workbench) { this.workbench = workbench; }
     makeBrief(node, mode, fields, mapping, smartCommitComment = false) {
         const wb = this.workbench;
+        const children = descendants(wb.issues, node.id);
+        const { filtered, more } = partialScope(wb);
+        // A project or parent brief lists only loaded descendants; say so whenever the working set is not the whole project.
+        const partial = node.level > 0 && (filtered || more) ? [{
+            id: "partial-context",
+            message: `Only ${children.length} loaded descendant${children.length === 1 ? " is" : "s are"} included${more ? "; more scope pages remain in Jira" : ""}${filtered ? "; the working scope filters which items load" : ""}. Other child work may exist.`,
+        }] : [];
         return createBrief({
-            node, parent: wb.issues.find(issue => issue.key === node.parentKey),
-            children: descendants(wb.issues, node.id), mapping, siteUrl: wb.site.url, mode, fields,
-            dependencyWarnings: dependencyWarnings(node), smartCommitComment,
+            node, parent: issueParent(node, issueIndex(wb.issues)),
+            children, mapping, siteUrl: wb.site.url, mode, fields,
+            dependencyWarnings: [...partial, ...dependencyWarnings(node)], smartCommitComment,
         });
     }
     async prepare({ nodeId, mode, fields, smartCommitComment = false }) {
         const wb = this.workbench;
         const scope = wb.selectedScope(nodeId), node = wb.node(nodeId);
+        const workingSetKey = wb.loadKey(), scopeGeneration = wb.refreshGeneration;
+        if (node.contextOnly) throw new Error("This item is context only. Include it in a project working scope before launching work.");
+        if (node.unverified) throw new Error("Jira did not re-read this linked item. Refresh before starting work from it.");
         if (wb.error) throw new Error("Refresh Jira successfully before starting work from stale data.");
         if (wb.cached) throw new Error("Jira is still refreshing the cached snapshot. Try again when it is current.");
         const data = await wb.store.read(), mapping = data.mappings[wb.selectedScope()];
         if (scope !== wb.selectedScope(nodeId)) throw new Error("Project changed while preparing the brief.");
+        if (workingSetKey !== wb.loadKey() || scopeGeneration !== wb.refreshGeneration) throw new Error("Working scope changed while preparing the brief.");
         if (!mapping) throw new Error("Select the Copilot repository for this Jira project before starting a session.");
         if (!wb.verified.apps) throw new Error("Copilot repository projects are not confirmed yet. Reload connections and try again.");
         if (!wb.appProjects.some(p => p.id === mapping.id)) throw new Error("The mapped Copilot project is no longer available; choose another repository.");
@@ -33,6 +47,7 @@ export class Launches {
         if (children.length > 500) throw new Error("This scope contains more than 500 descendants. Select a smaller epic or issue.");
         const preview = {
             id: randomUUID(), scope, node, children, mapping, mode, smartCommitComment, expiresAt: Date.now() + 300_000,
+            workingSetKey, scopeGeneration,
             existing: data.links[scope]?.sessions || [],
             cloudId: wb.site.id, jiraProjectId: wb.project.id, siteUrl: wb.site.url,
             brief: this.makeBrief(node, mode, fields, mapping, smartCommitComment),
@@ -46,9 +61,12 @@ export class Launches {
         const preview = wb.previews.get(previewId);
         if (!preview || preview.expiresAt < Date.now()) throw new Error("The launch preview expired or was already used. Review the scope again.");
         if (preview.scope !== wb.selectedScope(preview.node.id)) throw new Error("Project changed after preview. Review the scope again.");
+        if (preview.workingSetKey !== wb.loadKey()) throw new Error("Working scope changed after preview. Review the scope again.");
         if (wb.error) throw new Error("Jira data is stale. Refresh and review the brief again.");
         if (wb.cached) throw new Error("Jira data is a cached snapshot. Refresh and review the brief again.");
         const currentData = await wb.store.read();
+        if (preview.workingSetKey !== wb.loadKey() || preview.scopeGeneration !== wb.refreshGeneration)
+            throw new Error("Working scope changed after preview. Review the scope again.");
         const currentMapping = currentData.mappings[wb.selectedScope()];
         if (!currentMapping || currentMapping.id !== preview.mapping.id) throw new Error("Repository mapping changed after preview.");
         const currentBrief = this.makeBrief(wb.node(preview.node.id), preview.mode, preview.brief.fields, currentMapping, preview.smartCommitComment);
@@ -64,7 +82,11 @@ export class Launches {
             contextHash: preview.brief.hash, acknowledgedWarnings: acknowledged,
             brief: { ...structuredClone(preview.brief), children: preview.brief.children.map(child => child.key) },
         };
-        await wb.store.update(data => {
+        await wb.commit(data => {
+            if (wb.previews.get(previewId) !== preview || preview.expiresAt < Date.now())
+                throw new Error("The launch preview was invalidated while launching. Review the scope again.");
+            if (preview.workingSetKey !== wb.loadKey() || preview.scopeGeneration !== wb.refreshGeneration)
+                throw new Error("Working scope changed while launching. Review the scope again.");
             if (data.mappings[wb.selectedScope()]?.id !== preview.mapping.id) throw new Error("Repository mapping changed after preview.");
             if (Object.values(data.requests).some(r => r.scope === preview.scope && requestStatus(r) === "queued"))
                 throw new Error("A session request is already queued for this scope. Wait for its receipt; do not create a duplicate.");
@@ -75,6 +97,8 @@ export class Launches {
             await wb.send({ prompt: launchPrompt({
                 ...preview, requestId, instanceId: wb.instanceId,
                 copilotProjectId: preview.mapping.id, repo: preview.mapping.repo,
+                // Any issue that can have children, including a story's subtasks; the scope was checked unchanged above.
+                partialChildren: preview.node.level >= 0 && Object.values(partialScope(wb)).some(Boolean),
             }) });
         } catch (error) {
             await this.failRequest({ requestId, message: `Could not queue launch: ${error.message}` });
@@ -84,17 +108,29 @@ export class Launches {
     }
     async syncJira() {
         const wb = this.workbench;
-        const site = wb.site, project = wb.project;
+        // Read everything from the selected project now: an await below can outlast a project switch.
+        const site = wb.site, project = wb.project, selection = wb.selections, issues = wb.issues, statuses = wb.statuses;
         if (!site || !project) throw new Error("Select a Jira project first.");
         if (wb.error) throw new Error("Refresh Jira successfully before syncing statuses from stale data.");
         if (wb.cached) throw new Error("Jira data is a cached snapshot. Refresh before syncing statuses.");
         const scope = wb.selectedScope(), data = await wb.store.read(), mapping = data.mappings[scope];
-        if (scope !== wb.selectedScope()) throw new Error("Project changed while preparing the sync.");
+        if (wb.selections !== selection) throw new Error("Project changed while preparing the sync.");
         if (!mapping) throw new Error("Select the Copilot repository for this Jira project before syncing statuses.");
         if (!wb.appProjects.some(p => p.id === mapping.id)) throw new Error("The mapped Copilot project is no longer available; choose another repository.");
-        const linked = wb.issues.flatMap(issue => {
-            const link = data.links[wb.selectedScope(issue.id)];
-            if (!link?.sessions?.length && !link?.prs?.length) return [];
+        const prefix = scope.slice(0, scope.lastIndexOf("/") + 1);
+        const durable = Object.entries(data.links).filter(([key, link]) => key.startsWith(prefix)
+            && /^\d+$/.test(key.slice(prefix.length)) && (link.sessions?.length || link.prs?.length));
+        const candidates = durable.slice(0, 300);
+        const byId = new Map(issues.filter(issue => issue.projectId === project.id && !issue.unverified).map(issue => [issue.id, issue]));
+        // Linked issues not loaded here (linked by another panel since the last read, or not re-read) are read now.
+        const missing = candidates.map(([key]) => key.slice(prefix.length)).filter(id => !byId.has(id));
+        if (missing.length && wb.gateway.lookupIssues) {
+            try { for (const issue of await wb.jira(options => wb.gateway.lookupIssues(site.id, project.id, missing, options))) byId.set(issue.id, issue); }
+            catch { /* identities that could not be read are reported as omitted below */ }
+        }
+        const evidence = candidates.flatMap(([key, link]) => {
+            const issue = byId.get(key.slice(prefix.length));
+            if (!issue) return [];
             const freshness = name => link.sourceStatus?.[name]?.state || "unknown";
             return [{
                 key: issue.key, summary: issue.summary, status: issue.status, category: issue.category,
@@ -103,16 +139,17 @@ export class Launches {
                 prs: (link.prs || []).map(pr => ({ repo: pr.repo, number: pr.number, state: pr.state, isDraft: pr.isDraft, stale: Boolean(pr.stale), url: pr.url })),
             }];
         });
-        const evidence = linked.slice(0, 300);
+        const omittedLinkedIssues = durable.length - evidence.length;
         const requestId = randomUUID();
         const prompt = jiraSyncPrompt({
             requestId, instanceId: wb.instanceId, cloudId: site.id, siteUrl: site.url,
             jiraProjectId: project.id, projectKey: project.key,
-            copilotProjectId: mapping.id, repo: mapping.repo, evidence, omittedLinkedIssues: linked.length - evidence.length,
-            statuses: projectStatuses(wb.statuses, wb.issues),
+            copilotProjectId: mapping.id, repo: mapping.repo, evidence, omittedLinkedIssues,
+            statuses: projectStatuses(statuses, issues.filter(issue => issue.projectId === project.id)),
         });
         await wb.store.update(current => {
-            if (wb.selectedScope() !== scope || wb.site?.id !== site.id || wb.project?.id !== project.id)
+            // The selection count also rejects a switch to another project and back while this was prepared.
+            if (wb.selections !== selection || wb.selectedScope() !== scope || wb.site?.id !== site.id || wb.project?.id !== project.id)
                 throw new Error("Project changed while preparing the sync. Confirm Update Jira again for the selected project.");
             if (current.mappings[scope]?.id !== mapping.id) throw new Error("Repository mapping changed while preparing the sync.");
             if (Object.values(current.requests).some(r => r.scope === scope && requestStatus(r) === "queued"))

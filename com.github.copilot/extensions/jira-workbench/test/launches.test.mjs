@@ -132,6 +132,112 @@ test("launch requires preview and confirmation; duplicate clicks create one requ
     assert.equal(result.status, "queued");
 });
 
+test("launch rechecks preview membership inside the persistence transaction after a page append", async t => {
+    const { workbench, store, gateway, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const preview = await workbench.prepare({ nodeId: "1", mode: "plan" });
+    const original = store.update.bind(store);
+    store.update = async change => {
+        workbench.page.nextPageToken = "next";
+        gateway.issues = async () => ({ issues: [{ ...rows[1], id: "3", key: "DEMO-3" }], fetchedAt: "next" });
+        await workbench.loadMore();
+        return original(change);
+    };
+    await assert.rejects(confirm(workbench, preview), /preview was invalidated/);
+    assert.equal(sent.length, 0);
+    assert.deepEqual((await store.read()).requests, {});
+});
+
+test("project sync includes loaded linked work but not foreign workflow statuses", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await workbench.linkSession({ nodeId: "2", sessionId: "session-1" });
+    workbench.issues = [rows[0], { ...rows[1], tracked: true }, { ...rows[1], id: "9", projectId: "43", key: "FOREIGN-9", status: "Foreign workflow", contextOnly: true }];
+    const snapshot = await workbench.snapshot();
+    assert.ok(!snapshot.statuses.some(status => status.name === "Foreign workflow"));
+    await workbench.syncJira();
+    const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
+    assert.match(kickoff, /"key": "DEMO-2"/);
+    assert.match(kickoff, /"name": "Implementation"/);
+    assert.match(kickoff, /No linked issues were omitted/);
+    assert.doesNotMatch(kickoff, /Foreign workflow/);
+    assert.equal(Object.keys((await store.read()).links).length, 1);
+});
+
+test("project sync reports linked issues it could not load without claiming completeness", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await store.update(data => {
+        for (let id = 100; id < 405; id++) data.links[workbench.selectedScope(String(id))] = { sessions: [{ name: "Unloaded active work" }], prs: [] };
+    });
+    await workbench.syncJira();
+    const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
+    assert.match(kickoff, /305 linked issue\(s\) were omitted from linkedWork because of the size limit or because the Workbench could not load them/);
+    assert.doesNotMatch(kickoff, /No linked issues were omitted/);
+});
+
+test("project sync reads linked issues that are not loaded before counting them as omitted", async t => {
+    const { workbench, store, gateway, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await store.update(data => {
+        data.links[workbench.selectedScope("7")] = { sessions: [{ name: "Linked elsewhere" }], prs: [] };
+        data.links[workbench.selectedScope("8")] = { sessions: [{ name: "Restricted" }], prs: [] };
+    });
+    workbench.issues = [...workbench.issues, { ...rows[1], id: "5", key: "DEMO-5", tracked: true, unverified: true }];
+    await store.update(data => { data.links[workbench.selectedScope("5")] = { sessions: [{ name: "Not re-read" }], prs: [] }; });
+    gateway.lookupIssues = async (cloudId, projectId, ids) => {
+        assert.equal(projectId, "42");
+        assert.deepEqual(ids.sort(), ["5", "7", "8"]);
+        return [{ ...rows[1], id: "5", key: "DEMO-5" }, { ...rows[1], id: "7", key: "DEMO-7" }];
+    };
+    await workbench.syncJira();
+    const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
+    assert.match(kickoff, /"key": "DEMO-7"/);
+    assert.match(kickoff, /"key": "DEMO-5"/);
+    assert.match(kickoff, /1 linked issue\(s\) were omitted/);
+});
+
+test("Update Jira rejects a sync prepared across a switch to another project and back", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const read = store.read.bind(store);
+    let switched = false;
+    store.read = async () => {
+        const data = await read();
+        // What a pick of another project and then this one does while the sync reads the store.
+        if (!switched) { switched = true; workbench.selections += 2; workbench.statuses = [{ name: "Other project status", category: "new" }]; }
+        return data;
+    };
+    await assert.rejects(workbench.syncJira(), /Project changed/);
+    assert.equal(sent.length, 0);
+    assert.deepEqual((await store.read()).requests, {});
+});
+
+test("project and parent briefs say when they include only loaded descendants", async t => {
+    const { workbench, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const complete = await workbench.prepare({ nodeId: "1", mode: "plan" });
+    assert.ok(!complete.brief.warnings.some(warning => warning.id === "partial-context"), "the whole project is loaded");
+    workbench.page.nextPageToken = "more";
+    const story = await workbench.prepare({ nodeId: "2", mode: "plan" });
+    assert.ok(!story.brief.warnings.some(warning => warning.id === "partial-context"), "a story needs no extra acknowledgement");
+    await confirm(workbench, story);
+    const storyKickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
+    assert.match(storyKickoff, /not the complete set of child work or subtasks/, "its kickoff still says subtasks may be missing");
+    await workbench.recordSession({ requestId: Object.keys((await workbench.store.read()).requests)[0], sessionId: "session-1" });
+    sent.length = 0;
+    const preview = await workbench.prepare({ nodeId: "project", mode: "plan" });
+    assert.match(preview.brief.warnings.find(warning => warning.id === "partial-context").message,
+        /^Only 2 loaded descendants are included; more scope pages remain in Jira\. Other child work may exist\.$/);
+    await confirm(workbench, preview);
+    const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
+    assert.match(kickoff, /only the items the Workbench had loaded, not the complete set of child work/);
+    workbench.page.nextPageToken = null;
+    workbench.workingScope = { kind: "jql", value: "assignee = currentUser()" };
+    const filtered = await workbench.prepare({ nodeId: "1", mode: "plan" });
+    assert.match(filtered.brief.warnings.find(warning => warning.id === "partial-context").message, /the working scope filters which items load/);
+});
+
 
 test("receipt persists actual session and PR without changing Jira status or losing earlier sessions", async t => {
     const { workbench, store, sent, githubReads } = await fixture(t);

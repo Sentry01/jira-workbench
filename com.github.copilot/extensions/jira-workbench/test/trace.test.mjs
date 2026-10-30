@@ -58,6 +58,23 @@ test("trace refresh retains earlier PRs when the same session records another PR
     assert.deepEqual((await store.read()).links["cloud-demo/42/2"].prs.map(p => p.number).sort(), [9, 10].sort());
 });
 
+test("a live refresh observes session metadata before discovering a new PR", async t => {
+    const { workbench, gateway, store, githubReads } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const original = gateway.call;
+    let hasPr = false;
+    gateway.call = async (name, args) => {
+        const detail = await original(name, args);
+        return name === "get_session" && !hasPr ? { ...detail, created_pr_number: null, created_pr_repo: null } : detail;
+    };
+    await workbench.linkSession({ nodeId: "2", sessionId: "session-1" });
+    assert.equal((await store.read()).links["cloud-demo/42/2"].sessions[0].prNumber, null);
+    hasPr = true;
+    await workbench.refreshExecution();
+    assert.deepEqual(githubReads, ["example/demo#9"]);
+    assert.equal((await store.read()).links["cloud-demo/42/2"].sourceStatus.github.state, "fresh");
+});
+
 
 test("refreshing linked execution reads human intervention state once and keeps source freshness separate", async t => {
     const { workbench, gateway, store } = await fixture(t);

@@ -630,7 +630,7 @@ test("each project's own workflow statuses reach the snapshot and cache, includi
     ];
     assert.deepEqual((await workbench.snapshot()).statuses, expected);
     const cached = await workbench.cache.read();
-    assert.deepEqual(cached.issues[workbench.selectedScope()].statuses.map(s => s.name), ["PR Waiting", "In Progress", "Done", "To Do"]);
+    assert.deepEqual(cached.issues[workbench.loadKey()].statuses.map(s => s.name), ["PR Waiting", "In Progress", "Done", "To Do"]);
     const reopened = new Workbench({ cache: workbench.cache, store: workbench.store });
     assert.equal(await reopened.hydrate(), true);
     assert.deepEqual((await reopened.snapshot()).statuses, expected, "a warm start shows the project's statuses before Jira answers");
@@ -666,7 +666,7 @@ test("without a status listing (v1, or a failed read) the filter still offers ev
         await until(t, () => loaded(workbench), { what: "project to load" });
         assert.ok(!runtime.calls.some(c => c.args?.name === "listJiraStatuses"));
         assert.deepEqual((await workbench.snapshot()).statuses, [{ name: "To Do", category: "new" }], "an earlier listing is not presented as current");
-        assert.deepEqual((await workbench.cache.read()).issues[workbench.selectedScope()].statuses, []);
+        assert.deepEqual((await workbench.cache.read()).issues[workbench.loadKey()].statuses, []);
         assert.equal(workbench.error, null, "a missing listing never fails the Jira refresh");
     }
 });

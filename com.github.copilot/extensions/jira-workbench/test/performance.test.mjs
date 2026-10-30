@@ -32,24 +32,27 @@ async function setup(t, runtime, { connection: connectionOptions = {}, workbench
     return { connection, workbench, make };
 }
 
-test("a 5,000-issue project loads in one pass with no redundant Jira calls", async t => {
+test("a 5,000-issue project loads only 100 items until the user requests more", async t => {
     const runtime = fakeRuntime({ issueCount: 5000, callMs: 5 });
     const { workbench } = await setup(t, runtime);
     const started = performance.now();
     const snapshot = await workbench.select(requested);
     const ms = performance.now() - started;
-    assert.equal(snapshot.issues.length, 5000);
+    assert.equal(snapshot.issues.length, 100);
+    assert.ok(snapshot.page.nextPageToken);
     assert.ok(ms < 2500, `select took ${ms.toFixed(0)}ms`);
-    assert.equal(runtime.counters.jiraExecutes, 1 + 1 + 1 + 50, "sites + projects + sprint-field probe + 50 issue pages, nothing repeated");
+    assert.equal(runtime.counters.jiraExecutes, 1 + 1 + 1 + 1, "sites + projects + sprint-field probe + one issue page, nothing repeated");
     assert.equal(runtime.counters.rebuilds, 1);
 });
 
-test("snapshots of a large project stay fast and scale linearly", async t => {
+test("snapshots of explicitly loaded large working sets stay fast and scale linearly", async t => {
     const timings = {};
     for (const count of [2000, 8000]) {
         const runtime = fakeRuntime({ issueCount: count });
         const { workbench } = await setup(t, runtime);
         await workbench.select(requested);
+        while (workbench.page.nextPageToken) await workbench.loadMore();
+        assert.equal(workbench.issues.length, count);
         await workbench.snapshot(); // warm the JIT
         const started = performance.now();
         await workbench.snapshot();
@@ -60,7 +63,7 @@ test("snapshots of a large project stay fast and scale linearly", async t => {
     assert.ok(timings[8000] / Math.max(timings[2000], 1) < 9, `scaling ${JSON.stringify(timings)}`);
 });
 
-test("reopening paints a 5,000-issue project from the warm cache without contacting Jira", async t => {
+test("reopening paints only the loaded page and its continuation from cache without contacting Jira", async t => {
     const runtime = fakeRuntime({ issueCount: 5000 });
     const { workbench, make } = await setup(t, runtime);
     await workbench.select(requested);
@@ -70,7 +73,8 @@ test("reopening paints a 5,000-issue project from the warm cache without contact
     const started = performance.now();
     assert.equal(await reopened.hydrate(), true);
     const ms = performance.now() - started;
-    assert.equal(reopened.issues.length, 5000);
+    assert.equal(reopened.issues.length, 100);
+    assert.equal(reopened.page.nextPageToken, workbench.page.nextPageToken);
     assert.equal(runtime.counters.executes, calls);
     assert.ok(ms < 600, `hydrate took ${ms.toFixed(0)}ms`);
     reopened.close();

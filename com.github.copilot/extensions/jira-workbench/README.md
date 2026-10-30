@@ -40,7 +40,8 @@ condensed version.
 3. Pick a Jira site and project, then select its Copilot repository independently.
    A Jira project ID is **not** a Copilot project ID.
 4. Use **Execution** for the next useful action, or **Hierarchy** for project
-   structure. All project work is included, whether or not it is in a sprint.
+   structure. Apply a project, JQL or saved-filter scope and page through its
+   work explicitly, whether or not it is in a sprint.
 5. Select an item to inspect requirements, dependencies, and trace links.
    Select the project title to inspect project-level coordination sessions.
 6. Use a preparation action to review scope, repository, objective, acceptance
@@ -56,6 +57,103 @@ brief. Issue briefs also offer an opt-in **Smart Commit comment**; see
 
 Every launch requests exactly one session, nested under the canvas-owning
 session; there is no automatic child fan-out.
+
+### Working scopes and bounded reads
+
+The default server scope is the selected project, ordered by most recently
+updated (`updated DESC, key DESC`); JQL without its own `ORDER BY` and saved
+filters use the same order. The tree sorts its own display, so the order only
+decides which items arrive on the first page. **Scope**
+also accepts JQL or a numeric saved Jira filter ID. JQL and filter scopes are
+intersected with the selected project; **Apply** validates the expression and
+stages its first page before persisting the definition in the project's
+preferences. Failed reads or preference writes retain the prior scope and
+loaded data. **Search loaded items**, status and sprint
+filters remain client-side controls. They cannot discover unloaded matches.
+Scope reads may overlap, but once a successful scope begins its durable
+commit, subsequent Apply, refresh and project-selection mutations wait until
+disk and memory agree. A failing successor retains that last committed scope.
+
+Each working-set read requests at most 100 items and returns Jira's actual
+continuation. **Load more** appends one page; it never crawls to a size cap.
+Page failures preserve the loaded set and cursor, with an explicit error.
+**Refresh** replaces the working set with a new first page only after a
+successful read. Cached data stays marked as cached until revalidated.
+
+Every first-page read (select, Apply, Refresh) also reads tracked work by ID:
+issues in the selected project with a durable session or PR link, or a queued,
+expired or failed launch request, that the page did not return. The lookup is
+project-constrained, read-only and capped at 300 IDs, pending requests first.
+Tracked issues are actionable work in the execution queue and hierarchy,
+labeled **Linked, outside scope**, and excluded from scope counts; a later page
+that returns one promotes it to a scope item. Lookup failures, unavailable
+identities and the limit are reported as warnings, never as an empty queue.
+When the lookup fails, linked items already loaded are kept but marked
+`unverified`: they derive execution as Jira-stale and cannot be prepared until a
+later read confirms them. A classified connection failure also marks the
+snapshot stale and skips the remaining reads so none can clear it. Requests and
+links committed while a first page is being read are reconciled before it is
+installed: their loaded issues are kept (also `unverified`), and a same-project
+parent read as context in that read becomes linked work. The first page probes
+the site's sprint field; continuation pages reuse that answer.
+
+Referenced ancestor keys or IDs are deduplicated and read in batches of 50
+without the working scope's constraints, recursively up to 32 levels.
+Cycle protection uses stable IDs and keys. These reads retrieve only the
+referenced parents, not their children. **Load more** passes every loaded
+item as a seed, so parents an earlier page could not read (including the parent
+of a retained parent) are retried, while resolved parents and parents
+confirmed missing for the current generation are skipped.
+Failed batches remain retryable; authentication and connection failures
+also reach the connection supervisor while already read items stay visible
+as stale data.
+Jira's hierarchy metadata determines
+type and level, including custom names such as Feature at level one.
+Missing or restricted parents have visible placeholders; failed ancestor
+reads and the depth safety limit are reported rather than hiding useful work.
+
+Ancestors are labeled context only (also in each tree row's accessible name)
+and cannot launch sessions. They do not increase scope totals or
+execution-queue counts. A later working-set page can promote a matching
+context item to work. All progress and descendant metrics describe loaded
+items, never complete child totals. When the scope is not the whole project or
+more pages remain, project and parent briefs carry a `partial-context` warning
+and the kickoff states that the descendant list is incomplete. Stories get the
+same kickoff statement about their subtasks, without a preview warning that
+would need acknowledging.
+
+Working-set caches include site, project and scope definition. Generation
+guards reject late scope, refresh and page responses, including an A-B-A
+scope switch. A page that was installed before a later refresh started still
+reports `loaded`. Project mappings, trace links and queued launch identities
+keep their existing site/project/issue keys. Changing scope invalidates
+brief previews but does not delete durable artifacts or requests.
+
+Execution evidence refresh reads every linked trace of the selected project's
+own loaded issues, as before scoped loading; its cost follows the number of
+linked items, not the project size. Items whose `projectId` is not the selected
+project, including context with no project metadata, cannot view, link or
+refresh traces using the selected project's mapping. Select its owning
+project to use those controls.
+
+Project-wide **Update Jira** gathers evidence from durable project links,
+independently of loaded scope pages. For up to 300 linked issues it uses the
+loaded rows and reads any that are not loaded (or not re-read) in
+project-constrained batches; it reports unreadable and over-limit identities as
+omitted, never as absent work. It reads the selected project's issues and statuses
+before any wait and rejects the sync if the project selection changed in the
+meantime, including a switch away and back. Workflow status choices exclude
+foreign context items.
+
+Canvas automation passes `{ kind, value }` to `apply_scope`. Supported kinds
+are `project`, `jql` and `filter`. `load_more` advances the working-set cursor.
+`get_state` returns `workingScope`, `workingSetKey`, `workingSetGeneration`,
+`page`, `pageError` and `ancestorWarnings`. `load_more` also returns a
+`pageResult` with the target, `loaded`, `failed` or `superseded` status and
+its error; `pageError` remains the combined banner.
+`scopeError` identifies the Apply error independently of other page errors,
+and Apply returns `applyResult.status` (`applied`, `failed` or `superseded`).
+Superseded page actions never announce a completed load.
 
 Existing sessions can be opened, explicitly linked by app session ID, or followed
 by a new session. Linking checks the session's Copilot project before saving it.
@@ -505,8 +603,11 @@ verification artifacts.
 - GitHub.com repositories only; GitHub Enterprise Server is not yet supported.
 - One default Copilot repository mapping per Jira project; explicit historical
   session links retain their original repository metadata.
-- Project loading stops with an explicit error above 10,000 issues; session
-  previews require a scope of at most 500 descendants.
+- Each page is bounded, but explicitly loading many pages still grows the
+  panel's in-memory working set. Jira must return a usable continuation when
+  more results remain. Pages ordered by `updated` can shift while you page, so
+  an item updated mid-paging appears only after **Refresh**. Session previews require at most 500 loaded descendants;
+  they do not imply that every child has been loaded.
 - Launches are agent-mediated and need the canvas-owning session to process them.
   If creation fails, record the error with `fail_request`; never retry an
   uncertain creation blindly. A request with no receipt after 15 minutes is shown

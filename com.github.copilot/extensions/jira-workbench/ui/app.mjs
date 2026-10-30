@@ -2,7 +2,7 @@ import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } f
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
-    signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption,
+    signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -15,6 +15,7 @@ const token = location.hash.slice(1);
 const filters = [["needs-me", "Needs me"], ["running", "Running"], ["prs", "PRs to review"], ["available", "Available to start"], ["all", "All work"]];
 const defaults = () => ({ view: "execution", executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", sprint: "all", scrollTop: 0, detailsOpen: false });
 let state = { sites: [], projects: [], appProjects: [], issues: [], links: {}, requests: [], executions: [], navigationReceipts: [], tree: { roots: [], warnings: [] }, catalogErrors: [] };
+let itemsById = new Map();
 let ui = defaults(), tab = "trace", focusedNode = null, scopeEpoch = 0;
 let selecting = false, scopeConfirmed = true, selectionVersion = 0, selectionChain = Promise.resolve(), pollPending = false, snapshotVersion = 0;
 let preferenceTimer, preferenceRequest, preferenceRevision = 0;
@@ -28,7 +29,6 @@ const initialPreferenceEdits = new Set();
 const disclosures = new Map(), linkDrafts = new Map(), submittedPreviews = new Set();
 const connectionMessages = new Map();
 const executionRefreshes = new Map();
-
 function el(tag, text, className) {
     const element = document.createElement(tag);
     if (text !== undefined && text !== null) element.textContent = String(text);
@@ -63,9 +63,12 @@ const actionKey = (kind, target, scope = state.scope) => JSON.stringify([scope |
 const jiraUrl = key => `${state.site.url}/browse/${encodeURIComponent(key)}`;
 const itemUrl = item => item.id === "project" ? `${state.site.url}/jira/software/projects/${encodeURIComponent(state.project.key)}/summary` : jiraUrl(item.key);
 function nodeLinks(id) {
+    if (foreignContext(getItem(id))) return { sessions: [], prs: [] };
     const trace = state.site && state.project ? state.links[scopeKey(state.site.id, state.project.id, id)] : null;
     return { sessions: [], prs: [], ...trace };
 }
+// Traces belong to the selected project's own issues; anything else (including unknown project) is foreign context.
+const foreignContext = item => Boolean(item && item.id !== "project" && item.projectId !== state.project?.id);
 function setSource(element, text, tone, detail) {
     element.textContent = text;
     element.dataset.tone = tone;
@@ -75,7 +78,7 @@ function setSource(element, text, tone, detail) {
 const nodeLaunch = id => launchState({ local: actions.get(actionKey("launch", id)), requests: state.requests, nodeId: id });
 const nodePending = id => launchBlocks(nodeLaunch(id));
 function getItem(id) {
-    if (id !== "project") return state.issues.find(item => item.id === id);
+    if (id !== "project") return itemsById.get(id);
     if (!state.project) return null;
     return {
         id: "project", key: state.project.key, summary: state.project.name, type: "Project", level: 2,
@@ -98,6 +101,16 @@ async function api(path, input, signal) {
         throw error;
     }
     return result;
+}
+async function loadMoreAction(context) {
+    const version = ++snapshotVersion;
+    const snapshot = await api("load-more", {});
+    if (!context.current()) return { status: "superseded" };
+    if (version === snapshotVersion) acceptSnapshot(snapshot);
+    // The server reports what this request did, even if a later refresh has since replaced the working set.
+    if (snapshot.pageResult?.status === "superseded") return { status: "superseded" };
+    if (snapshot.pageResult?.error) throw new Error(snapshot.pageResult.error);
+    return snapshot;
 }
 function refreshExecution(source = "all", epoch = scopeEpoch, afterCurrent = false) {
     const key = `${epoch}:${source}`;
@@ -190,6 +203,7 @@ function flushPreferences() {
 function acceptSnapshot(snapshot, { allowScopeChange = false } = {}) {
     if (!snapshot || !Array.isArray(snapshot.issues)) throw new Error("The workbench returned an invalid snapshot.");
     const changedScope = snapshot.scope !== state.scope;
+    const changedWorkingSet = state.workingSetKey && snapshot.workingSetKey !== state.workingSetKey;
     const hasInitialEdits = !state.scope && initialPreferenceEdits.size > 0;
     if (changedScope && state.scope && !allowScopeChange) {
         scopeConfirmed = false;
@@ -225,8 +239,15 @@ function acceptSnapshot(snapshot, { allowScopeChange = false } = {}) {
     }
     scopeConfirmed = true;
     connectionMessage("scope", "");
+    if (changedWorkingSet && !changedScope) {
+        closePreview();
+        ui.selected = null;
+        collapsed.clear();
+        treeDigest = inspectorDigest = "";
+    }
     if (preview && state.mapping?.id !== snapshot.mapping?.id) markPreviewDirty();
     state = { ...snapshot, executions: snapshot.executions || [], navigationReceipts: snapshot.navigationReceipts || [] };
+    itemsById = new Map(state.issues.map(issue => [issue.id, issue]));
     reconcileReceipts();
     render({ force: changedScope });
     updateLaunchControls();
@@ -260,6 +281,7 @@ function updateActionControl(control) {
 }
 function actionButton(text, kind, target, nodeId, work, options = {}) {
     const b = button(text, () => void perform({ kind, target, nodeId, label: text, work, ...options }), options.className);
+    b.dataset.focusKey = `action:${kind}:${target}`;
     return configureActionControl(b, kind, target, options.disabled);
 }
 async function perform({ kind, target, nodeId, label, work, success, refresh = false, global = false, previewId }) {
@@ -269,11 +291,15 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
     if ((selecting || !scopeConfirmed || standaloneHost(state)) && !global) return;
     if (kind === "prepare" && nodePending(nodeId)) return;
     const record = { kind, scope, nodeId, previewId, status: "pending", message: `${label}...`, dismissed: false };
+    const restorePagingFocus = kind === "load-more" && document.activeElement?.dataset.actionKey === key;
     actions.set(key, record);
     paintFeedback();
     try {
         const result = await work({ scope, epoch, current: () => scope === state.scope && epoch === scopeEpoch && !selecting && scopeConfirmed });
-        if (result?.requestId) {
+        if (result?.status === "superseded") {
+            record.status = "superseded";
+            record.message = `${label} was superseded; no page was installed by this action.`;
+        } else if (result?.requestId) {
             if (!["queued", "acknowledged", "failed"].includes(result.status)) throw new Error("The host returned an unrecognized receipt status.");
             record.requestId = result.requestId;
             record.status = result.status;
@@ -307,6 +333,13 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         }
         paintFeedback();
         updateLaunchControls();
+        if (restorePagingFocus && scope === state.scope && epoch === scopeEpoch && !selecting
+            && (document.activeElement === document.body || document.activeElement?.disabled)) {
+            renderTree(true);
+            const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && !element.hidden);
+            if (control) control.focus({ preventScroll: true });
+            else if (!focusRow(nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
+        }
     }
 }
 function reconcileReceipts() {
@@ -422,6 +455,20 @@ function render({ force = false } = {}) {
     selectOptions($("repository"), state.appProjects.map(p => ({ value: p.id, label: p.repo || p.name })), state.mapping?.id, "Choose a Copilot repository");
     renderStatusFilter();
     renderSprintFilter();
+    // Replace the inputs only when the applied scope or project changes, so an unapplied or rejected edit stays put.
+    const scopeSignature = JSON.stringify([state.scope, state.workingScope]);
+    if ($("scope-kind").dataset.signature !== scopeSignature) {
+        $("scope-kind").dataset.signature = scopeSignature;
+        $("scope-kind").value = state.workingScope?.kind || "project";
+        $("scope-value").value = state.workingScope?.value || "";
+    }
+    $("scope-value").disabled = $("scope-kind").value === "project" || selecting || !state.project;
+    $("scope-kind").disabled = $("apply-scope").disabled = selecting || !state.project;
+    $("apply-scope").setAttribute("aria-busy", String(selecting));
+    const scopeSummary = state.project ? workingSetSummary(state) : "Choose a project to load a working set.";
+    if ($("scope-summary").textContent !== scopeSummary) $("scope-summary").textContent = scopeSummary;
+    $("load-more").hidden = !state.page?.nextPageToken;
+    configureActionControl($("load-more"), "load-more", loadMoreTarget(), selecting || !state.project);
     configureActionControl($("project-start"), "prepare", "project", !state.project || !state.mapping || state.cached);
     configureActionControl($("sync-jira"), "launch", "project", selecting || !state.project || !state.mapping || Boolean(state.error) || state.cached || nodePending("project"));
     configureActionControl($("refresh"), "refresh-jira", "jira", selecting || !state.project);
@@ -446,11 +493,11 @@ function render({ force = false } = {}) {
         $("errors").replaceChildren(...errors.map(message => el("p", message)));
     }
     $("errors").hidden = !errors.length;
-    const work = state.issues.filter(i => i.level <= 0);
+    const work = state.issues.filter(i => !i.contextOnly && i.level <= 0);
     const allLinks = ["project", ...state.issues.map(item => item.id)].map(nodeLinks);
     const metrics = [
-        [state.issues.filter(i => i.level > 0).length, "Epics / parents"],
-        [work.length, "Work items"],
+        [state.issues.filter(i => !i.contextOnly && i.level > 0).length, "Loaded parents"],
+        [work.length, "Loaded work items"],
         [work.filter(i => i.category === "done").length, "Jira done"],
         [new Set(allLinks.flatMap(trace => trace.sessions.map(s => s.id))).size, "Linked sessions"],
         [new Set(allLinks.flatMap(trace => trace.prs.map(p => `${p.repo}#${p.number}`))).size, "Pull requests"],
@@ -544,6 +591,7 @@ function renderExecutionFilters() {
     restoreFocus($("execution-filters"), focus);
 }
 function primaryAction(item) {
+    if (item.contextOnly) return badge(item.missing ? "Unavailable parent" : "Context-only ancestor");
     const primary = executionFor(item.id).primary || { kind: "inspect", label: "Inspect work" };
     const label = primary.label || "Inspect work";
     if (primary.kind === "prepare") {
@@ -720,7 +768,7 @@ function renderTree(force = false) {
         : state.issues.length ? "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters." : "No visible issues in this project.", "empty"));
     if (!rows.some(row => row.dataset.nodeId === focusedNode)) focusedNode = rows.find(row => row.dataset.nodeId === ui.selected)?.dataset.nodeId || rows[0]?.dataset.nodeId;
     rows.forEach(row => { row.tabIndex = row.dataset.nodeId === focusedNode ? 0 : -1; });
-    $("work-count").textContent = `${rows.length} visible work scope${rows.length === 1 ? "" : "s"}`;
+    $("work-count").textContent = `${rows.length} visible loaded item${rows.length === 1 ? "" : "s"}`;
     $("work-scroll").scrollTop = ui.scrollTop;
     restoreFocus(container, focus);
 }
@@ -728,7 +776,8 @@ function itemName(item, node, compact = false) {
     const title = el("div", null, "item-title");
     const meta = el("div", null, "item-keyline");
     meta.append(el("span", (item.type || "Work").slice(0, 1), `type-icon ${item.level > 0 ? "epic" : item.level < 0 ? "subtask" : "story"}`), el("span", item.key, "issue-key"));
-    if (item.level > 0 || item.id === "project") meta.append(el("small", compact ? item.type : item.id === "project" ? "Project scope" : "Parent scope", "muted"));
+    if (item.level > 0 || item.id === "project") meta.append(el("small", item.id === "project" ? "Project scope" : item.type, "muted"));
+    if (scopeLabel(item)) meta.append(badge(scopeLabel(item)));
     const summary = el("span", item.summary, "summary");
     if (compact) {
         const line = el("div", null, "execution-title");
@@ -737,7 +786,7 @@ function itemName(item, node, compact = false) {
         title.append(line);
     } else title.append(meta, summary);
     if (item.parentKey && !compact) title.append(el("small", `In ${item.parentKey}`));
-    if (node?.total) title.append(el("small", `${node.done}/${node.total} descendant items Jira done`));
+    if (node?.total) title.append(el("small", `${node.done}/${node.total} loaded descendant items Jira done`));
     return title;
 }
 function appendCompactObserved(container, nodeId) {
@@ -771,7 +820,7 @@ function createRow(item, depth, parentId = "", hasChildren = false) {
         row.setAttribute("aria-level", String(depth + 1));
         row.setAttribute("aria-selected", String(ui.selected === item.id));
     } else if (ui.selected === item.id) row.setAttribute("aria-current", "true");
-    row.setAttribute("aria-label", `${item.key} ${item.summary}, Jira ${item.status}`);
+    row.setAttribute("aria-label", `${item.key} ${item.summary}, Jira ${item.status}${scopeLabel(item) ? `, ${scopeLabel(item)}` : ""}`);
     row.addEventListener("click", () => chooseItem(item.id));
     row.addEventListener("focus", () => {
         focusedNode = item.id;
@@ -882,7 +931,7 @@ function renderInspector(force = false) {
     const primary = execution.primary;
     if (primary && primary.kind !== "prepare" && primary.kind !== "inspect") tools.append(primaryAction(item));
     tools.append(actionButton(trace.sessions.length ? "Start follow-up" : "Start session", "prepare", item.id, item.id,
-        context => preparePreview(item.id, defaultMode(item, execution), context), { className: "primary", disabled: !state.mapping, success: "Session scope ready for review." }),
+        context => preparePreview(item.id, defaultMode(item, execution), context), { className: "primary", disabled: !state.mapping || item.contextOnly, success: "Session scope ready for review." }),
     link("Open in Jira", itemUrl(item), "button-link"));
     head.append(tools, feedbackFor(item.id));
     const tabs = el("div", null, "tabs");
@@ -935,6 +984,10 @@ function traceStep(container, number, title) {
     return step;
 }
 function renderTrace(body, item) {
+    if (foreignContext(item)) {
+        body.append(el("p", "Select this item's own Jira project to view, link or refresh its Copilot trace. Cross-project context does not use this project's repository mapping.", "muted"));
+        return;
+    }
     const traces = nodeLinks(item.id), bar = el("div", null, "trace-toolbar");
     bar.append(el("span", traces.verifiedAt ? `Trace checked ${time(traces.verifiedAt)}` : "Links not refreshed yet", "muted"),
         actionButton("Refresh trace", "trace", item.id, item.id, () => api("trace", { nodeId: item.id }), { refresh: true, success: "Trace refresh returned; see source freshness below." }));
@@ -1194,6 +1247,7 @@ function selectProject(cloudId, jiraProjectId) {
     scopeEpoch++;
     selecting = true;
     scopeConfirmed = false;
+    connectionMessage("apply-scope", "");
     connectionMessage("selection", "Loading selected project...");
     render();
     selectionChain = selectionChain.then(async () => {
@@ -1237,6 +1291,42 @@ function selectProject(cloudId, jiraProjectId) {
     });
 }
 
+$("scope-kind").addEventListener("change", () => { $("scope-value").disabled = $("scope-kind").value === "project"; });
+$("apply-scope").addEventListener("click", async () => {
+    if (selecting || !state.project) return;
+    const restoreFocus = document.activeElement === $("apply-scope");
+    const definition = { kind: $("scope-kind").value, value: $("scope-value").value };
+    closePreview();
+    selecting = true;
+    const epoch = ++scopeEpoch;
+    snapshotVersion++;
+    connectionMessage("apply-scope", "Applying scope; reading the first Jira page.");
+    render();
+    try {
+        const snapshot = await api("scope", definition);
+        if (epoch === scopeEpoch) {
+            acceptSnapshot(snapshot);
+            connectionMessage("apply-scope", snapshot.scopeError || (snapshot.applyResult?.status === "superseded"
+                ? "Scope application was superseded." : "Scope applied."));
+        }
+    } catch (error) {
+        if (epoch === scopeEpoch) connectionMessage("apply-scope", `Scope was not applied: ${error.message}`);
+    } finally {
+        if (epoch === scopeEpoch) {
+            selecting = false;
+            // A view change made just before Apply could not be saved while it ran.
+            savePreferences();
+            render({ force: true });
+            if (restoreFocus && document.activeElement === document.body) $("apply-scope").focus({ preventScroll: true });
+        }
+    }
+});
+// Keyed by working-set generation: a Load more still pending for a replaced scope must not disable the new one.
+function loadMoreTarget() { return `working-set:${state.workingSetGeneration ?? 0}`; }
+$("load-more").addEventListener("click", () => void perform({
+    kind: "load-more", target: loadMoreTarget(), label: "Load more", work: loadMoreAction, refresh: true,
+    success: "Working-set page loaded.",
+}));
 $("search").addEventListener("input", () => { ui.query = $("search").value; savePreferences("query"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("status-filter").addEventListener("change", () => { ui.category = $("status-filter").value; savePreferences("category"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("sprint-filter").addEventListener("change", () => { ui.sprint = $("sprint-filter").value || "all"; savePreferences("sprint"); renderExecutionFilters(); renderTree(true); paintFeedback(); });

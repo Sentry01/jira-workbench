@@ -149,7 +149,7 @@ try {
         gateway: sidebarConnection.gateway, store: new Store(directory), cache: new Cache(directory),
         github: async () => null, send: async () => { throw new Error("a sidebar panel must not send prompts"); }, instanceId: "sidebar",
     });
-    let sidebarServer;
+    let sidebarServer, sidebarPage;
     try {
         assert.ok(await sidebar.hydrate(), "the sidebar panel paints the saved project from disk");
         sidebarServer = await startServer(sidebar);
@@ -158,7 +158,7 @@ try {
         // View preferences (the selected row) are the panel's own; session evidence and launches must not change.
         const evidence = async () => { const { mappings, links, requests } = await sidebar.store.read(); return JSON.stringify({ mappings, links, requests }); };
         const before = await evidence();
-        const sidebarPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+        sidebarPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
         sidebarPage.on("pageerror", error => errors.push(error.message));
         const sidebarBanner = () => sidebarPage.evaluate(() => document.querySelector("#errors").hidden ? "" : document.querySelector("#errors").innerText);
         await sidebarPage.goto(sidebarServer.url);
@@ -187,6 +187,9 @@ try {
         assert.equal(await banner(), "", "the panel in a real session is unaffected");
         await sidebarPage.screenshot({ path: screenshotPath("reconnect-7-sidebar.png") });
     } finally {
+        // Close the page first, as the app closes the webview before onClose: a page still polling every 5s can keep a
+        // keep-alive socket busy past Node's 5s keep-alive timeout, and server.close() waits for every socket.
+        await sidebarPage?.close();
         await sidebarServer?.close();
         sidebarConnection.stop();
         sidebar.close();

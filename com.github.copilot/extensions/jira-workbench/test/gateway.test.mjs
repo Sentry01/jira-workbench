@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Gateway, resolveToolResult } from "../lib/gateway.mjs";
+import { normalizeIssue as normalize } from "../lib/model.mjs";
 import { isConnector, preferred, signInError } from "../lib/runtime.mjs";
 import { CONNECTOR, fakeRuntime, PROJECTS } from "./fake-runtime.mjs";
 
@@ -42,7 +43,7 @@ function runtime(respond) {
 }
 
 
-test("loads every issue page with an explicit project filter, including epics outside sprints", async () => {
+test("loads one bounded issue page and continues only when requested, including parents outside sprints", async () => {
     const calls = [];
     const gateway = new Gateway(runtime((name, args) => {
         calls.push({ name, args });
@@ -51,9 +52,16 @@ test("loads every issue page with an explicit project filter, including epics ou
             { issues: [issue("1", "DEMO-1", null, "Epic")], nextPageToken: "next", isLast: false };
     }));
     const result = await gateway.issues("site-a", "42");
-    assert.equal(result.issues.length, 2);
+    assert.equal(result.issues.length, 1);
+    assert.equal(result.nextPageToken, "next");
+    assert.equal(calls.filter(call => !/sprint/i.test(call.args.jql)).length, 1);
+    // Load more reads fresh, which bypasses the short-lived read cache.
+    const next = await gateway.issues("site-a", "42", { cursor: result.nextPageToken, fresh: true });
+    assert.equal(next.issues[0].key, "DEMO-2");
+    assert.equal(next.nextPageToken, null);
     const pages = calls.filter(call => !/sprint/i.test(call.args.jql));
     assert.equal(pages.length, 2);
+    assert.equal(calls.length - pages.length, 1, "a continuation page does not repeat the sprint probe");
     assert.match(pages[0].args.jql, /^project = 42 /);
     assert.equal(pages[1].args.nextPageToken, "next");
     assert.ok(pages[0].args.fields.includes("parent"));
@@ -109,7 +117,127 @@ test("Jira gateway refuses writes and rejects a project identifier that could in
 
 test("pagination failures are visible instead of pretending the hierarchy is complete", async () => {
     const gateway = new Gateway(runtime(() => ({ issues: [issue("1", "DEMO-1")], nextPageToken: "same" })));
-    await assert.rejects(gateway.issues("site-a", "42"), /pagination/i);
+    await assert.rejects(gateway.issues("site-a", "42", { cursor: "same" }), /pagination/i);
+});
+
+test("scoped pages constrain only working items; recursive ancestor batches cross projects and use hierarchy metadata", async () => {
+    const calls = [];
+    const child = issue("3", "DEMO-3", "PARENT-2");
+    const feature = issue("2", "PARENT-2", "PORT-1", "Feature");
+    feature.fields.project.id = "43";
+    feature.fields.issuetype.hierarchyLevel = 1;
+    const portfolio = issue("1", "PORT-1", null, "Portfolio Epic");
+    portfolio.fields.project.id = "44";
+    portfolio.fields.issuetype.hierarchyLevel = 2;
+    const gateway = new Gateway(runtime((name, args) => {
+        calls.push(args);
+        if (/sprint is not EMPTY/.test(args.jql)) return { issues: [], isLast: true };
+        if (args.jql.startsWith("key in")) return { issues: args.jql.includes("PARENT-2") ? [feature] : [portfolio], isLast: true };
+        assert.match(args.jql, /^project = 42 AND \(assignee = currentUser\(\)\) ORDER BY updated DESC$/);
+        return { issues: [child], isLast: true };
+    }));
+    const page = await gateway.issues("site-a", "42", { scope: { kind: "jql", value: "assignee = currentUser() ORDER BY updated DESC" } });
+    const parents = await gateway.ancestors("site-a", [...page.issues, ...page.issues]);
+    assert.deepEqual(parents.issues.map(row => [row.type, row.level, row.contextOnly]), [["Feature", 1, true], ["Portfolio Epic", 2, true]]);
+    assert.equal(calls.filter(args => args.jql.startsWith("key in")).length, 2);
+    assert.ok(calls.filter(args => args.jql.startsWith("key in")).every(args => !/project|assignee|status|updated|component/.test(args.jql)));
+});
+
+test("ancestor lookups deduplicate, terminate cycles and leave missing references unresolved without sibling reads", async () => {
+    let reads = 0;
+    const gateway = new Gateway(runtime((name, args) => {
+        reads++;
+        assert.match(args.jql, /^key in/);
+        return { issues: args.jql.includes("PARENT-1") ? [issue("1", "PARENT-1", "DEMO-2")] : [], isLast: true };
+    }));
+    const seeds = [issue("2", "DEMO-2", "PARENT-1"), issue("3", "DEMO-3", "PARENT-1"), issue("4", "DEMO-4", "MISSING-1")].map(raw => normalize(raw));
+    const result = await gateway.ancestors("site-a", seeds);
+    assert.equal(result.issues.length, 1);
+    assert.equal(reads, 1);
+    assert.deepEqual(result.warnings, []);
+});
+
+test("ancestor failures are explicit while already retrieved parents remain useful", async () => {
+    const gateway = new Gateway(runtime(() => { throw new Error("Permission denied"); }), { transientRetries: 0 });
+    const result = await gateway.ancestors("site-a", [normalize(issue("2", "DEMO-2", "PARENT-1"))]);
+    assert.deepEqual(result.issues, []);
+    assert.match(result.warnings[0], /Parent lookup failed: Permission denied/);
+});
+
+test("missing completion metadata fails explicitly", async () => {
+    const unknown = new Gateway(runtime(() => ({ issues: [issue("2", "DEMO-2")] })));
+    await assert.rejects(unknown.issuePage("site-a", "project = 42"), /completion|continuation/);
+});
+
+test("explicit final cursor pages win over total/offset and stale continuation metadata", async () => {
+    const gateway = new Gateway(runtime(() => ({
+        issues: [issue("150", "DEMO-150")], isLast: true, total: 150, nextPageToken: "last",
+    })));
+    const page = await gateway.issuePage("site-a", "project = 42", { cursor: "last" });
+    assert.equal(page.issues.length, 1);
+    assert.equal(page.nextPageToken, null);
+    assert.equal(page.total, 150);
+});
+
+test("ancestor paging walks only new seeds and remembers missing references within a generation", async () => {
+    let calls = 0;
+    const gateway = new Gateway(runtime((name, args) => {
+        calls++;
+        assert.doesNotMatch(args.jql, /MISSING-1.*MISSING-2/);
+        return { issues: [], isLast: true };
+    }));
+    const first = normalize(issue("1", "DEMO-1", "MISSING-1"));
+    const a = await gateway.ancestors("site-a", [first]);
+    const b = await gateway.ancestors("site-a", [normalize(issue("2", "DEMO-2", "MISSING-2"))], { existing: [first], attemptedParents: a.attemptedParents });
+    await gateway.ancestors("site-a", [first], { attemptedParents: b.attemptedParents });
+    assert.equal(calls, 2, "previous missing parents are not retried on each new page");
+});
+
+test("durable issue identity reads stay bounded and constrained to the selected project", async () => {
+    let calls = 0;
+    const gateway = new Gateway(runtime((name, args) => {
+        calls++;
+        assert.match(args.jql, /^project = 42 AND id in/);
+        assert.ok(args.jql.match(/,/g)?.length < 50 || !args.jql.includes(","));
+        assert.ok(args.fields.includes("customfield_10020"), "linked work keeps its sprint membership");
+        return { issues: [], isLast: true };
+    }));
+    gateway.sprintFields.set("site-a", "customfield_10020");
+    await gateway.lookupIssues("site-a", "42", Array.from({ length: 123 }, (_, i) => String(i + 1)));
+    assert.equal(calls, 3);
+    await assert.rejects(gateway.lookupIssues("site-a", "42", ["bad"]), /numeric/);
+});
+
+test("durable identity batches follow short cursor pages and reject cycles and unrelated results", async () => {
+    const calls = [];
+    const gateway = new Gateway(runtime((name, args) => {
+        calls.push(args.nextPageToken || null);
+        return args.nextPageToken
+            ? { issues: [issue("2", "DEMO-2")], isLast: true }
+            : { issues: [issue("1", "DEMO-1")], nextPageToken: "second", isLast: false };
+    }));
+    assert.deepEqual((await gateway.lookupIssues("site-a", "42", ["1", "2"])).map(row => row.id), ["1", "2"]);
+    assert.deepEqual(calls, [null, "second"]);
+    const cycle = new Gateway(runtime((name, args) => ({ issues: [issue("1", "DEMO-1")], nextPageToken: args.nextPageToken === "a" ? "b" : "a" })));
+    await assert.rejects(cycle.lookupIssues("site-a", "42", ["1", "2", "3", "4"]), /repeated a cursor|exceeded/);
+    const unrelated = new Gateway(runtime(() => ({ issues: [issue("99", "DEMO-99")], isLast: true })));
+    await assert.rejects(unrelated.lookupIssues("site-a", "42", ["1"]), /unrequested/);
+});
+
+test("failed ancestor batches are retryable while successful empty lookups remain remembered", async () => {
+    const gateway = new Gateway(runtime(() => ({})));
+    let attempts = 0;
+    gateway.issuePage = async () => {
+        if (!attempts++) throw Object.assign(new Error("Temporary connection loss"), { kind: "transient" });
+        return { issues: [normalize(issue("10", "PARENT-10"))], nextPageToken: null };
+    };
+    const seeds = [normalize(issue("1", "DEMO-1", "PARENT-10"))];
+    const failed = await gateway.ancestors("site-a", seeds);
+    assert.equal(failed.connectionError, "Temporary connection loss");
+    assert.deepEqual(failed.attemptedParents, []);
+    const retried = await gateway.ancestors("site-a", seeds, { attemptedParents: failed.attemptedParents });
+    assert.equal(retried.issues[0].key, "PARENT-10");
+    assert.deepEqual(retried.attemptedParents, ["PARENT-10"]);
 });
 
 

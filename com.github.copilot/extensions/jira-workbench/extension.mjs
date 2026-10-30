@@ -18,6 +18,7 @@ let resolveReady;
 const ready = new Promise(resolve => { resolveReady = resolve; });
 const string = { type: "string", minLength: 1 };
 const schema = (properties = {}, required = Object.keys(properties)) => ({ type: "object", additionalProperties: false, properties, required });
+const scopeSchema = schema({ kind: { type: "string", enum: ["project", "jql", "filter"] }, value: { type: "string", maxLength: 4000 } }, ["kind"]);
 const action = (name, description, inputSchema, run) => ({
     name, description, inputSchema,
     handler: async ctx => {
@@ -37,7 +38,9 @@ const session = await joinSession({
         actions: [
             action("get_state", "Read the hierarchy, durable trace links, queued launches and source freshness.", schema(), w => w.snapshot()),
             action("refresh_catalog", "Discover accessible Jira sites and Copilot repository projects.", schema(), w => w.catalog({ fresh: true })),
-            action("select_project", "Show a Jira project, including its backlog, epics and subtasks.", schema({ cloudId: string, jiraProjectId: string }), (w, input) => w.select(input)),
+            action("select_project", "Load the first bounded page of a Jira project's saved working scope.", schema({ cloudId: string, jiraProjectId: string }), (w, input) => w.select(input)),
+            action("apply_scope", "Apply and persist a Project, JQL or saved filter scope within the selected project, then load its first 100 items.", scopeSchema, (w, input) => w.applyScope(input)),
+            action("load_more", "Load the next working-set page using Jira's continuation; preserve loaded data on failure.", schema(), w => w.loadMore()),
             action("configure_repository", "Save the separate Copilot repository mapping for the selected Jira project.", schema({ copilotProjectId: string }), (w, input) => w.map(input)),
             action("refresh", "Refresh Jira hierarchy; preserve but mark stale data on failure.", schema(), w => w.refresh({ fresh: true })),
             action("refresh_execution", "Reconcile linked session intervention signals and GitHub evidence for this project.", schema({ source: { type: "string", enum: ["all", "sessions", "github"] } }, []), (w, input) => w.refreshExecution(input)),

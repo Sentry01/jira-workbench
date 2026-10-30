@@ -68,6 +68,11 @@ jobs:
         env:
           SCREENSHOT_DIR: ${{ runner.temp }}/screens
 
+      - name: Verify scoped loading
+        run: node verification/verify-scope.mjs
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/screens
+
       - name: Upload screenshots
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -46,6 +46,8 @@ export async function startServer(workbench, { assets = pinned, updater = null }
         "/api/select": input => workbench.select(input),
         "/api/map": input => workbench.map(input),
         "/api/refresh": () => workbench.refresh({ fresh: true }),
+        "/api/scope": input => workbench.applyScope(input),
+        "/api/load-more": () => workbench.loadMore(),
         "/api/sign-in": () => workbench.signIn(),
         "/api/refresh-execution": input => workbench.refreshExecution(input),
         "/api/trace": input => workbench.refreshTrace(input.nodeId),

@@ -51,7 +51,7 @@ test("one search rule covers key, summary, assignee and parent key, in both view
     assert.equal(matches(rows[4], "other-1", "new"), true, "a parent outside the project is still searchable");
     // The hierarchy uses the same rule: searching a parent key keeps every child of that parent.
     assert.deepEqual(keys(filterTree(buildTree(rows).roots, "DEMO-2")), ["DEMO-1", "DEMO-2", "DEMO-3"]);
-    assert.deepEqual(keys(filterTree(buildTree(rows).roots, "OTHER-1")), ["DEMO-5"]);
+    assert.deepEqual(keys(filterTree(buildTree(rows).roots, "OTHER-1")), ["OTHER-1", "DEMO-5"]);
     assert.deepEqual(keys(filterTree(buildTree(rows).roots, "", "done")), ["DEMO-1", "DEMO-2", "DEMO-3"]);
 });
 
@@ -89,7 +89,7 @@ test("sprint filtering matches membership and keeps hierarchy ancestors for both
     assert.equal(matches(sprintRows[2], "", "all", "sprint:12"), false);
     assert.equal(matches(sprintRows[2], "", "all", "none"), true);
     assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots, "", "all", "sprint:12")), ["DEMO-1", "DEMO-2"]);
-    assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots, "", "all", "none")), ["DEMO-1", "DEMO-2", "DEMO-3", "DEMO-4", "DEMO-5"]);
+    assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots, "", "all", "none")), ["DEMO-1", "DEMO-2", "DEMO-3", "OTHER-1", "DEMO-5", "DEMO-4"]);
     assert.deepEqual(keys(filterTree(buildTree(sprintRows).roots)), keys(buildTree(sprintRows).roots));
 });
 

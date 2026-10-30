@@ -1,15 +1,16 @@
 # Verification harnesses
 
 Browser checks that run the real canvas UI. They are development tools and are not
-installed with the extension. There are three harnesses:
+installed with the extension. There are four harnesses:
 
 | Harness | Runs against | In CI |
 | --- | --- | --- |
 | [`verify-canvas.mjs`](#verify-canvasmjs-isolated-workflow) | Fake Jira, Copilot and GitHub services | Yes |
 | [`verify-reconnect.mjs`](#verify-reconnectmjs-mcp-connection-resilience) | A behavioral model of the MCP runtime | Yes |
+| [`verify-scope.mjs`](#verify-scopemjs-bounded-scopes-and-context) | Synthetic scoped Jira pages and cross-project parents | Yes |
 | [`verify-live.mjs`](#verify-livemjs-read-only-live-check) | Your real, open canvas (read-only) | No |
 
-CI's **Browser harnesses** job runs the first two on every pull request, on Linux
+CI's **Browser harnesses** job runs the three synthetic harnesses on every pull request, on Linux
 with Google Chrome, and uploads their screenshots as an artifact when one fails.
 
 Install the browser driver once, from the repository root. The repository has no
@@ -31,7 +32,7 @@ ln -s "$SCRATCH/node_modules" node_modules
 rm node_modules
 ```
 
-All three harnesses, and the screenshot generator, need a Chromium-based browser.
+All four harnesses, and the screenshot generator, need a Chromium-based browser.
 They default to Microsoft Edge on macOS; set `BROWSER_EXECUTABLE` to a Chrome,
 Edge, or Chromium binary anywhere else. Set `HEADED=1` to watch a run, and
 `SCREENSHOT_DIR` to keep the screenshots (they go to a temporary directory by
@@ -83,6 +84,20 @@ WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verifica
 
 It caught a real usability bug: the UI polled every 5s even while reconnecting, so a
 recovery the server made in milliseconds took 5s to appear.
+
+## `verify-scope.mjs`: bounded scopes and context
+
+Exercises explicit JQL and saved-filter application, persisted scope, one-page
+initial loading, real cursor continuation, failed-page retention and retry,
+cross-project Feature and Portfolio Epic context and its accessible labels, scope
+isolation, per-generation **Load more**, loaded-count labels and linked work kept
+outside the loaded pages.
+It writes `scoped-loading.png` from synthetic
+data only. No real service is contacted.
+
+```sh
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-scope.mjs
+```
 
 ## `verify-live.mjs`: read-only live check
 
