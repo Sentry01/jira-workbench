@@ -15,11 +15,13 @@ async function mapLimit(items, limit, work) {
 // the shape get_sessions_status documents for a session blocked on input.
 // A PR is evidence only when the host names both its number and its repository: a session's own project_repo
 // says nothing about where its PR was opened.
+// The ID is always the one asked for: observed live (Oct 2026), the host can return `id` masked as "******", and
+// storing that echo lost the session from the trace for good.
 function sessionRecord(detail, id, status = detail) {
     const input = status.awaiting_input;
     const pr = detail.created_pr_number && detail.created_pr_repo;
     return {
-        id: detail.id || id, name: detail.name || id, branch: detail.branch || null,
+        id, name: detail.name || id, branch: detail.branch || null,
         activity: status.activity?.status || detail.activity?.status || "unknown", projectId: detail.project_id,
         awaitingInput: status.awaiting_user_input || input ? {
             question: typeof input?.question === "string" ? input.question : "This session is waiting for your input.",

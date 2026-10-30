@@ -120,3 +120,24 @@ test("writes store brief descendants as keys and drop retired trace origins", as
     assert.deepEqual(saved.links["site/42/1"].sessions, [{ id: "one" }]);
     assert.ok((await readFile(join(path, "state.json"))).length < before / 5);
 });
+
+test("restores a masked session ID from the one attached launch receipt for its scope", async t => {
+    const path = await directory(t);
+    const scope = "cloud/42/7";
+    const request = (id, sessionId, contextHash) => ({ requestId: id, scope, status: "attached", sessionId, contextHash, at: "2026-10-13T07:58:50.037Z" });
+    await writeFile(join(path, "state.json"), JSON.stringify({
+        version: 1, mappings: {},
+        links: {
+            [scope]: { sessions: [{ id: "******", contextHash: "b" }, { id: "kept-session" }], prs: [] },
+            "cloud/42/8": { sessions: [{ id: "******" }], prs: [] },
+        },
+        requests: {
+            r1: request("r1", "kept-session", "a"),
+            r2: request("r2", "real-session", "b"),
+            r3: request("r3", "other-session", "c"),
+        },
+    }));
+    const saved = await new Store(path).read();
+    assert.deepEqual(saved.links[scope].sessions.map(s => s.id), ["real-session", "kept-session"]);
+    assert.equal(saved.links["cloud/42/8"].sessions[0].id, "******", "no receipt for that scope: left for the user to relink");
+});
