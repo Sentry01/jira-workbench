@@ -2,6 +2,7 @@ import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { isSessionId } from "./validate.mjs";
 
 const STALE_LOCK_MS = 30_000;
 const FINISHED_REQUESTS_KEPT = 20;
@@ -35,6 +36,23 @@ async function breakStaleLock(lockPath) {
     }
     await unlink(aside);
     return true;
+}
+
+// Earlier versions stored the host's echoed session ID, which the host could return masked ("******"). The launch
+// receipt kept the real ID; restore it only when the receipt and invalid record uniquely match each other.
+function repairSessionIds(data) {
+    for (const [scope, link] of Object.entries(data.links)) {
+        if (!Array.isArray(link?.sessions)) continue;
+        const invalidSessions = link.sessions.filter(session => session && !isSessionId(session.id));
+        for (const session of invalidSessions) {
+            const owners = Object.values(data.requests).filter(r => r?.scope === scope && r.status === "attached"
+                && isSessionId(r.sessionId) && !link.sessions.some(s => s?.id === r.sessionId)
+                && (!session.contextHash || r.contextHash === session.contextHash));
+            if (owners.length === 1 && invalidSessions.filter(s => !s.contextHash || s.contextHash === owners[0].contextHash).length === 1)
+                session.id = owners[0].sessionId;
+        }
+    }
+    return data;
 }
 
 // The panel re-reads this file every few seconds and rewrites it on every preference change, so keep it small.
@@ -71,7 +89,7 @@ export class Store {
         const data = JSON.parse(text);
         if (data.version !== 1 || !data.mappings || !data.links || !data.requests)
             throw new Error("Unsupported Jira Workbench state; preserve the file and check the extension version.");
-        return data;
+        return repairSessionIds(data);
     }
     async update(change) {
         await mkdir(this.path, { recursive: true, mode: 0o700 });

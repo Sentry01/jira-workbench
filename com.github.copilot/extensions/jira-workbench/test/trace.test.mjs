@@ -245,3 +245,16 @@ test("session observations read the host's observed status fields only", async t
     assert.equal(session.awaitingPlan, true);
     assert.deepEqual(session.awaitingInput, { question: "Which strategy?", choices: ["A"], requestId: "question-1" });
 });
+
+test("a masked session ID from the host never replaces the ID that was linked", async t => {
+    const { workbench, gateway, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const original = gateway.call;
+    gateway.call = async (name, args) => {
+        const result = await original(name, args);
+        return name === "get_session" ? { ...result, id: "******" } : result;
+    };
+    await workbench.linkSession({ nodeId: "2", sessionId: "session-1" });
+    await workbench.refreshTrace("2");
+    assert.deepEqual((await store.read()).links["cloud-demo/42/2"].sessions.map(s => s.id), ["session-1"]);
+});
