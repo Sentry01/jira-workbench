@@ -39,16 +39,17 @@ async function breakStaleLock(lockPath) {
 }
 
 // Earlier versions stored the host's echoed session ID, which the host could return masked ("******"). The launch
-// receipt kept the real ID; restore it when exactly one attached receipt for the scope can own the record.
+// receipt kept the real ID; restore it only when the receipt and invalid record uniquely match each other.
 function repairSessionIds(data) {
     for (const [scope, link] of Object.entries(data.links)) {
         if (!Array.isArray(link?.sessions)) continue;
-        for (const session of link.sessions) {
-            if (!session || isSessionId(session.id)) continue;
+        const invalidSessions = link.sessions.filter(session => session && !isSessionId(session.id));
+        for (const session of invalidSessions) {
             const owners = Object.values(data.requests).filter(r => r?.scope === scope && r.status === "attached"
                 && isSessionId(r.sessionId) && !link.sessions.some(s => s?.id === r.sessionId)
                 && (!session.contextHash || r.contextHash === session.contextHash));
-            if (owners.length === 1) session.id = owners[0].sessionId;
+            if (owners.length === 1 && invalidSessions.filter(s => !s.contextHash || s.contextHash === owners[0].contextHash).length === 1)
+                session.id = owners[0].sessionId;
         }
     }
     return data;
