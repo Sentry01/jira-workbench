@@ -55,17 +55,15 @@ WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/scr
 ```
 
 The browser steps need the `playwright-core` driver and a Chromium-based browser.
-The repository has no `package.json`, so install the driver without saving it,
-at the version CI uses:
+Install the driver from the lockfile in `verification/`, as CI does:
 
 ```sh
-npm install --no-save --no-package-lock --no-audit --no-fund playwright-core@1.63.0
+npm ci --prefix verification
 ```
 
-`node_modules/` is git-ignored. If a parent directory of your clone has its own
-`package.json`, npm installs there instead; [`verification/README.md`](verification/README.md)
-shows how to use a scratch directory, and documents the `BROWSER_EXECUTABLE` and
-`HEADED` options.
+`node_modules/` is git-ignored. [`verification/README.md`](verification/README.md)
+explains how the driver is pinned and updated, and documents the
+`BROWSER_EXECUTABLE` and `HEADED` options.
 
 CI runs on every pull request and on every push to `main`:
 

@@ -15,24 +15,18 @@ installed with the extension. There are six harnesses:
 CI's **Browser harnesses** job runs the five synthetic harnesses on every pull request, on Linux
 with Google Chrome, and uploads their screenshots as an artifact when one fails.
 
-Install the browser driver once, from the repository root. The repository has no
-`package.json`, so install it without saving, at the version CI uses:
+Install the browser driver once, from the repository root. It is the only
+dependency, pinned with an integrity hash in
+[`package-lock.json`](package-lock.json), and CI installs it the same way:
 
 ```sh
-npm install --no-save --no-package-lock --no-audit --no-fund playwright-core@1.63.0
+npm ci --prefix verification
 ```
 
-If a parent directory has its own `package.json`, npm installs there instead. In that
-case, install into a scratch directory and link it in for the run (`node_modules` is
-git-ignored only as a directory, so remove the link before you commit):
-
-```sh
-SCRATCH=$(mktemp -d) && echo '{"name":"pw","private":true}' > "$SCRATCH/package.json"
-npm install --prefix "$SCRATCH" --no-audit --no-fund playwright-core@1.63.0
-ln -s "$SCRATCH/node_modules" node_modules
-# ... run the harnesses ...
-rm node_modules
-```
+This installs into `verification/node_modules/` (git-ignored), where the harnesses
+and `docs/screenshots.mjs` resolve it. Dependabot proposes driver updates; to bump it
+by hand, change the version in [`package.json`](package.json) and run
+`npm install --prefix verification` to refresh the lockfile.
 
 All six harnesses, and the screenshot generator, need a Chromium-based browser.
 They default to Microsoft Edge on macOS; set `BROWSER_EXECUTABLE` to a Chrome,
