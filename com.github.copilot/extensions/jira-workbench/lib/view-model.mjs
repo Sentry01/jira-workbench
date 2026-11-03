@@ -74,7 +74,9 @@ const EXPIRED = `Launch outcome unknown: no session receipt after ${REQUEST_TTL_
 // An expired request is reported but, like a cleared one, never blocks a new launch.
 export function launchState({ local = null, requests = [], nodeId, now = Date.now() }) {
     if (local && BLOCKING.has(local.status)) return local.status;
-    const statuses = requests.filter(request => request.nodeId === nodeId).map(request => requestStatus(request, now));
+    const own = requests.filter(request => request.nodeId === nodeId);
+    const statuses = own.map(request => requestStatus(request, now));
+    if (own.some(request => request.sendError && !request.claimedAt && requestStatus(request, now) === "queued")) return "uncertain";
     if (statuses.includes("queued")) return "queued";
     if (statuses.includes("expired")) return "expired";
     return null;
@@ -87,7 +89,10 @@ export function launchLabel(state) {
 // The status line of a launch request card in the trace.
 export function requestOutcome(request, now = Date.now()) {
     const status = requestStatus(request, now);
+    if (status === "queued" && request.claimedAt) return "Queued (claimed by the launching agent)";
+    if (status === "queued" && request.sendError) return "Outcome unknown (Copilot did not confirm the prompt; no retry was sent)";
     if (status === "queued") return "Queued";
+    if (status === "failed" && request.supersededBy) return "Superseded (no session was created)";
     if (status === "expired") return `Outcome unknown (no receipt after ${REQUEST_TTL_MS / 60_000} minutes)`;
     if (status === "cancelled") return "Cleared";
     if (status === "failed") return "Failed";
@@ -105,7 +110,11 @@ export function receiptMessage(kind, receipt) {
 // (an attached receipt whose session the trace has not shown yet).
 export function launchUpdate(receipt, { linkedSessionIds = [], now = Date.now() } = {}) {
     const status = requestStatus(receipt, now);
+    if (status === "failed" && receipt.supersededBy)
+        return { status: "failed", message: "Launch superseded by a newer launch; no session was created." };
     if (status === "failed") return { status: "failed", message: receiptMessage("launch", receipt) };
+    if (status === "queued" && receipt.sendError && !receipt.claimedAt)
+        return { status: "uncertain", message: `Launch outcome unknown: ${receipt.sendError}. No retry was sent. Refresh live state and inspect the launch receipt before starting again.` };
     if (status === "expired") return { status: "expired", message: EXPIRED };
     if (status === "cancelled") return { status: "cancelled", message: "Launch request cleared without a session receipt. A late receipt still attaches its session." };
     if (status === "queued") return { status: "queued", message: receiptMessage("launch", receipt) };

@@ -113,9 +113,12 @@ export async function startServer(workbench, { assets = pinned, updater = null }
             if (!input || Array.isArray(input) || typeof input !== "object") { reply(res, 400, { error: "An object is required." }); return; }
             reply(res, 200, await routes[path](input));
         })().catch(error => {
-            const internal = isInternalError(error);
+            // A 5xx marks an unknown outcome (a launch prompt that may have been delivered), so it passes through.
+            const outcome = error instanceof Error && Number.isInteger(error.status) && error.status >= 500 && error.status <= 599;
+            const internal = !outcome && isInternalError(error);
             if (internal) console.error("Jira Workbench: internal error", req.method, req.url?.split("?")[0], error);
             if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
+            else if (outcome) reply(res, error.status, { error: error.message });
             else if (internal) reply(res, 500, { error: INTERNAL_MESSAGE });
             else reply(res, 400, { error: error.message || "Workbench action failed." });
         });

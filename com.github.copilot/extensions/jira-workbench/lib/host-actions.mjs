@@ -4,7 +4,8 @@ import { assertRepo, assertSessionId } from "./validate.mjs";
 
 const COMPLETED_RECEIPT_LIMIT = 100;
 // Observed live (see gateway.mjs): getCurrentMetadata can stop answering for minutes. An unanswered navigation
-// would stay pending and keep its target locked, so both calls are bounded and a timeout fails the receipt.
+// would stay pending and keep its target locked, so every call (including the fallback prompt) is bounded and a
+// timeout fails the receipt.
 const TIMEOUTS_MS = { metadata: 8_000, execute: 30_000 };
 
 // bounded() words its timeout for calls that retry on their own; navigation is retried only by the user.
@@ -182,7 +183,7 @@ export class HostActions {
                 receipt.message = "Navigation queued; awaiting a host navigation receipt.";
                 request.awaitingReceipt = true;
                 queuedReceipt = copyReceipt(receipt);
-                await this.#session.send({ prompt: navigationPrompt(this.#instanceId, receipt.requestId, name, args) });
+                await answered(this.#session.send({ prompt: navigationPrompt(this.#instanceId, receipt.requestId, name, args) }), this.#timeouts.execute);
             }
         } catch (error) {
             request.awaitingReceipt = false;

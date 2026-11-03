@@ -140,7 +140,7 @@ states. None of them means the work is done.
 - **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch. An issue session moves only its own issue to In Progress when it starts implementing (after plan approval in Plan mode). **Update Jira** starts one confirmed session that makes status-only fixes across the project, picks target statuses from the project's own workflow, and never reopens Done issues. An issue session puts its issue key in its branch, commits and pull request title, and writes one Smart Commit `#comment` in its final commit only when you tick **Smart Commit comment** in the brief. These limits are set by the session's prompt and are not technically enforced; see [Security](SECURITY.md).
 - **No fan-out.** One confirmed launch creates exactly one session.
 - **No auto-merge or auto-approve.** Review actions open the real Copilot surface, and you decide.
-- **No pending action shown as finished.** A pending request is labeled as pending. A launch with no session receipt after 15 minutes is marked as unknown, stops blocking new work, and can be cleared.
+- **No pending action shown as finished.** A pending request is labeled as pending. A launch whose prompt Copilot did not confirm, or with no session receipt after 15 minutes, is marked as unknown and can be cleared; nothing is retried automatically.
 - **None of your private data in the source.** The source embeds no tokens, and none of your Jira domains, project IDs, repository names or user paths. Authentication stays with the Atlassian MCP connection and the GitHub CLI.
 
 ## Documentation

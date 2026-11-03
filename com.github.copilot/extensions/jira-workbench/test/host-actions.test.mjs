@@ -704,3 +704,18 @@ test("a queued native PR view does not swallow a later request to open the PR's 
     assert.match(calls.sent[1].prompt, new RegExp(`Call navigate_to with exactly \\{"id":"${sessionId}"\\}`));
     void native; void owned; void again;
 });
+
+test("a fallback prompt send that never settles fails its receipt within the bound, and a later click sends again", async () => {
+    let hang = true;
+    const { actions, calls } = fixture({ tools: [], timeouts: { metadata: 1000, execute: 30 }, send: () => hang ? new Promise(() => {}) : randomUUID() });
+    const started = Date.now();
+    const first = await actions.openSession(sessionId);
+    assert.ok(Date.now() - started < 2000, "the receipt settles at the bound");
+    assert.equal(first.status, "failed");
+    assert.match(first.message, /^Copilot did not answer the navigation request within \d+s\. Try again\.$/);
+    hang = false;
+    const retried = await actions.openSession(sessionId);
+    assert.notEqual(retried.requestId, first.requestId, "the target is released");
+    assert.equal(retried.status, "queued");
+    assert.equal(calls.sent.length, 2);
+});

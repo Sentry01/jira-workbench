@@ -211,3 +211,18 @@ test("unexpected handler failures answer 500 with a generic message; action erro
     assert.equal(logged.length, 3, "each internal failure is logged with its detail");
     assert.match(String(logged[1].at(-1)?.message ?? logged[1].at(-1)), /EACCES/);
 });
+
+
+test("an unknown launch outcome keeps its 5xx status so the panel shows it as unknown, not failed", async t => {
+    const post = await panel(t, {
+        snapshot: async () => ({}),
+        launch: async () => { throw Object.assign(new Error("Copilot did not confirm it received the prompt within 30s"), { status: 504 }); },
+        syncJira: async () => { throw Object.assign(new Error("Copilot reported an error after the prompt was sent"), { status: 502 }); },
+        prepare: async () => { throw Object.assign(new Error("Refused"), { status: 302 }); },
+    });
+    const launch = await post("/api/launch", {});
+    assert.equal(launch.status, 504);
+    assert.deepEqual(await launch.json(), { error: "Copilot did not confirm it received the prompt within 30s" });
+    assert.equal((await post("/api/sync-jira", {})).status, 502);
+    assert.equal((await post("/api/prepare", {})).status, 400, "only a 5xx passes through");
+});

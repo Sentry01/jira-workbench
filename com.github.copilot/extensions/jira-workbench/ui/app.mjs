@@ -87,12 +87,17 @@ function getItem(id) {
         description: "Project coordination scope. Child issues keep their own Jira statuses, sessions and pull requests.",
     };
 }
+// The server bounds its prompt send at 30s; this bounds the whole launch or Update Jira call, so a hung request
+// cannot keep the panel waiting (and polling paused) forever.
+const LAUNCH_TIMEOUT_MS = 45_000;
 async function api(path, input, signal) {
     const response = await fetch(`/api/${path}`, {
         method: input === undefined ? "GET" : "POST",
         headers: { "x-workbench-token": token, "Content-Type": "application/json" },
         ...(input === undefined ? {} : { body: JSON.stringify(input) }),
         ...(signal ? { signal } : {}),
+    }).catch(error => {
+        throw error?.name === "TimeoutError" ? new Error(`Jira Workbench did not answer within ${Math.round(LAUNCH_TIMEOUT_MS / 1000)}s`) : error;
     });
     const result = await response.json();
     if (!response.ok) {
@@ -1232,7 +1237,7 @@ async function confirmLaunch() {
     await perform({
         kind: "launch", target: reviewed.node.id, nodeId: reviewed.node.id, previewId: reviewed.id, label: `Start session for ${reviewed.node.key}`, refresh: true,
         work: async () => {
-            const receipt = await api("launch", { previewId: reviewed.id, contextHash: reviewed.brief.hash, acknowledgedWarnings });
+            const receipt = await api("launch", { previewId: reviewed.id, contextHash: reviewed.brief.hash, acknowledgedWarnings }, AbortSignal.timeout(LAUNCH_TIMEOUT_MS));
             if (!receipt.requestId || receipt.status !== "queued") throw new Error("Launch did not return a queued receipt; inspect live state before trying again.");
             if (preview?.id === reviewed.id && previewScope === scope) closePreview();
             return receipt;
@@ -1373,7 +1378,7 @@ $("confirm-sync").addEventListener("click", () => {
     $("sync-dialog").close();
     void perform({
         kind: "launch", target: "project", nodeId: "project", label: "Update Jira", refresh: true,
-        work: () => api("sync-jira", {}),
+        work: () => api("sync-jira", {}, AbortSignal.timeout(LAUNCH_TIMEOUT_MS)),
     });
 });
 $("refresh").addEventListener("click", () => void perform({

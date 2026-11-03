@@ -645,6 +645,7 @@ export class Workbench {
     syncJira() { return this.inSession(() => this.launches.syncJira()); }
     recordSession(input) { return this.launches.recordSession(input); }
     failRequest(input) { return this.launches.failRequest(input); }
+    claimRequest(input) { return this.launches.claimRequest(input); }
     refreshExecution(options, internal) { return this.inSession(() => this.trace.refreshExecution(options, internal)); }
     refreshTrace(nodeId) { return this.inSession(() => this.trace.refreshTrace(nodeId)); }
     attach(scope, sessionId, projectId, requestId) { return this.trace.attach(scope, sessionId, projectId, requestId); }

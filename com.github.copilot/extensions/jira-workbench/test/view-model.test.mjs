@@ -164,6 +164,24 @@ test("a launch request card states its outcome, including expired and cleared re
     assert.equal(requestOutcome({ status: "cancelled", at: old }, NOW), "Cleared");
     assert.equal(requestOutcome({ status: "failed", at }, NOW), "Failed");
     assert.equal(requestOutcome({ status: "attached", at }, NOW), "Awaiting linked session evidence");
+    assert.equal(requestOutcome({ status: "queued", at: old, claimedAt: ago(60_000) }, NOW), "Queued (claimed by the launching agent)");
+    assert.equal(requestOutcome({ status: "queued", at, sendError: "Timed out" }, NOW), "Outcome unknown (Copilot did not confirm the prompt; no retry was sent)");
+    assert.equal(requestOutcome({ status: "failed", at, supersededBy: "r2" }, NOW), "Superseded (no session was created)");
+});
+
+test("an unconfirmed or claimed launch is never shown as done, and an unconfirmed one reads as unknown", () => {
+    const state = requests => launchState({ requests, nodeId: "6", now: NOW });
+    assert.equal(state([{ nodeId: "6", status: "queued", at: ago(60_000), sendError: "Timed out" }]), "uncertain");
+    assert.equal(state([{ nodeId: "6", status: "queued", at: ago(REQUEST_TTL_MS + 1), claimedAt: ago(60_000) }]), "queued", "a claim keeps blocking past the TTL");
+    assert.equal(state([{ nodeId: "6", status: "queued", at: ago(60_000), sendError: "Timed out", claimedAt: ago(1000) }]), "queued", "a claim proves delivery");
+    const update = receipt => launchUpdate({ requestId: "r", at: ago(60_000), ...receipt }, { now: NOW });
+    assert.deepEqual(update({ status: "queued", sendError: "Copilot did not confirm it received the prompt within 30s" }), {
+        status: "uncertain",
+        message: "Launch outcome unknown: Copilot did not confirm it received the prompt within 30s. No retry was sent. Refresh live state and inspect the launch receipt before starting again.",
+    });
+    assert.equal(update({ status: "queued", claimedAt: ago(1000) }).status, "queued");
+    assert.deepEqual(update({ status: "failed", supersededBy: "r2", error: "Superseded by a newer launch; no session was created." }),
+        { status: "failed", message: "Launch superseded by a newer launch; no session was created." });
 });
 
 test("a stored request moves this panel's launch action to its outcome", () => {

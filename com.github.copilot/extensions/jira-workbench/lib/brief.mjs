@@ -42,14 +42,16 @@ export function criteriaFromDescription(description = "") {
 
 const strip = value => typeof value === "string" ? value.replace(HIDDEN, "") : value;
 
-export function createBrief({ node, parent, children = [], mapping, siteUrl, mode, fields = {}, dependencyWarnings = [], smartCommitComment = false }) {
+// criteriaText: the full description when node.description was shortened to fit the kickoff budget, so the default
+// acceptance criteria still come from the whole source.
+export function createBrief({ node, parent, children = [], mapping, siteUrl, mode, fields = {}, dependencyWarnings = [], smartCommitComment = false, criteriaText = node.description }) {
     if (!["plan", "autopilot"].includes(mode)) throw new Error("A valid brief intent is required.");
     if (typeof smartCommitComment !== "boolean") throw new Error("The Smart Commit comment choice must be true or false.");
     if (!fields || typeof fields !== "object" || Array.isArray(fields)
         || Object.keys(fields).some(key => !["objective", "acceptanceCriteria", "constraints"].includes(key)))
         throw new Error("Brief fields must contain only objective, acceptance criteria and constraints.");
     const objective = text(strip(fields.objective ?? node.summary), "Objective", 2000, true);
-    const extracted = criteriaFromDescription(node.description);
+    const extracted = criteriaFromDescription(criteriaText);
     const sourceCriteriaLimit = extracted.length > 50 || extracted.join("\n").length > 10000;
     const inputCriteria = fields.acceptanceCriteria ?? (sourceCriteriaLimit ? [] : extracted);
     if (!Array.isArray(inputCriteria) && typeof inputCriteria !== "string") throw new Error("Acceptance criteria must be a list or text.");
