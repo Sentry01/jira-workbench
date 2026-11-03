@@ -5,7 +5,7 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
-    smartCommitOption,
+    smartCommitOption, retryNotice, nextFocusKey,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -262,9 +262,9 @@ test("every Start button opens with the same mode: the execution's, else Plan fo
 test("the banner follows the connection state: sign-in, automatic retry, or plain errors", () => {
     const base = { catalogErrors: [], error: null, backgroundError: null, warming: false, tree: { warnings: [] }, connection: null };
     const down = { state: "down", reason: "MCP server atlassian is stopped.", server: "atlassian", nextCheckAt: new Date(NOW + 4_200).toISOString() };
-    assert.deepEqual(banner(base, { now: NOW }), { signIn: null, errors: [] });
-    assert.deepEqual(banner({ ...base, catalogErrors: ["Jira: MCP server atlassian is stopped."], connection: down }, { now: NOW }).errors,
-        ["Jira: MCP server atlassian is stopped.", "Reconnecting automatically in about 4s. No need to press Reload connections."]);
+    assert.deepEqual(banner(base, { now: NOW }), { signIn: null, errors: [], retryAt: null });
+    assert.deepEqual(banner({ ...base, catalogErrors: ["Jira: MCP server atlassian is stopped."], connection: down }, { now: NOW }),
+        { signIn: null, errors: ["Jira: MCP server atlassian is stopped.", "Reconnecting automatically. No need to press Reload connections."], retryAt: down.nextCheckAt });
     assert.deepEqual(banner({ ...base, error: "timeout", warming: true, connection: down }, { now: NOW }).errors,
         ["Jira refresh failed: timeout. Last good data retained.", "Reconnecting now…"]);
     assert.deepEqual(banner({ ...base, error: "timeout", connection: { ...down, state: "ready", nextCheckAt: null } }, { now: NOW }).errors,
@@ -275,7 +275,7 @@ test("the banner follows the connection state: sign-in, automatic retry, or plai
         ...base, connection: signin, error: "Re-authentication required", backgroundError: "Atlassian sign-in has expired.",
         catalogErrors: ["Jira: needs sign-in", "Copilot projects: timeout"],
     }, { now: NOW });
-    assert.deepEqual(expired, { signIn: { server: "atlassian", connector: false }, errors: ["Copilot projects: timeout"] }, "one Sign in action, no Jira noise");
+    assert.deepEqual(expired, { signIn: { server: "atlassian", connector: false }, errors: ["Copilot projects: timeout"], retryAt: null }, "one Sign in action, no Jira noise");
     assert.deepEqual(signInNeeded({ connection: { ...signin, server: null } }), { server: null, connector: false });
     assert.deepEqual(signInNeeded({ connection: { ...signin, server: "cc-_rovo", connector: true } }), { server: "cc-_rovo", connector: true },
         "the app's connector is signed in by the app, so the panel offers no Sign in button");
@@ -284,6 +284,33 @@ test("the banner follows the connection state: sign-in, automatic retry, or plai
         "Background refresh failed: disk full", "Parent cycle",
         "Execution snapshot references unavailable work items: 9. Refresh the workbench to reconcile the sources.",
     ]);
+});
+
+test("the alert text stays the same from one second to the next while reconnecting, so it is announced once", () => {
+    const snapshot = {
+        catalogErrors: ["Jira: MCP server atlassian is stopped."], error: "timeout", backgroundError: null, warming: false, tree: { warnings: [] },
+        connection: { state: "down", reason: "stopped", server: "atlassian", nextCheckAt: new Date(NOW + 58_000).toISOString() },
+    };
+    const first = banner(snapshot, { now: NOW });
+    for (const later of [1_000, 2_000, 30_000, 60_000]) assert.deepEqual(banner(snapshot, { now: NOW + later }), first);
+    assert.equal(first.retryAt, snapshot.connection.nextCheckAt, "the next attempt is returned for display outside the alert");
+    assert.equal(banner({ ...snapshot, warming: true }, { now: NOW }).retryAt, null, "no next attempt while one is running");
+});
+
+test("the next attempt shows as a clock time that changes once per attempt, not every second", () => {
+    const at = new Date(NOW + 42_000).toISOString(), format = value => `T${Date.parse(value) - NOW}`;
+    assert.equal(retryNotice(at, { now: NOW, format }), "Next attempt at T42000.");
+    assert.equal(retryNotice(at, { now: NOW + 1_000, format }), "Next attempt at T42000.");
+    assert.equal(retryNotice(at, { now: NOW + 42_000, format }), "Retrying now.");
+    assert.equal(retryNotice(null, { now: NOW, format }), "");
+    assert.equal(retryNotice("not a date", { now: NOW, format }), "");
+});
+
+test("after a notice is dismissed, focus moves to the next notice, else the previous one", () => {
+    assert.equal(nextFocusKey(["a", "b", "c"], "b"), "c");
+    assert.equal(nextFocusKey(["a", "b", "c"], "c"), "b");
+    assert.equal(nextFocusKey(["a"], "a"), null);
+    assert.equal(nextFocusKey(["a", "b"], "z"), null);
 });
 
 test("a panel with no Copilot session behind it shows one explanation, no per-source failures and no retry promise", () => {
@@ -297,7 +324,7 @@ test("a panel with no Copilot session behind it shows one explanation, no per-so
     assert.equal(standaloneHost(failing), true);
     assert.equal(standaloneHost({ connection: { ...standalone, state: "down" } }), false);
     assert.equal(standaloneHost({ connection: null }), false);
-    assert.deepEqual(banner(failing, { now: NOW }), { signIn: null, errors: [`${reason} The data shown is the last saved copy.`] });
+    assert.deepEqual(banner(failing, { now: NOW }), { signIn: null, errors: [`${reason} The data shown is the last saved copy.`], retryAt: null });
     assert.deepEqual(banner({ ...failing, warming: true }, { now: NOW }).errors, [`${reason} The data shown is the last saved copy.`], "no Reconnecting now either");
     assert.deepEqual(banner({ ...failing, issues: [] }, { now: NOW }).errors, [reason], "no saved data, no claim about it");
     assert.deepEqual(banner({ ...failing, tree: { warnings: ["Parent cycle"] } }, { now: NOW, unavailable: ["9"] }).errors, [

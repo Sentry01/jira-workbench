@@ -273,7 +273,9 @@ export const standaloneHost = snapshot => snapshot.connection?.state === "standa
 // The sign-in call to action and the error banner. An expired sign-in is one clear call to action, not a pile of
 // per-source failures and a retry promise; a panel with no session behind it is one explanation.
 // `unavailable` lists execution node IDs with no loaded work item.
-export function banner(snapshot, { now = Date.now(), unavailable = [] } = {}) {
+// The errors go into an assertive alert, so they never carry a ticking number: the next attempt is returned as
+// `retryAt` for display outside the alert (see retryNotice), and the alert text changes only when the state does.
+export function banner(snapshot, { unavailable = [] } = {}) {
     const signIn = signInNeeded(snapshot), connection = snapshot.connection;
     const data = [
         ...snapshot.tree.warnings,
@@ -282,15 +284,32 @@ export function banner(snapshot, { now = Date.now(), unavailable = [] } = {}) {
         ...(unavailable.length ? [`Execution snapshot references unavailable work items: ${unavailable.join(", ")}. Refresh the workbench to reconcile the sources.`] : []),
     ];
     if (standaloneHost(snapshot))
-        return { signIn: null, errors: [`${connection.reason}${snapshot.issues?.length ? " The data shown is the last saved copy." : ""}`, ...data] };
+        return { signIn: null, errors: [`${connection.reason}${snapshot.issues?.length ? " The data shown is the last saved copy." : ""}`, ...data], retryAt: null };
     const errors = [
         ...(signIn ? snapshot.catalogErrors.filter(message => !message.startsWith("Jira:")) : snapshot.catalogErrors),
         ...(snapshot.error && !signIn ? [`Jira refresh failed: ${snapshot.error}. Last good data retained.`] : []),
         ...(snapshot.backgroundError && !(signIn && /sign-in has expired/.test(snapshot.backgroundError)) ? [`Background refresh failed: ${snapshot.backgroundError}`] : []),
         ...data,
     ];
-    const retryAt = connection && connection.state !== "ready" ? connection.nextCheckAt : null;
-    if (!signIn && (snapshot.catalogErrors.length || snapshot.error) && (snapshot.warming || retryAt))
-        errors.push(snapshot.warming ? "Reconnecting now…" : `Reconnecting automatically in about ${Math.max(1, Math.round((Date.parse(retryAt) - now) / 1000))}s. No need to press Reload connections.`);
-    return { signIn, errors };
+    const nextCheckAt = connection && connection.state !== "ready" ? connection.nextCheckAt : null;
+    let retryAt = null;
+    if (!signIn && (snapshot.catalogErrors.length || snapshot.error) && (snapshot.warming || nextCheckAt)) {
+        errors.push(snapshot.warming ? "Reconnecting now…" : "Reconnecting automatically. No need to press Reload connections.");
+        if (!snapshot.warming) retryAt = nextCheckAt;
+    }
+    return { signIn, errors, retryAt };
+}
+
+// The next automatic attempt as a clock time: it changes once per attempt, never every second.
+export function retryNotice(retryAt, { now = Date.now(), format }) {
+    const at = Date.parse(retryAt);
+    if (!retryAt || Number.isNaN(at)) return "";
+    return at <= now ? "Retrying now." : `Next attempt at ${format(retryAt)}.`;
+}
+
+// Where keyboard focus goes when the item with `removed` key leaves a list: the next item, else the previous one.
+export function nextFocusKey(keys, removed) {
+    const index = keys.indexOf(removed);
+    if (index < 0) return null;
+    return keys[index + 1] ?? keys[index - 1] ?? null;
 }

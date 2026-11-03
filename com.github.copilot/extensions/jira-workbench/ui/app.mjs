@@ -3,6 +3,7 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
+    retryNotice, nextFocusKey,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -29,6 +30,7 @@ const initialPreferenceEdits = new Set();
 const disclosures = new Map(), linkDrafts = new Map(), submittedPreviews = new Set();
 const connectionMessages = new Map();
 const executionRefreshes = new Map();
+const noticeRows = new Map();
 function el(tag, text, className) {
     const element = document.createElement(tag);
     if (text !== undefined && text !== null) element.textContent = String(text);
@@ -59,6 +61,16 @@ function link(text, href, className = "") {
 }
 const badge = (text, tone = "") => el("span", text, `badge ${tone}`);
 const time = value => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "not refreshed";
+const clockTime = value => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+// A control that becomes unavailable while it has focus keeps the focus: it is marked aria-disabled instead of
+// disabled (a disabled element drops focus to the page), and the click guard below ignores it.
+function setInert(control, inert) {
+    const keep = inert && document.activeElement === control;
+    control.disabled = inert && !keep;
+    if (keep) control.setAttribute("aria-disabled", "true");
+    else control.removeAttribute("aria-disabled");
+}
+const inert = control => control.disabled || control.getAttribute("aria-disabled") === "true";
 const actionKey = (kind, target, scope = state.scope) => JSON.stringify([scope || "", kind, target]);
 const jiraUrl = key => `${state.site.url}/browse/${encodeURIComponent(key)}`;
 const itemUrl = item => item.id === "project" ? `${state.site.url}/jira/software/projects/${encodeURIComponent(state.project.key)}/summary` : jiraUrl(item.key);
@@ -282,8 +294,8 @@ function updateActionControl(control) {
     const action = actions.get(control.dataset.actionKey);
     const pending = action && ["pending", "queued", "uncertain"].includes(action.status);
     const launchPending = control.dataset.prepareNode && nodePending(control.dataset.prepareNode);
-    control.disabled = control.dataset.baseDisabled === "true" || Boolean(pending) || Boolean(launchPending) ||
-        (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed || standaloneHost(state)));
+    setInert(control, control.dataset.baseDisabled === "true" || Boolean(pending) || Boolean(launchPending) ||
+        (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed || standaloneHost(state))));
     control.textContent = pending ? action.status === "pending" ? "Working..." : action.status === "queued" ? "Queued" : "Check receipt" : control.dataset.baseLabel;
     control.setAttribute("aria-busy", String(action?.status === "pending"));
 }
@@ -299,7 +311,7 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
     if ((selecting || !scopeConfirmed || standaloneHost(state)) && !global) return;
     if (kind === "prepare" && nodePending(nodeId)) return;
     const record = { kind, scope, nodeId, previewId, clientId, status: "pending", message: `${label}...`, dismissed: false };
-    const restorePagingFocus = kind === "load-more" && document.activeElement?.dataset.actionKey === key;
+    const restoreControlFocus = document.activeElement?.dataset.actionKey === key;
     actions.set(key, record);
     paintFeedback();
     try {
@@ -342,9 +354,10 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         }
         paintFeedback();
         updateLaunchControls();
-        if (restorePagingFocus && scope === state.scope && epoch === scopeEpoch && !selecting
+        // The control normally keeps focus (see setInert); if it was hidden or replaced, focus its row instead.
+        if (restoreControlFocus && (global || scope === state.scope) && epoch === scopeEpoch && !selecting
             && (document.activeElement === document.body || document.activeElement?.disabled)) {
-            renderTree(true);
+            if (kind === "load-more") renderTree(true);
             const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && !element.hidden);
             if (control) control.focus({ preventScroll: true });
             else if (!focusRow(nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
@@ -377,21 +390,9 @@ function reconcileReceipts() {
 function paintFeedback() {
     for (const control of document.querySelectorAll("[data-action-key]")) updateActionControl(control);
     $("repository").disabled = selecting || !scopeConfirmed || !state.project || !state.appProjects.length || actions.get(actionKey("map", "repository"))?.status === "pending";
-    const visible = [...actions.values()].filter(a => (a.scope === null || a.scope === state.scope) && !a.dismissed);
-    const signature = JSON.stringify(visible.map(a => [a.status, a.message]));
-    if ($("notice").dataset.signature !== signature) {
-        $("notice").dataset.signature = signature;
-        $("notice").replaceChildren(...visible.map(record => {
-            const row = el("div", null, `action-notice ${["failed", "uncertain", "expired"].includes(record.status) ? "notice-error" : ""}`);
-            row.append(el("span", record.message));
-            if (!["pending", "queued", "uncertain"].includes(record.status)) {
-                const dismiss = button("Dismiss", () => { record.dismissed = true; paintFeedback(); });
-                dismiss.setAttribute("aria-label", `Dismiss: ${record.message}`);
-                row.append(dismiss);
-            }
-            return row;
-        }));
-    }
+    const entries = [...actions].filter(([, a]) => (a.scope === null || a.scope === state.scope) && !a.dismissed);
+    const visible = entries.map(([, record]) => record);
+    paintNotices(entries);
     $("notice").hidden = !visible.length;
     for (const feedback of document.querySelectorAll("[data-feedback-node]")) {
         const messages = visible.filter(a => a.nodeId === feedback.dataset.feedbackNode);
@@ -399,6 +400,39 @@ function paintFeedback() {
         if (feedback.textContent !== text) feedback.textContent = text;
         feedback.hidden = !text;
     }
+}
+// #notice is a polite live region that announces additions and text changes. Each action keeps its own row, so a new
+// action adds one row, a status change rewrites only that row's text, and nothing already heard is announced again.
+function paintNotices(entries) {
+    const keys = new Set(entries.map(([key]) => key));
+    for (const [key, row] of noticeRows) if (!keys.has(key)) { row.remove(); noticeRows.delete(key); }
+    for (const [key, record] of entries) {
+        let row = noticeRows.get(key);
+        if (!row) {
+            row = el("div", null, "action-notice");
+            row.append(el("span"), button("Dismiss", () => dismissNotice(key)));
+            noticeRows.set(key, row);
+            $("notice").append(row);
+        }
+        const [message, dismiss] = row.children;
+        row.classList.toggle("notice-error", ["failed", "uncertain", "expired"].includes(record.status));
+        if (message.textContent !== record.message) message.textContent = record.message;
+        dismiss.hidden = ["pending", "queued", "uncertain"].includes(record.status);
+        if (dismiss.getAttribute("aria-label") !== `Dismiss: ${record.message}`) dismiss.setAttribute("aria-label", `Dismiss: ${record.message}`);
+    }
+}
+function dismissNotice(key) {
+    const record = actions.get(key);
+    if (!record) return;
+    const hadFocus = noticeRows.get(key)?.contains(document.activeElement);
+    const dismissible = [...noticeRows].filter(([, row]) => !row.lastElementChild.hidden).map(([rowKey]) => rowKey);
+    const next = nextFocusKey(dismissible, key);
+    record.dismissed = true;
+    paintFeedback();
+    if (!hadFocus) return;
+    // Dismiss removes its own button: move focus to the next notice, else to the control that ran the action.
+    const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.hidden && !element.disabled);
+    (noticeRows.get(next)?.lastElementChild || control || $("search")).focus({ preventScroll: true });
 }
 function feedbackFor(nodeId) {
     const feedback = el("div", null, "action-feedback");
@@ -449,7 +483,14 @@ function captureFocus(container) {
 }
 function restoreFocus(container, key) {
     if (!key) return;
-    [...container.querySelectorAll("[data-focus-key]")].find(element => element.dataset.focusKey === key)?.focus({ preventScroll: true });
+    const element = [...container.querySelectorAll("[data-focus-key]")].find(candidate => candidate.dataset.focusKey === key);
+    if (!element) return;
+    // A rebuilt action control that is still pending is created disabled; keep it focusable as aria-disabled.
+    if (element.disabled && element.dataset.actionKey) {
+        element.disabled = false;
+        element.setAttribute("aria-disabled", "true");
+    }
+    element.focus({ preventScroll: true });
 }
 function chooseItem(id) {
     ui.selected = id;
@@ -490,7 +531,7 @@ function render({ force = false } = {}) {
     $("project-title").textContent = state.project?.name || "Your work, connected.";
     $("project-title").disabled = !state.project;
     const unavailableExecutions = state.executions.filter(execution => !getItem(execution.nodeId)).map(execution => execution.nodeId);
-    const { signIn, errors } = banner(state, { unavailable: unavailableExecutions });
+    const { signIn, errors, retryAt } = banner(state, { unavailable: unavailableExecutions });
     $("sign-in").hidden = !signIn;
     if (signIn) {
         $("sign-in-server").textContent = signIn.server;
@@ -506,6 +547,10 @@ function render({ force = false } = {}) {
         $("errors").replaceChildren(...errors.map(message => el("p", message)));
     }
     $("errors").hidden = !errors.length;
+    // Outside the alert region: the next attempt time is read on demand, never announced.
+    const retry = errors.length ? retryNotice(retryAt, { format: clockTime }) : "";
+    if ($("retry-time").textContent !== retry) $("retry-time").textContent = retry;
+    $("retry-time").hidden = !retry;
     const work = state.issues.filter(i => !i.contextOnly && i.level <= 0);
     const allLinks = ["project", ...state.issues.map(item => item.id)].map(nodeLinks);
     const metrics = [
@@ -652,8 +697,8 @@ async function clearRequest(nodeId, requestId, label, origin) {
         success: "Stuck request cleared. Start is available again. A session may still appear; its late receipt still attaches.",
     });
     if (actions.get(actionKey("clear-request", requestId))?.status !== "success") return;
-    // The cleared item's actions change: re-render now rather than after focus leaves. The pending button lost
-    // focus when it was disabled, so put focus back on the row, or on the inspector's Start button.
+    // The cleared item's actions change: re-render now rather than after focus leaves. The re-render replaces the
+    // focused Clear button, so put focus back on the row, or on the inspector's Start button.
     render({ force: true });
     if (document.activeElement && document.activeElement !== document.body) return;
     if (origin === $("tree")) focusRow(nodeId);
@@ -780,20 +825,24 @@ function renderTree(force = false) {
         ? "No execution entries reported for this project. Refresh live state, or inspect and start project work from the header."
         : state.issues.length ? "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters." : "No visible issues in this project.", "empty"));
     if (!rows.some(row => row.dataset.nodeId === focusedNode)) focusedNode = rows.find(row => row.dataset.nodeId === ui.selected)?.dataset.nodeId || rows[0]?.dataset.nodeId;
-    rows.forEach(row => { row.tabIndex = row.dataset.nodeId === focusedNode ? 0 : -1; });
+    setTabStop(focusedNode);
     $("work-count").textContent = `${rows.length} visible loaded item${rows.length === 1 ? "" : "s"}`;
     $("work-scroll").scrollTop = ui.scrollTop;
     restoreFocus(container, focus);
 }
 function itemName(item, node, compact = false) {
     const title = el("div", null, "item-title");
-    const meta = el("div", null, "item-keyline");
+    const meta = el(compact ? "span" : "div", null, "item-keyline");
     meta.append(el("span", (item.type || "Work").slice(0, 1), `type-icon ${item.level > 0 ? "epic" : item.level < 0 ? "subtask" : "story"}`), el("span", item.key, "issue-key"));
     if (item.level > 0 || item.id === "project") meta.append(el("small", item.id === "project" ? "Project scope" : item.type, "muted"));
     if (scopeLabel(item)) meta.append(badge(scopeLabel(item)));
     const summary = el("span", item.summary, "summary");
     if (compact) {
-        const line = el("div", null, "execution-title");
+        // The queue row's own control: a real button that selects the item (the row is a plain list item).
+        const line = button("", () => chooseItem(item.id), "execution-title row-select");
+        line.dataset.focusKey = `row:${item.id}`;
+        line.setAttribute("aria-label", rowLabel(item));
+        if (ui.selected === item.id) line.setAttribute("aria-current", "true");
         summary.title = item.summary;
         line.append(meta, summary);
         title.append(line);
@@ -823,30 +872,44 @@ function appendObserved(container, nodeId) {
         container.append(el("span", observed.length ? `Observed: ${[...new Set(observed)].join(" / ")}` : "Execution state unknown", "muted"));
     }
 }
+const rowLabel = item => `${item.key} ${item.summary}, Jira ${item.status}${scopeLabel(item) ? `, ${scopeLabel(item)}` : ""}`;
+// What takes focus for a row: the tree item itself, or the select button of a queue row.
+const rowTarget = row => row.querySelector(".row-select") || row;
+// One tab stop for the whole list: the focused row and its own controls. Arrow keys move between rows.
+function setTabStop(id) {
+    for (const row of $("tree").querySelectorAll("[data-node-id]")) {
+        const current = row.dataset.nodeId === id, target = rowTarget(row);
+        target.tabIndex = current ? 0 : -1;
+        for (const control of row.querySelectorAll("button, summary")) {
+            if (control !== target && !control.classList.contains("toggle")) control.tabIndex = current ? 0 : -1;
+        }
+    }
+}
 function createRow(item, depth, parentId = "", hasChildren = false) {
     const row = el("div", null, `tree-row${ui.selected === item.id ? " selected" : ""}`);
     row.dataset.nodeId = item.id;
     row.dataset.parentId = parentId;
-    row.dataset.focusKey = `row:${item.id}`;
-    row.setAttribute("role", ui.view === "hierarchy" ? "treeitem" : "listitem");
     if (ui.view === "hierarchy") {
+        row.dataset.focusKey = `row:${item.id}`;
+        row.setAttribute("role", "treeitem");
         row.setAttribute("aria-level", String(depth + 1));
         row.setAttribute("aria-selected", String(ui.selected === item.id));
-    } else if (ui.selected === item.id) row.setAttribute("aria-current", "true");
-    row.setAttribute("aria-label", `${item.key} ${item.summary}, Jira ${item.status}${scopeLabel(item) ? `, ${scopeLabel(item)}` : ""}`);
+        row.setAttribute("aria-label", rowLabel(item));
+    } else row.setAttribute("role", "listitem");
     row.addEventListener("click", () => chooseItem(item.id));
-    row.addEventListener("focus", () => {
+    row.addEventListener("focusin", () => {
+        if (focusedNode === item.id) return;
         focusedNode = item.id;
-        for (const other of $("tree").querySelectorAll("[data-node-id]")) other.tabIndex = other === row ? 0 : -1;
+        setTabStop(item.id);
     });
     row.addEventListener("keydown", event => {
-        if (event.target !== row) return;
+        if (event.target !== rowTarget(row)) return;
         if (["Enter", " "].includes(event.key)) { event.preventDefault(); chooseItem(item.id); return; }
         const rows = [...$("tree").querySelectorAll("[data-node-id]")], index = rows.indexOf(row);
         if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
             event.preventDefault();
             const next = event.key === "Home" ? rows[0] : event.key === "End" ? rows.at(-1) : rows[index + (event.key === "ArrowDown" ? 1 : -1)];
-            next?.focus();
+            if (next) rowTarget(next).focus();
         }
         if (ui.view !== "hierarchy" || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
         event.preventDefault();
@@ -863,10 +926,13 @@ function createRow(item, depth, parentId = "", hasChildren = false) {
     });
     return row;
 }
+// Focuses without the browser's jump, then scrolls only as far as needed to keep the row in view.
 function focusRow(id) {
     const row = [...$("tree").querySelectorAll("[data-node-id]")].find(item => item.dataset.nodeId === id);
-    row?.focus({ preventScroll: true });
-    return Boolean(row);
+    if (!row) return false;
+    rowTarget(row).focus({ preventScroll: true });
+    row.scrollIntoView({ block: "nearest" });
+    return true;
 }
 function disclosure(key, title, nodeId = ui.selected) {
     const details = el("details", null, "trace-disclosure");
@@ -1185,10 +1251,10 @@ function updateLaunchControls() {
     const pending = preview && nodePending(preview.node.id);
     $("launch-ack-label").hidden = !implement || !warnings.length;
     $("launch-warning-ack").disabled = previewDirty || reviewing || launching;
-    $("review-changes").disabled = !preview || !previewDirty || reviewing || launching || pending || !scopeConfirmed || selecting;
+    setInert($("review-changes"), !preview || !previewDirty || reviewing || launching || pending || !scopeConfirmed || selecting);
     $("confirm-launch").textContent = launching ? "Submitting..." : implement ? "Start Implement session" : "Start Plan session";
-    $("confirm-launch").disabled = !preview || previewDirty || reviewing || launching || pending || !scopeConfirmed || selecting || previewScope !== state.scope ||
-        submittedPreviews.has(preview.id) || (implement && warnings.length > 0 && !$("launch-warning-ack").checked);
+    setInert($("confirm-launch"), !preview || previewDirty || reviewing || launching || pending || !scopeConfirmed || selecting || previewScope !== state.scope ||
+        submittedPreviews.has(preview.id) || (implement && warnings.length > 0 && !$("launch-warning-ack").checked));
     for (const id of ["launch-mode", "launch-objective", "launch-criteria", "launch-constraints", "launch-smart-comment"]) $(id).disabled = launching;
     $("cancel-launch").textContent = launching ? "Close" : "Cancel";
     $("launch-status").textContent = reviewing ? "Reviewing the edited context..." : previewDirty ? "Changes are not reviewed. Choose Review changes before starting." :
@@ -1230,11 +1296,17 @@ function closePreview() {
     $("launch-smart-comment").checked = false;
     $("launch-warning-ack").checked = false;
     $("launch-sources").open = false;
-    if ($("launch-dialog").open) $("launch-dialog").close();
+    const wasOpen = $("launch-dialog").open;
+    if (wasOpen) $("launch-dialog").close();
     updateLaunchControls();
+    // Closing returns focus to the Start button that opened the dialog. After a confirmed launch that button is
+    // disabled while the launch is pending, so focus goes to the notice that reports the launch instead.
+    const active = document.activeElement;
+    if (wasOpen && (!active || active === document.body || active.disabled || $("launch-dialog").contains(active)))
+        ($("notice").hidden ? $("search") : $("notice")).focus({ preventScroll: true });
 }
 async function confirmLaunch() {
-    if ($("confirm-launch").disabled || !preview) return;
+    if (inert($("confirm-launch")) || !preview) return;
     const reviewed = preview, scope = previewScope;
     const acknowledgedWarnings = $("launch-mode").value === "autopilot" && $("launch-warning-ack").checked ? reviewed.brief.warnings.map(w => w.id) : [];
     submittedPreviews.add(reviewed.id);
@@ -1373,8 +1445,25 @@ $("project-start").addEventListener("click", () => void perform({
     work: context => preparePreview("project", defaultMode(getItem("project"), executionFor("project")), context), success: "Project scope ready for review.",
 }));
 $("project-title").addEventListener("click", () => chooseItem("project"));
+// Skips the list's rows and controls. In a narrow panel the details open from Show details.
+$("skip-to-details").addEventListener("click", () => {
+    if ($("inspector").getClientRects().length) $("inspector").focus();
+    else if (!$("show-details").disabled) $("show-details").focus();
+});
+// Runs before every other click handler: a focused control kept as aria-disabled must not act.
+document.addEventListener("click", event => {
+    if (event.target.closest?.('button[aria-disabled="true"]')) { event.preventDefault(); event.stopImmediatePropagation(); }
+}, true);
+// Freshness details show on hover and focus; Escape hides them until the pointer and focus have both left.
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape") for (const source of document.querySelectorAll(".source:is(:hover, :focus)")) source.classList.add("tip-dismissed");
+});
+for (const source of document.querySelectorAll(".source")) {
+    source.addEventListener("mouseleave", () => { if (!source.matches(":focus")) source.classList.remove("tip-dismissed"); });
+    source.addEventListener("blur", () => { if (!source.matches(":hover")) source.classList.remove("tip-dismissed"); });
+}
 $("sync-jira").addEventListener("click", () => {
-    if ($("sync-jira").disabled || !state.project || !state.mapping) return;
+    if (inert($("sync-jira")) || !state.project || !state.mapping) return;
     $("sync-project").textContent = `${state.project.key} - ${state.project.name}`;
     $("sync-repo").textContent = state.mapping.repo || state.mapping.name;
     $("sync-dialog").showModal();
@@ -1464,7 +1553,7 @@ function warmingMessage() {
 }
 $("sign-in-button").addEventListener("click", async () => {
     const button = $("sign-in-button"), status = $("sign-in-status");
-    button.disabled = true;
+    setInert(button, true);
     status.hidden = false;
     status.textContent = "Starting Atlassian sign-in...";
     try {
@@ -1484,7 +1573,7 @@ $("sign-in-button").addEventListener("click", async () => {
     } catch (error) {
         status.textContent = `Could not start sign-in: ${error.message}`;
     } finally {
-        button.disabled = false;
+        setInert(button, false);
     }
 });
 render();
