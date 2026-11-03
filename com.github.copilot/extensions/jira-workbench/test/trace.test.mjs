@@ -258,3 +258,67 @@ test("a masked session ID from the host never replaces the ID that was linked", 
     await workbench.refreshTrace("2");
     assert.deepEqual((await store.read()).links["cloud-demo/42/2"].sessions.map(s => s.id), ["session-1"]);
 });
+
+// Finding M-5: a deleted linked session says "Session no longer exists" without hiding a live sibling's action,
+// staling the link, or invalidating the shared gateway on every poll.
+test("a deleted session neither hides a live sibling's question nor stales the link or the gateway", async t => {
+    const { Gateway } = await import("../lib/gateway.mjs");
+    const { workbench, store, gateway: fake } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const reads = { metadata: 0, live: 0, gone: 0 }, invalidations = { count: 0 };
+    const ok = value => ({ resultType: "success", textResultForLlm: JSON.stringify(value) });
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: async () => { reads.metadata++; return { tools: ["get_session", "get_sessions_status"].map(name => ({ name })) }; },
+        execute: async ({ name, arguments: args }) => {
+            if (name === "get_sessions_status") return ok({ sessions: [] });
+            if (args.project_session_id === "session-gone") { reads.gone++; return { resultType: "failure", error: "Session session-gone not found" }; }
+            reads.live++;
+            return ok({ id: "session-live", project_id: copilot.id, name: "Live", activity: { status: "idle" }, awaiting_user_input: true });
+        },
+    } } }, { rebuildMinMs: 60_000, shareMs: 0 });
+    const invalidate = gateway.invalidate.bind(gateway);
+    gateway.invalidate = () => { invalidations.count++; invalidate(); };
+    Object.assign(gateway, { sites: fake.sites, projects: fake.projects, issues: fake.issues });
+    workbench.gateway = gateway;
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [
+            { id: "session-live", name: "Live", activity: "idle", projectId: copilot.id },
+            { id: "session-gone", name: "Deleted", activity: "idle", projectId: copilot.id, awaitingInput: { question: "Old?" } },
+        ] };
+    });
+    let snapshot;
+    for (let poll = 0; poll < 5; poll++) snapshot = await workbench.refreshExecution({ source: "sessions" });
+    const execution = snapshot.executions.find(e => e.nodeId === "2");
+    assert.equal(execution.primary?.label, "Answer question");
+    assert.ok(execution.signals.some(s => s.kind === "session_missing" && /Deleted: session no longer exists/.test(s.reason)));
+    assert.ok(!execution.signals.some(s => ["sessions_stale", "trace_error", "session_unknown"].includes(s.kind)));
+    const link = (await store.read()).links[scope];
+    assert.equal(link.sourceStatus.sessions.state, "fresh");
+    assert.deepEqual(link.errors, []);
+    const gone = link.sessions.find(s => s.id === "session-gone");
+    assert.equal(gone.activity, "missing");
+    assert.equal(gone.awaitingInput, null, "a deleted session no longer asks anything");
+    assert.ok(gone.missingSince);
+    assert.equal(invalidations.count, 0, "the gateway is not invalidated");
+    assert.equal(reads.metadata, 1);
+    assert.equal(reads.live, 5);
+    assert.ok(reads.gone < 5, `polling stops asking about a session confirmed missing (${reads.gone})`);
+    // An explicit trace refresh still checks, so a restored session comes back.
+    await workbench.refreshTrace("2");
+    assert.equal(reads.gone, 4);
+});
+
+test("a session found again after being missing loses its missing marker", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [{ id: "session-1", name: "Back", activity: "missing", missingSince: "2026-01-01T00:00:00.000Z", missingPolls: 3, projectId: copilot.id }] };
+    });
+    await workbench.refreshTrace("2");
+    const session = (await store.read()).links[scope].sessions[0];
+    assert.equal(session.activity, "idle");
+    assert.equal(session.missingSince, undefined);
+    assert.equal(session.missingPolls, undefined);
+});

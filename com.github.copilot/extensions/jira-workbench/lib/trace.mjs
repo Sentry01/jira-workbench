@@ -37,6 +37,9 @@ function sessionRecord(detail, id, status = detail) {
     };
 }
 
+// A linked session the host no longer knows is re-checked by this many polls, then only by an explicit trace refresh.
+export const MISSING_POLLS = 3;
+
 // Applies one observed trace to the latest persisted state without regressing a newer concurrent observation.
 function mergeTrace(current, { scope, previous, next, stamp, source }) {
     const link = current.links[scope] || previous;
@@ -51,7 +54,9 @@ function mergeTrace(current, { scope, previous, next, stamp, source }) {
         sourceStatus.github = next.sourceStatus.github;
     const sessions = applySessions ? next.sessions.map(record => {
         const live = link.sessions.find(s => s.id === record.id);
-        return { ...live, ...record, ...(live?.contextHash ? { contextHash: live.contextHash } : {}) };
+        const merged = { ...live, ...record, ...(live?.contextHash ? { contextHash: live.contextHash } : {}) };
+        if (record.activity !== "missing") { delete merged.missingSince; delete merged.missingPolls; }
+        return merged;
     }) : link.sessions;
     if (applySessions) sessions.push(...link.sessions.filter(s => !previous.sessions.some(p => p.id === s.id) && !sessions.some(n => n.id === s.id)));
     const prs = applyGithub ? [...next.prs, ...link.prs.filter(pr => !next.prs.some(p => p.url === pr.url))] : link.prs;
@@ -168,6 +173,11 @@ export class Trace {
         let sessionError = statusError, githubError = null;
         const observations = await mapLimit(previous.sessions, 4, async stored => {
             const result = { stored, record: stored, observed: false, pr: null, error: null };
+            // Polls stop asking about a session confirmed missing; an explicit refresh still checks it.
+            if (source === "sessions" && stored.activity === "missing" && stored.missingPolls >= MISSING_POLLS) {
+                result.observed = true;
+                return result;
+            }
             try {
                 if (source !== "github") {
                     const detail = await wb.gateway.call("get_session", { project_session_id: stored.id });
@@ -177,7 +187,15 @@ export class Trace {
                 }
                 if (source !== "sessions" && result.record.prNumber && result.record.prRepo)
                     result.pr = await wb.github(result.record.prRepo, result.record.prNumber);
-            } catch (error) { result.error = error; }
+            } catch (error) {
+                // The host's own answer that the session is gone (deleted): a fact about the session, not a failed read.
+                if (source !== "github" && !result.observed && error.notFound) {
+                    result.record = { ...stored, activity: "missing", missingSince: stored.missingSince || stamp,
+                        missingPolls: (stored.activity === "missing" ? stored.missingPolls || 0 : 0) + 1, stale: false,
+                        awaitingInput: null, awaitingPlan: false, interrupted: false, error: null };
+                    result.observed = true;
+                } else result.error = error;
+            }
             return result;
         });
         for (const { stored, record, observed, pr, error } of observations) {

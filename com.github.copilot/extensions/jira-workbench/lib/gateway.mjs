@@ -63,6 +63,8 @@ const hostToolError = name => classify(toolError(`Copilot did not offer ${name};
 // Observed live: session.rpc.tools.getCurrentMetadata() can stop answering for minutes while Atlassian waits for
 // sign-in, leaving the panel "reconnecting" forever. Every runtime call is bounded and reported as retryable.
 const TIMEOUTS_MS = { metadata: 8_000, rebuild: 20_000, list: 5_000, probe: 10_000, execute: 90_000, restart: 30_000, login: 30_000 };
+// A call still pending this many timeouts after it was sent (at most 5 minutes) is presumed lost.
+const STUCK_CAP_FACTOR = 3, STUCK_CAP_MAX_MS = 5 * 60_000;
 
 // Stateless, read-only data access to Jira and the Copilot host. It keeps no connection or sign-in state: every
 // failure is returned classified (error.kind, error.server, error.retryable) and the Connection decides what it means.
@@ -82,15 +84,23 @@ export class Gateway {
         // Each site's sprint field ID, learned from Jira's own data; it is site-wide and does not change.
         this.sprintFields = new Map();
     }
-    invalidate() { this.toolsAt = 0; this.rebuiltAt = 0; this.recent.clear(); this.owner = null; }
+    invalidate() {
+        this.toolsAt = 0; this.rebuiltAt = 0; this.recent.clear(); this.owner = null;
+        // A call that already outlived its timeout may never answer; the next caller sends a new one.
+        for (const [key, entry] of this.stuck) if (Date.now() - entry.startedAt >= entry.ms) this.stuck.delete(key);
+    }
+    // Sending a call again is safe only because every call here is a read: tool and server lists, and allow-listed tools.
     rpc(key, start, ms, what) {
-        let call = this.stuck.get(key);
-        if (!call) {
-            call = Promise.resolve().then(start);
-            this.stuck.set(key, call);
-            void call.catch(() => {}).finally(() => { if (this.stuck.get(key) === call) this.stuck.delete(key); });
+        let entry = this.stuck.get(key);
+        // A reply can be lost rather than late; past the cap the call is presumed lost and sent again.
+        if (entry && Date.now() - entry.startedAt >= Math.min(ms * STUCK_CAP_FACTOR, STUCK_CAP_MAX_MS)) entry = null;
+        if (!entry) {
+            entry = { promise: Promise.resolve().then(start), startedAt: Date.now(), ms };
+            const settled = entry;
+            this.stuck.set(key, entry);
+            void entry.promise.catch(() => {}).finally(() => { if (this.stuck.get(key) === settled) this.stuck.delete(key); });
         }
-        return bounded(call, ms, what);
+        return bounded(entry.promise, ms, what);
     }
     async metadata({ force = false } = {}) {
         if (!force && this.tools?.length && Date.now() - this.toolsAt < METADATA_TTL_MS) return this.tools;
@@ -250,8 +260,10 @@ export class Gateway {
             } catch (error) {
                 const message = error.message || "";
                 if (GONE.test(message) && !TRANSIENT.test(message)) {
+                    // A host tool's own "not found" (e.g. a deleted session) is its answer, never Atlassian's fault,
+                    // and says nothing about the tool list; only a message naming the tool means the tool is gone.
+                    if (!jira && !message.includes(name)) throw Object.assign(classify(error, "permanent"), { notFound: true });
                     this.invalidate();
-                    // A host tool's own "not found" (e.g. a deleted session) is its answer, never Atlassian's fault.
                     if (!jira) throw classify(error, "permanent");
                     if (attempt < retries && await reroute()) continue;
                     const diagnosis = await this.diagnose(name);

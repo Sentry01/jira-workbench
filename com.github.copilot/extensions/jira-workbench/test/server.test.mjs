@@ -181,3 +181,33 @@ test("Clear stuck request is a token-protected route to the Workbench", async t 
     assert.deepEqual(await response.json(), { status: "cancelled", requestId: "request-1" });
     assert.deepEqual(cleared, [{ requestId: "request-1" }]);
 });
+
+// Finding L-9: a validation or action error is the client's to fix (400, with its message); anything else is an
+// internal failure (500, with a generic message and the detail logged).
+test("unexpected handler failures answer 500 with a generic message; action errors stay 400", async t => {
+    const logged = [];
+    const log = console.error;
+    console.error = (...args) => logged.push(args);
+    t.after(() => { console.error = log; });
+    const post = await panel(t, {
+        snapshot: async () => ({}),
+        select: async () => { throw new Error("A valid Jira site ID is required."); },
+        refresh: async () => { const project = null; return project.id; },
+        map: async () => { throw Object.assign(new Error("EACCES: permission denied, open '/private/state.json'"), { code: "EACCES", syscall: "open" }); },
+        launch: async () => { throw "not an error"; },
+    });
+    const validation = await post("/api/select", {});
+    assert.equal(validation.status, 400);
+    assert.deepEqual(await validation.json(), { error: "A valid Jira site ID is required." });
+    const malformed = await post("/api/select", "{not json");
+    assert.equal(malformed.status, 400);
+    assert.deepEqual(await malformed.json(), { error: "The request body is not valid JSON." });
+    for (const path of ["/api/refresh", "/api/map", "/api/launch"]) {
+        const response = await post(path, {});
+        assert.equal(response.status, 500, path);
+        const { error } = await response.json();
+        assert.equal(error, "The Workbench hit an internal error. Try again; if it keeps happening, reload extensions.");
+    }
+    assert.equal(logged.length, 3, "each internal failure is logged with its detail");
+    assert.match(String(logged[1].at(-1)?.message ?? logged[1].at(-1)), /EACCES/);
+});

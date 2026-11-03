@@ -23,13 +23,46 @@ const action = (name, description, inputSchema, run) => ({
     name, description, inputSchema,
     handler: async ctx => {
         const entry = panels.get(ctx.instanceId);
-        if (!entry) throw new CanvasError("workbench_not_open", "Reopen Jira Workbench first.");
+        // A panel still opening answers once it is open.
+        if (!entry || !await entry.opening.then(() => true, () => false)) throw new CanvasError("workbench_not_open", "Reopen Jira Workbench first.");
         try { return await run(entry.workbench, ctx.input); }
         catch (error) { throw new CanvasError("workbench_action_failed", error.message); }
     },
 });
 
-let connection, updater;
+let connection, updaterReady = null;
+// One updater per extension process, shared by its panels and checking only while one is open. Memoized as a
+// promise, so panels opened together on a fresh process cannot each create one.
+const sharedUpdater = () => updaterReady ??= version().then(build => new Updater({ ...build, session }))
+    .catch(error => { updaterReady = null; throw error; });
+
+// Everything a panel holds is released if the open fails or the panel closes before it finishes.
+async function openPanel(ctx, entry) {
+    await ready;
+    const workbench = new Workbench({
+        gateway: connection.gateway, store, cache, github: readPr,
+        hostActions: new HostActions({ session, instanceId: ctx.instanceId }),
+        send: options => session.send(options), instanceId: ctx.instanceId,
+    });
+    let server = null;
+    try {
+        const requested = ctx.input?.cloudId && ctx.input?.jiraProjectId ? { cloudId: ctx.input.cloudId, jiraProjectId: ctx.input.jiraProjectId } : null;
+        // Paint from the shared disk snapshot now; live sources revalidate behind the open panel.
+        await workbench.hydrate(requested).catch(() => false);
+        const updater = await sharedUpdater();
+        server = await startServer(workbench, { updater });
+        if (entry.closed) throw new CanvasError("workbench_closed", "The panel was closed while it was opening.");
+        Object.assign(entry, { workbench, server, updater });
+        updater.acquire();
+        connection.attach(workbench);
+        void workbench.background(() => workbench.warm(requested));
+    } catch (error) {
+        workbench.close();
+        await server?.close().catch(() => {});
+        throw error;
+    }
+}
+
 const session = await joinSession({
     canvases: [createCanvas({
         id: "jira-workbench", displayName: "Jira Workbench",
@@ -52,34 +85,26 @@ const session = await joinSession({
             action("inspect_connections", "List available integration tool names for troubleshooting; does not execute them.", schema(), async w => (await w.gateway.metadata()).filter(t => /Jira|Atlassian|list_repositories|list_projects|get_session|list_sessions|navigate_to/.test(t.name)).map(t => ({ name: t.name, mcpToolName: t.mcpToolName }))),
         ],
         open: async ctx => {
-            await ready;
             let entry = panels.get(ctx.instanceId);
+            // Registered before the first await, so a second open of this panel, or its close, finds it.
             if (!entry) {
-                const workbench = new Workbench({
-                    gateway: connection.gateway, store, cache, github: readPr,
-                    hostActions: new HostActions({ session, instanceId: ctx.instanceId }),
-                    send: options => session.send(options), instanceId: ctx.instanceId,
-                });
-                const requested = ctx.input?.cloudId && ctx.input?.jiraProjectId ? { cloudId: ctx.input.cloudId, jiraProjectId: ctx.input.jiraProjectId } : null;
-                // Paint from the shared disk snapshot now; live sources revalidate behind the open panel.
-                await workbench.hydrate(requested).catch(() => false);
-                // One updater per extension process, shared by its panels and checking only while one is open.
-                updater ??= new Updater({ ...await version(), session });
-                const server = await startServer(workbench, { updater });
-                entry = { workbench, server };
+                entry = { closed: false };
+                entry.opening = openPanel(ctx, entry);
                 panels.set(ctx.instanceId, entry);
-                updater.acquire();
-                connection.attach(workbench);
-                void workbench.background(() => workbench.warm(requested));
+                entry.opening.catch(() => { if (panels.get(ctx.instanceId) === entry) panels.delete(ctx.instanceId); });
             }
+            await entry.opening;
             return { title: "Jira Workbench", url: entry.server.url, status: "Read-only Jira · hierarchy and traceability" };
         },
         onClose: async ctx => {
             const entry = panels.get(ctx.instanceId);
             if (!entry) return;
             panels.delete(ctx.instanceId);
+            entry.closed = true;
+            // A panel still opening tears itself down once it sees the close.
+            try { await entry.opening; } catch { return; }
             connection.detach(entry.workbench);
-            updater.release();
+            entry.updater.release();
             entry.workbench.close();
             await entry.server.close();
         },

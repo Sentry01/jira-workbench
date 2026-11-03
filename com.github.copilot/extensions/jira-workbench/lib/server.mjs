@@ -33,6 +33,14 @@ const BODY_LIMITS = {
     "/api/preferences": 10_000 * (100 * JSON_BYTES_PER_CHAR + 3) + (500 + 100) * JSON_BYTES_PER_CHAR + ENVELOPE_BYTES,
 };
 
+// A handler's own Error carries a message written for the panel (validation, or what to do next): 400. A programming
+// error, a system call failure or a non-Error is internal: 500 with a generic message, its detail only in the log.
+const INTERNAL_TYPES = [TypeError, ReferenceError, RangeError, SyntaxError, EvalError, URIError];
+const INTERNAL_MESSAGE = "The Workbench hit an internal error. Try again; if it keeps happening, reload extensions.";
+export const isInternalError = error => !(error instanceof Error) || INTERNAL_TYPES.some(type => error instanceof type)
+    || typeof error.syscall === "string" || typeof error.errno === "number";
+const invalidBody = () => new Error("The request body is not valid JSON.");
+
 export async function startServer(workbench, { assets = pinned, updater = null } = {}) {
     const token = randomBytes(32).toString("hex");
     let origin;
@@ -99,12 +107,17 @@ export async function startServer(workbench, { assets = pinned, updater = null }
                 if (size <= limit) chunks.push(chunk);
             }
             if (size > limit) { reply(res, 413, { error: "Request is too large." }); return; }
-            const input = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+            let input;
+            try { input = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); }
+            catch { throw invalidBody(); }
             if (!input || Array.isArray(input) || typeof input !== "object") { reply(res, 400, { error: "An object is required." }); return; }
             reply(res, 200, await routes[path](input));
         })().catch(error => {
-            if (!res.headersSent) reply(res, 400, { error: error.message || "Workbench action failed." });
-            else res.destroy(error);
+            const internal = isInternalError(error);
+            if (internal) console.error("Jira Workbench: internal error", req.method, req.url?.split("?")[0], error);
+            if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
+            else if (internal) reply(res, 500, { error: INTERNAL_MESSAGE });
+            else reply(res, 400, { error: error.message || "Workbench action failed." });
         });
     });
     await new Promise((resolve, reject) => {

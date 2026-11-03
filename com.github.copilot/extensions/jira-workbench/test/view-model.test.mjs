@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS } from "../lib/model.mjs";
 import {
-    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel,
+    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption,
@@ -124,6 +124,10 @@ test("session text lists every observation before the activity", () => {
     assert.equal(sessionState({ activity: "", stale: true }), "stale / activity unknown");
     assert.equal(sessionState({ activity: "idle", awaitingInput: {}, awaitingPlan: true, interrupted: true }),
         "needs your input / plan awaiting approval / interrupted / idle");
+    assert.equal(sessionState({ activity: "missing" }), "no longer exists");
+    assert.equal(sessionsBadge([{ activity: "missing" }]), "Session no longer exists");
+    assert.equal(sessionExists({ activity: "missing" }), false);
+    assert.equal(sessionExists({ activity: "idle" }), true);
     assert.equal(sessionsBadge([]), null);
     assert.equal(sessionsBadge([{ activity: "busy" }, { activity: "idle" }]), "2 sessions");
     assert.equal(sessionsBadge([{ activity: "busy", stale: true }]), "Stale session");

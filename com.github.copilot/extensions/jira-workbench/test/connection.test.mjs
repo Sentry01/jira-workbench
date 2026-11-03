@@ -563,7 +563,7 @@ test("a runtime that stops answering never leaves the panel warming forever, and
     await open();
     await until(t, () => workbench.catalogErrors.length, { what: "the reason shown while still retrying" });
     await until(t, () => !workbench.warming, { what: "a bounded failure instead of a hang" });
-    assert.match(workbench.catalogErrors[0], /did not answer its tool list within \d+s\. Retrying automatically/);
+    assert.match(workbench.catalogErrors[0], /did not answer its tool list within \d+s\. Still waiting; the Workbench checks again automatically\.$/);
     await sleep(100);
     assert.ok(runtime.counters.metadata <= 2, `stuck calls are reused, not stacked (${runtime.counters.metadata})`);
     runtime.release = runtime.stalled.release;

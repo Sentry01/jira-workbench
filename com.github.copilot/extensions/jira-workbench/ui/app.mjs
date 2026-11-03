@@ -1,6 +1,6 @@
 import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } from "/model.mjs";
 import {
-    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
+    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
 } from "/view-model.mjs";
@@ -1030,7 +1030,8 @@ function renderTrace(body, item) {
             if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable. Select and copy the ID from Session identity.");
             await navigator.clipboard.writeText(session.id);
         }, { success: "Session ID copied." }));
-        card.append(identity, openSessionButton("Open session", item.id, session.id));
+        card.append(identity);
+        if (sessionExists(session)) card.append(openSessionButton("Open session", item.id, session.id));
         if (session.contextHash) {
             const receipt = state.requests.find(request => request.nodeId === item.id && request.contextHash === session.contextHash &&
                 request.sessionId === session.id) ||
