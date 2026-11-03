@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../lib/store.mjs";
 import { Workbench } from "../lib/workbench.mjs";
+import { PrReader } from "../lib/github.mjs";
 
 const site = { id: "cloud-demo", name: "Demo", url: "https://demo.atlassian.net" };
 const project = { id: "42", key: "DEMO", name: "Demo project" };
@@ -171,6 +172,8 @@ test("session-only refresh preserves GitHub evidence updated concurrently by ano
         if (name === "get_session") { entered(); await resume; }
         return original(name, args);
     };
+    // Due for its slow full read, so the poll is inside get_session while the other panel writes.
+    workbench.trace.detailAt.clear();
     const pending = workbench.refreshExecution({ source: "sessions" });
     await entering;
     await store.update(data => {
@@ -439,4 +442,118 @@ test("a poll that skipped a missing session and finishes last keeps a refresh's 
     const restored = (await store.read()).links[scope].sessions.find(s => s.id === "session-1");
     assert.equal(restored.activity, "idle", "the poll that only skipped it does not undo the refresh");
     assert.equal(restored.missingPolls, undefined);
+});
+
+// 100 linked issues with 3 sessions each, every session already observed in full (name, branch and PR), as a
+// project looks after its first poll.
+async function linkedProject(t, { sharedPr = false, github } = {}) {
+    const directory = await mkdtemp(join(tmpdir(), "jira-workbench-fanout-"));
+    t.after(() => rm(directory, { recursive: true }));
+    const store = new Store(directory);
+    const issues = Array.from({ length: 100 }, (_, i) => ({ ...rows[1], id: String(100 + i), key: `DEMO-${100 + i}`, parentKey: null }));
+    const sessionIds = new Map(issues.map(issue => [issue.id, [0, 1, 2].map(n => `s-${issue.id}-${n}`)]));
+    const prOf = (issueId, n) => sharedPr ? Number(issueId) : Number(issueId) * 10 + n;
+    const detail = id => {
+        const [, issueId, n] = id.split("-");
+        return { id, project_id: copilot.id, name: `Session ${id}`, branch: `branch-${id}`, created_pr_number: prOf(issueId, Number(n)), created_pr_repo: "example/demo" };
+    };
+    const activity = new Map();
+    const counts = { get_session: 0, get_sessions_status: 0 };
+    const gateway = {
+        sites: async () => [site], projects: async () => [project],
+        issues: async () => ({ issues, fetchedAt: new Date().toISOString() }),
+        call: async (name, args) => {
+            counts[name] = (counts[name] || 0) + 1;
+            if (name === "list_repositories") return [copilot];
+            if (name === "get_sessions_status") return { sessions: [...sessionIds.values()].flat().map(id => ({ id, activity: { status: activity.get(id) || "idle" } })) };
+            if (name === "get_session") return detail(args.project_session_id);
+            throw new Error(`Unexpected call ${name}`);
+        },
+    };
+    const links = {};
+    for (const issue of issues) links[`cloud-demo/42/${issue.id}`] = { sessions: sessionIds.get(issue.id).map(id => ({ id })), prs: [] };
+    await writeFile(join(directory, "state.json"), JSON.stringify({ version: 1, mappings: { "cloud-demo/42/project": { id: copilot.id, name: copilot.name, repo: copilot.github_repo } }, links, requests: {} }));
+    github ||= async (repo, number) => ({ number, url: `https://github.com/${repo}/pull/${number}`, title: "PR", state: "OPEN", statusCheckRollup: [] });
+    const workbench = new Workbench({ gateway, store, github, send: async () => {}, instanceId: "fanout" });
+    await workbench.catalog();
+    await workbench.select({ cloudId: site.id, jiraProjectId: project.id });
+    await workbench.idle();
+    let writes = 0;
+    const update = store.update.bind(store);
+    store.update = change => { writes++; return update(change); };
+    return { workbench, store, counts, activity, directory, writes: () => writes };
+}
+
+test("unchanged session polls at 100 links x 3 sessions make no get_session calls and no store writes", async t => {
+    const { workbench, counts, activity, directory, writes } = await linkedProject(t);
+    assert.equal(counts.get_session, 300, "the first full refresh read every session in full");
+    const file = join(directory, "state.json");
+    const before = await stat(file), writesBefore = writes();
+    const first = (await workbench.snapshot()).links["cloud-demo/42/100"].sourceStatus.sessions.fetchedAt;
+    counts.get_session = 0;
+    for (let poll = 0; poll < 2; poll++) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        await workbench.refreshExecution({ source: "sessions" });
+    }
+    assert.equal(counts.get_session, 0);
+    assert.equal(counts.get_sessions_status >= 2, true);
+    assert.equal(writes() - writesBefore, 0, "no store writes");
+    assert.equal((await stat(file)).mtimeMs, before.mtimeMs, "state.json untouched");
+    const shown = (await workbench.snapshot()).links["cloud-demo/42/100"];
+    assert.ok(Date.parse(shown.sourceStatus.sessions.fetchedAt) > Date.parse(first), "the panel still shows when sessions were last checked");
+    assert.equal(shown.sourceStatus.sessions.state, "fresh");
+
+    activity.set("s-100-1", "running");
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(writes() - writesBefore, 1, "a real change is written");
+    assert.equal(counts.get_session, 0, "activity comes from get_sessions_status");
+
+    workbench.trace.persistedAt -= 61_000;
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(writes() - writesBefore, 2, "freshness stamps are persisted at most once a minute");
+});
+
+test("a session is read in full only when it is missing from the status list, incomplete, or due for its slow check", async t => {
+    const { workbench, counts, store } = await linkedProject(t);
+    await store.update(data => { data.links["cloud-demo/42/100"].sessions[0].branch = null; });
+    counts.get_session = 0;
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(counts.get_session, 1, "only the incomplete session");
+    counts.get_session = 0;
+    for (const id of ["s-101-0", "s-101-1"]) workbench.trace.detailAt.set(id, Date.now() - 61_000);
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(counts.get_session, 2, "only the sessions due for their slow check");
+});
+
+test("a full refresh makes one gh call per distinct PR, at most 4 at a time, and reuses them for a minute", async t => {
+    let calls = 0, active = 0, peak = 0;
+    const run = async (exe, args) => {
+        calls++; active++; peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, 2));
+        active--;
+        return { stdout: JSON.stringify({ number: Number(args[2]), url: `https://github.com/${args[4]}/pull/${args[2]}`, state: "OPEN", statusCheckRollup: [] }) };
+    };
+    const { workbench, store } = await linkedProject(t, { sharedPr: true, github: new PrReader({ run }).read });
+    assert.equal(calls, 100, "the 3 sessions of each link share one PR: one call each");
+    assert.ok(peak <= 4, `peak gh concurrency ${peak}`);
+    // An earlier PR per link, no longer reported by any session.
+    await store.update(data => {
+        for (const [scope, link] of Object.entries(data.links)) {
+            const n = Number(scope.split("/").pop()) + 1000;
+            link.prs.push({ number: n, repo: "example/demo", url: `https://github.com/example/demo/pull/${n}`, sessionIds: [] });
+        }
+    });
+    calls = 0;
+    await workbench.refreshExecution({ source: "all" }, { reuseRecent: true });
+    assert.equal(calls, 100, "a background pass reads only the 100 earlier PRs; the session PRs read a moment ago are reused");
+    calls = 0;
+    await workbench.refreshExecution({ source: "all" }, { reuseRecent: true });
+    assert.equal(calls, 0);
+    peak = 0;
+    await workbench.refreshExecution({ source: "github" });
+    assert.equal(calls, 200, "an explicit refresh reads every distinct PR again, once each");
+    assert.ok(peak <= 4, `peak gh concurrency ${peak}`);
+    calls = 0;
+    await workbench.refreshTrace("100");
+    assert.equal(calls, 2, "an explicit Refresh trace reads its own PRs again");
 });

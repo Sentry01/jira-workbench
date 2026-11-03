@@ -2,8 +2,20 @@ import { buildTree, projectStatuses, requestStatus, scopeKey } from "./model.mjs
 import { deriveExecution } from "./execution.mjs";
 import { Launches } from "./launches.mjs";
 import { objects, settle, standaloneError } from "./runtime.mjs";
-import { Trace } from "./trace.mjs";
+import { Trace, withStamps } from "./trace.mjs";
 import { DEFAULT_SCOPE, mergeIssues, validateScope, workingSetKey, scopeJql } from "./scope.mjs";
+
+// Cache saves while paging wait this long for the next page, but never longer than the cap after the first.
+const CACHE_DEBOUNCE_MS = 1_000;
+const CACHE_MAX_WAIT_MS = 10_000;
+// Descriptions are cached only to paint a warm start; a live read replaces them, and launches wait for one.
+const CACHED_DESCRIPTION_CHARS = 2_000;
+const SHORTENED = "\n\n[Shortened in the saved copy. Refresh to read the full description.]";
+
+function cachedIssues(issues) {
+    return issues.map(issue => typeof issue.description === "string" && issue.description.length > CACHED_DESCRIPTION_CHARS
+        ? { ...issue, description: issue.description.slice(0, CACHED_DESCRIPTION_CHARS) + SHORTENED } : issue);
+}
 
 // Issues the execution queue must never lose: unresolved launch requests and durable session or PR links.
 function trackedIds(data, prefix) {
@@ -54,6 +66,13 @@ export class Workbench {
         this.queued = false;
         // What this process has confirmed live; anything else came from cache.json.
         this.verified = { sites: false, apps: false, lists: new Set() };
+        // Working sets waiting to be written to the cache (by working-set key), and the last cache write started.
+        this.cacheSaves = new Map();
+        this.cacheTimer = null;
+        this.cacheSince = null;
+        this.cacheWrite = Promise.resolve();
+        this.cacheDebounceMs ??= CACHE_DEBOUNCE_MS;
+        this.cacheMaxWaitMs ??= CACHE_MAX_WAIT_MS;
         this.launches = new Launches(this);
         this.trace = new Trace(this);
     }
@@ -64,6 +83,8 @@ export class Workbench {
     }
     loadKey() { return workingSetKey(this.selectedScope(), this.workingScope); }
     resetWorkingSet() {
+        // A deferred save belongs to the working set being replaced: write it before the next one's lastScope.
+        void this.flushCache();
         this.refreshGeneration++;
         this.jiraRefreshing = null;
         this.issues = [];
@@ -143,11 +164,16 @@ export class Workbench {
     // panel's failed observations out of the store that panels in real sessions share.
     standalone() { return this.connection?.current?.state === "standalone"; }
     inSession(run) { return this.standalone() ? Promise.reject(standaloneError()) : run(); }
+    // Returns once the deferred cache save, if any, is written.
     close() {
         this.closed = true;
         this.queued = false;
+        return this.flushCache();
     }
-    async idle() { while (this.pending.size) await Promise.allSettled([...this.pending]); }
+    async idle() {
+        while (this.pending.size) await Promise.allSettled([...this.pending]);
+        await this.cacheWrite;
+    }
     // Show the last project from disk immediately; nothing restored here can start work until revalidated.
     async hydrate(requested = null) {
         if (!this.cache) return false;
@@ -213,7 +239,8 @@ export class Workbench {
             if (jiraReachable) this.site = this.sites.find(s => s.id === this.site.id);
             if (!project && !this.error) this.error = `Could not confirm project access: ${projects.error?.message || "Jira site discovery failed."}`;
         } finally { this.warming = false; }
-        if (this.currentScope() && !this.error) await this.refreshExecution();
+        // Background passes may reuse a PR read from the last minute; an explicit refresh always reads GitHub.
+        if (this.currentScope() && !this.error) await this.refreshExecution({}, { reuseRecent: true });
     }
     async clearSelection() {
         return this.afterScopeCommit(() => {
@@ -299,7 +326,7 @@ export class Workbench {
         if (selection !== this.selections) return this.snapshot();
         await this.refresh();
         // Jira is the hierarchy; session and GitHub evidence fills in behind it via polling.
-        if (!this.error) void this.background(() => this.refreshExecution());
+        if (!this.error) void this.background(() => this.refreshExecution({}, { reuseRecent: true }));
         return this.snapshot();
     }
     selectedScope(nodeId = "project") {
@@ -331,7 +358,8 @@ export class Workbench {
     async snapshot() {
         const data = await this.store.read();
         const prefix = this.site && this.project ? `${[this.site.id, this.project.id].map(encodeURIComponent).join("/")}/` : null;
-        const links = prefix ? Object.fromEntries(Object.entries(data.links).filter(([key]) => key.startsWith(prefix))) : {};
+        const links = prefix ? Object.fromEntries(Object.entries(data.links).filter(([key]) => key.startsWith(prefix))
+            .map(([key, link]) => [key, withStamps(link, this.trace.stamps.get(key))])) : {};
         const requests = prefix ? Object.values(data.requests).filter(r => r.scope.startsWith(prefix)) : [];
         const mapping = this.site && this.project ? data.mappings[this.selectedScope()] || null : null;
         const executionNodes = this.issues.filter(issue => !issue.contextOnly);
@@ -356,7 +384,7 @@ export class Workbench {
             scopeError: this.pageErrors.scope || null,
             jiraRefreshing: Boolean(this.jiraRefreshing),
             workingSetGeneration: this.refreshGeneration,
-            ancestorWarnings: [...this.linkedWarnings, ...this.ancestorWarnings],
+            ancestorWarnings: [...this.linkedWarnings, ...this.ancestorWarnings, ...(this.store.notices?.() || [])],
             statuses: this.site && this.project ? projectStatuses(this.statuses, this.issues.filter(issue => issue.projectId === this.project.id)) : [],
             mapping, links, requests, executions,
             preferences: this.site && this.project ? data.preferences?.[this.selectedScope()] || {} : {},
@@ -404,15 +432,33 @@ export class Workbench {
         }
         return { ...await this.snapshot(), applyResult: { status: !current() ? "superseded" : this.pageErrors.scope ? "failed" : "applied" } };
     }
-    async saveWorkingSet() {
-        const key = this.loadKey(), cloudId = this.site.id, jiraProjectId = this.project.id;
-        const entry = {
+    // defer: paging, where each page would otherwise rewrite the whole cache. Deferred saves are coalesced and
+    // written after a quiet second (at most 10 s after the first), on close, on a project change, or with the next
+    // save that is not deferred.
+    saveWorkingSet({ defer = false } = {}) {
+        this.cacheSaves.set(this.loadKey(), {
             issues: this.issues, statuses: this.statuses, fetchedAt: this.fetchedAt,
             page: this.page, ancestorWarnings: this.ancestorWarnings, linkedWarnings: this.linkedWarnings,
-        };
-        await this.remember(data => {
-            data.issues[key] = entry;
-            data.lastScope = { cloudId, jiraProjectId };
+        });
+        this.cacheScope = { cloudId: this.site.id, jiraProjectId: this.project.id };
+        if (!defer) return this.flushCache();
+        this.cacheSince ??= Date.now();
+        clearTimeout(this.cacheTimer);
+        this.cacheTimer = setTimeout(() => void this.flushCache(), Math.max(0, Math.min(this.cacheDebounceMs, this.cacheSince + this.cacheMaxWaitMs - Date.now())));
+        this.cacheTimer.unref?.();
+        return Promise.resolve();
+    }
+    // Writes every deferred save now; resolves once they, and any save already started, are written.
+    flushCache() {
+        clearTimeout(this.cacheTimer);
+        this.cacheTimer = null;
+        this.cacheSince = null;
+        if (!this.cacheSaves.size) return this.cacheWrite;
+        const saves = this.cacheSaves, lastScope = this.cacheScope;
+        this.cacheSaves = new Map();
+        return this.cacheWrite = this.remember(data => {
+            for (const [key, entry] of saves) data.issues[key] = { ...entry, issues: cachedIssues(entry.issues) };
+            data.lastScope = lastScope;
         });
     }
     async withAncestors(cloudId, seeds, existing, options, attemptedParents = []) {
@@ -564,7 +610,8 @@ export class Workbench {
                 this.previews.clear();
                 // Installed: a refresh that starts while this saves does not make the page any less loaded.
                 outcome = { target, status: "loaded", error: null };
-                await this.saveWorkingSet();
+                // A refresh waiting to replace this working set must find the page already saved.
+                await this.saveWorkingSet({ defer: !this.jiraRefreshing });
             } catch (error) {
                 if (current()) {
                     const message = `Load more: ${error.message}`;
@@ -584,7 +631,7 @@ export class Workbench {
     syncJira() { return this.inSession(() => this.launches.syncJira()); }
     recordSession(input) { return this.launches.recordSession(input); }
     failRequest(input) { return this.launches.failRequest(input); }
-    refreshExecution(options) { return this.inSession(() => this.trace.refreshExecution(options)); }
+    refreshExecution(options, internal) { return this.inSession(() => this.trace.refreshExecution(options, internal)); }
     refreshTrace(nodeId) { return this.inSession(() => this.trace.refreshTrace(nodeId)); }
     attach(scope, sessionId, projectId, requestId) { return this.trace.attach(scope, sessionId, projectId, requestId); }
     linkSession(input) { return this.inSession(() => this.trace.linkSession(input)); }

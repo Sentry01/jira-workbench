@@ -459,6 +459,21 @@ Selecting a project returns as soon as Jira loads; session and PR evidence fills
 behind it. Evidence checks run concurrently and are persisted in one write per
 refresh, and session polling skips projects with no linked sessions.
 
+Session polling reads live state from one `get_sessions_status` call. A linked
+session is read in full with `get_session` only when it is missing from that
+list, when its stored record has no name, branch or PR yet, during a full
+refresh, or once a minute. A session the host reports as deleted is no longer read
+by polls once it is confirmed missing. A poll that observes nothing new does not write
+`state.json`: the time of the check is kept in memory and shown in the panel,
+and is written at most once a minute.
+
+GitHub reads are shared by every panel in the extension process. Each PR is read
+with one `gh pr view` per refresh, and at most 4 `gh` processes run at once. The
+background refresh after you open or pick a project reuses a PR read from the last
+60 seconds; **Refresh**, **Refresh live state**, **Refresh GitHub** and **Refresh
+trace** always read GitHub again. Only the check fields the panel shows (name or
+context, conclusion, state and status) are stored.
+
 Freshness is source-specific. Session refreshes do not relabel old GitHub evidence
 as newly verified; failed observations stay stale or unknown. Concurrent panels
 preserve unrelated source updates and historical PR links.
@@ -585,10 +600,17 @@ lives inside that clone's `artifacts/`; when you switch to the plugin, remove th
 link and move that `artifacts/.local` to `~/.copilot/extensions/jira-workbench/artifacts/.local`
 before installing (exact commands: [Switching from a git clone](../../../docs/install.md#switching-from-a-git-clone-or-a-copied-install)). Links are keyed by Jira site ID, project ID,
 and stable issue ID, not canvas panel IDs. Atomic writes and a short-lived file
-lock protect `state.json` updates from multiple extension processes.
+lock protect `state.json` updates from multiple extension processes. Writers in
+one process queue in memory instead of contending for the lock. The lock holds a
+random token, and its owner refreshes the lock's timestamp every 5 seconds, so a
+slow but live writer is never treated as crashed. Before replacing `state.json`
+and before removing the lock, a writer checks that the lock is still its own. A
+writer that lost its lock during a long pause (for example, laptop sleep) fails
+with "The state lock was taken over" and saves nothing, rather than overwrite a
+newer change.
 
-Every write also compacts `state.json`, because the panel re-reads it every few
-seconds and rewrites it on each preference change:
+`state.json` is written as compact JSON. Every write also compacts it, because the
+panel re-reads it every few seconds and rewrites it on each preference change:
 
 - Every request still stored as queued is kept, whether it is waiting or expired.
 - Of the finished requests (attached, failed or cleared), only the 20 most recent
@@ -600,14 +622,23 @@ seconds and rewrites it on each preference change:
 `cache.json` is a disposable warm-start snapshot: the Jira site and Copilot project
 catalog, per-site project lists, the last selected project, and the issue hierarchy
 of the eight most recently loaded projects. It is safe to delete at any time.
+While you page with **Load more**, cache saves are combined: the cache is written
+after a second without a new page (at most 10 seconds after the first), when the
+panel closes, when you pick another project, or with the next refresh. A save that
+would not change the file is skipped. Descriptions longer than 2,000 characters
+are shortened in the cache; the panel shows the full text again after its next
+Jira read.
 
 The state contains private repository mappings and work metadata. **Never publish
 the `artifacts/` directory.** It is git-ignored; `.local/` is also hidden from the
 canvas-extension sharing mechanism.
 
 A `write.lock` left by a crashed writer is recovered automatically once its owning
-process has exited or the lock is older than 30 seconds. Corrupt or unsupported
-state is reported rather than silently reset; a corrupt cache is simply ignored.
+process has exited or the lock has not been refreshed for 30 seconds. Corrupt or
+unsupported state is reported rather than silently reset; a corrupt cache is simply
+ignored. A single malformed entry in an otherwise valid `state.json` (for example,
+a link whose `sessions` is not a list) is ignored instead: the panel lists it once
+with the file path, and the next write removes it.
 
 ## Tests
 

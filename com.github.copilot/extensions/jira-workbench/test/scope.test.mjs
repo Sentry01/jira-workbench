@@ -353,7 +353,7 @@ test("execution evidence reads every linked trace of the project's own issues, n
     });
     const read = [];
     wb.trace.collectTrace = async ({ scope }) => { read.push(scope); return {}; };
-    store.update = async () => { throw new Error("collection complete"); };
+    wb.trace.persist = async () => { throw new Error("collection complete"); };
     await assert.rejects(wb.refreshExecution(), /collection complete/);
     assert.deepEqual(read.sort(), ["project", "1", "2"].map(id => wb.selectedScope(id)).sort());
 });
@@ -405,13 +405,15 @@ test("a page installed before a later refresh still reports that it loaded", asy
     gateway.issues = async (site, project, options) => options.cursor
         ? { issues: [row("2")], nextPageToken: null, fetchedAt: "two" }
         : (() => { throw new Error("Refresh outage"); })();
-    const more = wb.loadMore();
+    // Paging defers its cache save; an explicit flush writes it, and a refresh starts while that write is pending.
+    const page = await wb.loadMore();
+    const flushed = wb.flushCache();
     await saving.promise;
     const refresh = wb.refresh();
     release.resolve();
-    const [page] = await Promise.all([more, refresh]);
+    await Promise.all([flushed, refresh]);
     assert.equal(page.pageResult.status, "loaded");
-    assert.ok(page.issues.some(issue => issue.id === "2"), "the failed refresh kept the appended page");
+    assert.ok((await wb.snapshot()).issues.some(issue => issue.id === "2"), "the failed refresh kept the appended page");
 });
 
 test("a failed Apply keeps its error after a later page loads", async () => {

@@ -6,7 +6,7 @@ import { Store } from "./lib/store.mjs";
 import { Cache } from "./lib/cache.mjs";
 import { Workbench } from "./lib/workbench.mjs";
 import { startServer } from "./lib/server.mjs";
-import { readPr } from "./lib/github.mjs";
+import { PrReader } from "./lib/github.mjs";
 import { HostActions } from "./lib/host-actions.mjs";
 import { Updater } from "./lib/updater.mjs";
 import { version } from "./lib/version.mjs";
@@ -14,6 +14,8 @@ import { version } from "./lib/version.mjs";
 const panels = new Map();
 const stateDir = join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "extensions", "jira-workbench", "artifacts", ".local");
 const store = new Store(stateDir), cache = new Cache(stateDir);
+// One per process: panels share recent PR reads and the cap on concurrent gh calls.
+const prs = new PrReader();
 let resolveReady;
 const ready = new Promise(resolve => { resolveReady = resolve; });
 const string = { type: "string", minLength: 1 };
@@ -40,7 +42,7 @@ const sharedUpdater = () => updaterReady ??= version().then(build => new Updater
 async function openPanel(ctx, entry) {
     await ready;
     const workbench = new Workbench({
-        gateway: connection.gateway, store, cache, github: readPr,
+        gateway: connection.gateway, store, cache, github: prs.read,
         hostActions: new HostActions({ session, instanceId: ctx.instanceId }),
         send: options => session.send(options), instanceId: ctx.instanceId,
     });
@@ -105,8 +107,9 @@ const session = await joinSession({
             try { await entry.opening; } catch { return; }
             connection.detach(entry.workbench);
             entry.updater.release();
-            entry.workbench.close();
+            const flushed = entry.workbench.close();
             await entry.server.close();
+            await flushed;
         },
     })],
 });
