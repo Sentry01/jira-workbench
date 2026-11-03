@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Connection } from "./lib/connection.mjs";
 import { Store } from "./lib/store.mjs";
 import { Cache } from "./lib/cache.mjs";
-import { Workbench } from "./lib/workbench.mjs";
+import { Workbench, withTree } from "./lib/workbench.mjs";
 import { startServer } from "./lib/server.mjs";
 import { PrReader } from "./lib/github.mjs";
 import { HostActions } from "./lib/host-actions.mjs";
@@ -27,7 +27,8 @@ const action = (name, description, inputSchema, run) => ({
         const entry = panels.get(ctx.instanceId);
         // A panel still opening answers once it is open.
         if (!entry || !await entry.opening.then(() => true, () => false)) throw new CanvasError("workbench_not_open", "Reopen Jira Workbench first.");
-        try { return await run(entry.workbench, ctx.input); }
+        // Agents may read `tree` from any snapshot an action returns; the panel's HTTP snapshot no longer carries it.
+        try { return withTree(await run(entry.workbench, ctx.input)); }
         catch (error) { throw new CanvasError("workbench_action_failed", error.message); }
     },
 });

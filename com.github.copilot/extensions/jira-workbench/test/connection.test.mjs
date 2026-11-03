@@ -8,6 +8,7 @@ import { Cache } from "../lib/cache.mjs";
 import { Workbench } from "../lib/workbench.mjs";
 import { Connection, RECONNECT_EVENTS } from "../lib/connection.mjs";
 import { CONNECTOR, fakeRuntime, SITE } from "./fake-runtime.mjs";
+import { signInNeeded } from "../lib/view-model.mjs";
 
 const requested = { cloudId: SITE.id, jiraProjectId: "42" };
 // Sharing is off by default so each test's reads really reach the fake server; sharing tests turn it on.
@@ -150,7 +151,7 @@ for (const status of ["stopped", "disabled", "needs-auth"]) {
         await sleep(40);
         assert.equal(runtime.counters.restarts, 0);
         assert.match(workbench.catalogErrors[0], status === "needs-auth" ? /sign-in has expired\. Press Sign in to Atlassian/ : new RegExp(`atlassian is ${status}`));
-        if (status === "needs-auth") assert.deepEqual((await workbench.snapshot()).signIn, { server: "atlassian", connector: false });
+        if (status === "needs-auth") assert.deepEqual(signInNeeded(await workbench.snapshot()), { server: "atlassian", connector: false });
         assert.doesNotMatch(workbench.catalogErrors[0], /unrelated-sso/);
         runtime.servers.set("atlassian", "connected");
         runtime.emit(status === "needs-auth" ? "mcp.oauth_completed" : "session.mcp_server_status_changed", { serverName: "atlassian", status: "connected" });
@@ -396,7 +397,7 @@ test("an expired sign-in is detected, stops the retry storm, and asks for sign-i
     runtime.signInExpired = true;
     await workbench.refresh();
     const snapshot = await workbench.snapshot();
-    assert.deepEqual(snapshot.signIn, { server: "atlassian", connector: false });
+    assert.deepEqual(signInNeeded(snapshot), { server: "atlassian", connector: false });
     assert.match(workbench.error, /sign-in has expired\. Press Sign in to Atlassian/);
     assert.equal(workbench.issues.length, 3, "last good data kept");
     await sleep(20);
@@ -414,11 +415,11 @@ test("signing in anywhere (e.g. /mcp auth) reloads the panel with no event and n
     await open();
     runtime.signInExpired = true;
     await workbench.refresh();
-    assert.ok((await workbench.snapshot()).signIn);
+    assert.ok(signInNeeded(await workbench.snapshot()));
     runtime.completeSignIn({ event: false });
     const ms = await until(t, () => loaded(workbench) && workbench.connection.status().state === "ready", { timeoutMs: 3000, what: "reload after sign-in" });
     assert.ok(ms < 1000, `took ${ms}ms with a 10ms sign-in check`);
-    assert.equal((await workbench.snapshot()).signIn, null);
+    assert.equal(signInNeeded(await workbench.snapshot()), null);
 });
 
 test("an oauth_completed event reloads at once even when the sign-in watch is slow", async t => {
@@ -499,7 +500,7 @@ test("a single silent token refresh is still invisible and never asks for sign-i
     runtime.tokenExpired = true;
     await workbench.refresh();
     assert.equal(workbench.error, null);
-    assert.equal((await workbench.snapshot()).signIn, null);
+    assert.equal(signInNeeded(await workbench.snapshot()), null);
     assert.equal(runtime.counters.probes, 0, "no probe needed when the retry succeeds");
 });
 
@@ -510,7 +511,7 @@ test("an auth failure the probe cannot confirm is not reported as an expired sig
     runtime.permanentError = "HTTP 401 from an upstream proxy";
     runtime.session.rpc.mcp.oauth.probe = async () => ({ status: "authenticated", httpResponse: { status: 200 } });
     await workbench.refresh();
-    assert.equal((await workbench.snapshot()).signIn, null);
+    assert.equal(signInNeeded(await workbench.snapshot()), null);
     assert.match(workbench.error, /401/);
 });
 
@@ -536,7 +537,7 @@ test("a server that drops to needs-auth under an open panel shows Sign in, and s
     runtime.servers.set("atlassian", "needs-auth");
     await workbench.refresh();
     const snapshot = await workbench.snapshot();
-    assert.deepEqual(snapshot.signIn, { server: "atlassian", connector: false });
+    assert.deepEqual(signInNeeded(snapshot), { server: "atlassian", connector: false });
     assert.doesNotMatch(workbench.error, /does not exist/);
     assert.equal(workbench.issues.length, 3, "last good data kept");
     assert.equal(runtime.counters.restarts, 0, "needs-auth waits for the user");
@@ -546,7 +547,7 @@ test("a server that drops to needs-auth under an open panel shows Sign in, and s
     runtime.servers.set("atlassian", "connected");
     runtime.snapshot = [];
     await until(t, () => loaded(workbench) && workbench.connection.status().state === "ready", { what: "reload after sign-in with no event" });
-    assert.equal((await workbench.snapshot()).signIn, null);
+    assert.equal(signInNeeded(await workbench.snapshot()), null);
     assert.equal(workbench.project.key, "DEMO", "the same site and project reopen");
 });
 
@@ -554,7 +555,7 @@ test("a needs-auth server coming back connected reloads at once even when the si
     const runtime = fakeRuntime({ status: "needs-auth" });
     const { workbench, open, loaded } = await harness(t, runtime, { connection: { watchMs: 60_000 } });
     await open();
-    await until(t, async () => (await workbench.snapshot()).signIn, { what: "sign-in request" });
+    await until(t, async () => signInNeeded(await workbench.snapshot()), { what: "sign-in request" });
     runtime.set("atlassian", "connected");
     await until(t, () => loaded(workbench), { what: "reload after the server connected" });
 });
@@ -601,7 +602,7 @@ test("a stalled tool list still surfaces Sign in when the Atlassian server is wa
         connection: { gatewayOptions: { transientDelayMs: 1, rebuildMinMs: 20, shareMs: 0, timeouts } },
     });
     await open();
-    await until(t, async () => (await workbench.snapshot()).signIn, { what: "sign-in request despite the stalled tool list" });
+    await until(t, async () => signInNeeded(await workbench.snapshot()), { what: "sign-in request despite the stalled tool list" });
     runtime.stalled.release();
 });
 
@@ -712,7 +713,7 @@ for (const [label, model] of PROBES) {
         runtime.signInExpired = true;
         await workbenches[0].refresh();
         assert.equal(connection.status().state, "signin");
-        assert.deepEqual((await workbenches[1].snapshot()).signIn, { server: "atlassian", connector: false });
+        assert.deepEqual(signInNeeded(await workbenches[1].snapshot()), { server: "atlassian", connector: false });
         const entered = connection.status().since;
         await sleep(15); // a keepalive already in flight when the token died may finish its retries
         const base = runtime.counters.oauthRequests;
@@ -821,17 +822,17 @@ test("snapshot() is pure: no timers, no runtime calls and no state change, in an
     assert.deepEqual(down.connection, { state: "down", reason: status.reason, server: "atlassian", connector: false, nextCheckAt: status.nextCheckAt });
     assert.match(down.connection.reason, /atlassian is stopped/);
     assert.ok(down.retryAt && down.retryAt === status.nextCheckAt, "the retry hint is the connection's next check");
-    assert.equal(down.signIn, null);
+    assert.equal(signInNeeded(down), null);
     runtime.set("atlassian", "needs-auth");
     await until(t, () => connection.status().state === "signin", { what: "signin" });
     await workbench.idle();
     const signin = await check();
-    assert.deepEqual(signin.signIn, { server: "atlassian", connector: false });
+    assert.deepEqual(signInNeeded(signin), { server: "atlassian", connector: false });
     runtime.set("atlassian", "connected");
     await until(t, () => connection.status().state === "ready" && !workbench.needsRecovery(), { what: "ready" });
     await workbench.idle();
     const ready = await check();
-    assert.deepEqual([ready.retryAt, ready.signIn, ready.connection.state], [null, null, "ready"]);
+    assert.deepEqual([ready.retryAt, signInNeeded(ready), ready.connection.state], [null, null, "ready"]);
 });
 
 // The Copilot app's Atlassian Rovo connector next to the atlassian MCP server: both offer every Jira tool.
@@ -857,7 +858,7 @@ test("a signed-out atlassian server still in the tool list does not hide the con
     assert.ok(loaded(workbench), JSON.stringify(workbench.catalogErrors));
     await until(t, () => connection.status().state === "ready", { what: "ready" });
     assert.equal(connection.status().server, CONNECTOR);
-    assert.equal((await workbench.snapshot()).signIn, null, "no Sign in prompt while the connector works");
+    assert.equal(signInNeeded(await workbench.snapshot()), null, "no Sign in prompt while the connector works");
     assert.deepEqual(servedBy(runtime), [CONNECTOR]);
     assert.ok(runtime.calls.some(call => call.name === "executeRead"), "projects come from the connector's v2 tools, not the signed-out v1 server");
 });
@@ -891,7 +892,7 @@ test("a connector that needs sign-in points to the Copilot app and never starts 
     await open();
     runtime.set(CONNECTOR, "needs-auth");
     await until(t, () => connection.status().state === "signin", { what: "signin" });
-    assert.deepEqual((await workbench.snapshot()).signIn, { server: CONNECTOR, connector: true });
+    assert.deepEqual(signInNeeded(await workbench.snapshot()), { server: CONNECTOR, connector: true });
     assert.match(connection.status().reason, /Atlassian connector needs sign-in/);
     assert.doesNotMatch(connection.status().reason, /cc-_/, "the opaque connector name is never shown");
     await assert.rejects(workbench.signIn(), /Copilot app/);
@@ -909,7 +910,7 @@ test("a panel with no Copilot session behind it explains why, fails reads fast a
     await workbench.idle();
     const snapshot = await workbench.snapshot();
     assert.match(snapshot.connection.reason, /not running in a Copilot session.*opened from Canvases in the sidebar/);
-    assert.deepEqual([snapshot.retryAt, snapshot.signIn], [null, null], "no reconnect countdown and no Sign in");
+    assert.deepEqual([snapshot.retryAt, signInNeeded(snapshot)], [null, null], "no reconnect countdown and no Sign in");
     await workbench.catalog();
     assert.match(workbench.catalogErrors.find(message => message.startsWith("Jira:")), /not running in a Copilot session/);
     await workbench.catalog({ fresh: true });

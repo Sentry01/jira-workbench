@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../lib/store.mjs";
-import { Workbench } from "../lib/workbench.mjs";
+import { Workbench, withTree } from "../lib/workbench.mjs";
 
 const site = { id: "cloud-demo", name: "Demo", url: "https://demo.atlassian.net" };
 const project = { id: "42", key: "DEMO", name: "Demo project" };
@@ -52,7 +52,42 @@ test("switching project requires catalog membership and repository mapping is se
     const snapshot = await workbench.snapshot();
     assert.equal(snapshot.mapping.id, copilot.id);
     assert.equal(snapshot.project.id, "42");
-    assert.equal(snapshot.tree.roots[0].children.length, 1);
+    assert.equal("tree" in snapshot, false, "the panel builds the tree from issues");
+    assert.equal(withTree(snapshot).tree.roots[0].children.length, 1, "agent actions still receive the tree");
+});
+
+test("the snapshot leaves out fields the panel never reads", async t => {
+    const { workbench } = await fixture(t);
+    const snapshot = await workbench.snapshot();
+    assert.equal("signIn" in snapshot, false);
+    assert.equal("jiraRefreshing" in snapshot, false);
+});
+
+test("an unchanged working set is sent once per revision, and every replacement gets a new one", async t => {
+    const { workbench } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await workbench.linkSession({ nodeId: "2", sessionId: "session-1" });
+    const full = await workbench.snapshot();
+    assert.equal(typeof full.issuesRevision, "string");
+    assert.equal(full.issues.length, 2);
+    const unchanged = await workbench.snapshot({ since: full.issuesRevision });
+    assert.equal(unchanged.issues, null, "the panel already holds this working set");
+    assert.equal(unchanged.issuesRevision, full.issuesRevision);
+    assert.deepEqual(unchanged.executions, full.executions, "everything except the working set is still sent");
+    assert.deepEqual(unchanged.links, full.links);
+    for (const since of [null, "", "unknown:1", 7, { revision: full.issuesRevision }])
+        assert.equal((await workbench.snapshot({ since })).issues.length, 2, `since ${JSON.stringify(since)} gets the full working set`);
+    const polled = await workbench.refreshExecution({ source: "sessions", since: full.issuesRevision });
+    assert.equal(polled.issues, null, "a session poll that changed no issue sends none");
+    assert.equal(polled.issuesRevision, full.issuesRevision);
+    assert.equal(polled.refreshing, false, "the response reflects the refresh as finished");
+    assert.equal((await workbench.refreshExecution({ source: "sessions" })).issues.length, 2);
+    await workbench.refresh();
+    const refreshed = await workbench.snapshot({ since: full.issuesRevision });
+    assert.notEqual(refreshed.issuesRevision, full.issuesRevision, "a Jira refresh installs a new working set");
+    assert.equal(refreshed.issues.length, 2);
+    const other = new Workbench({ gateway: workbench.gateway, store: workbench.store, github: async () => null, send: async () => {}, instanceId: "other" });
+    assert.notEqual(other.issuesRevision, refreshed.issuesRevision, "panels never share a revision");
 });
 
 

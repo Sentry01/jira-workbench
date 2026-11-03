@@ -81,7 +81,7 @@ export async function startServer(workbench, { assets = pinned, updater = null }
         res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'");
         void (async () => {
             if (`http://${req.headers.host}` !== origin) { reply(res, 403, { error: "Invalid host." }); return; }
-            const path = new URL(req.url, origin).pathname;
+            const url = new URL(req.url, origin), path = url.pathname;
             const served = req.method === "GET" ? (await assets).get(path) : null;
             if (served) {
                 res.writeHead(200, { "Content-Type": served[1] });
@@ -93,7 +93,7 @@ export async function startServer(workbench, { assets = pinned, updater = null }
                 || (req.headers.origin && req.headers.origin !== origin)) {
                 reply(res, 403, { error: "This request is not from the open Workbench panel." }); return;
             }
-            if (req.method === "GET" && path === "/api/state") { reply(res, 200, await workbench.snapshot()); return; }
+            if (req.method === "GET" && path === "/api/state") { reply(res, 200, await workbench.snapshot({ since: url.searchParams.get("since") })); return; }
             if (req.method === "GET" && path === "/api/version") { reply(res, 200, await build()); return; }
             if (req.method !== "POST" || !routes[path]) { reply(res, 404, { error: "Unknown action." }); return; }
             if (!req.headers["content-type"]?.startsWith("application/json")) { reply(res, 415, { error: "JSON required." }); return; }

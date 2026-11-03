@@ -91,6 +91,9 @@ export function normalizeIssue(raw, { sprintField = null } = {}) {
     };
 }
 
+// One collator for every key sort: localeCompare with options builds a new collator on each call.
+export const keyOrder = new Intl.Collator(undefined, { numeric: true }).compare;
+
 export function buildTree(issues) {
     const nodes = new Map(issues.map(issue => [issue.key, { issue, children: [], total: 0, done: 0 }]));
     const ids = new Map(issues.map(issue => [issue.id, issue]));
@@ -131,10 +134,10 @@ export function buildTree(issues) {
         node.children.forEach(visit);
         node.total = node.children.reduce((n, child) => n + 1 + child.total, 0);
         node.done = node.children.reduce((n, child) => n + Number(child.issue.category === "done") + child.done, 0);
-        node.children.sort((a, b) => b.issue.level - a.issue.level || a.issue.key.localeCompare(b.issue.key, undefined, { numeric: true }));
+        node.children.sort((a, b) => b.issue.level - a.issue.level || keyOrder(a.issue.key, b.issue.key));
     };
     roots.forEach(visit);
-    roots.sort((a, b) => b.issue.level - a.issue.level || a.issue.key.localeCompare(b.issue.key, undefined, { numeric: true }));
+    roots.sort((a, b) => b.issue.level - a.issue.level || keyOrder(a.issue.key, b.issue.key));
     return { roots, warnings };
 }
 

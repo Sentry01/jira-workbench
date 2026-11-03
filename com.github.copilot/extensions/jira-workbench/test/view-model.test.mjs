@@ -5,7 +5,7 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
-    smartCommitOption, retryNotice, nextFocusKey,
+    smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, requestStatuses,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -387,4 +387,51 @@ test("an Update Jira that timed out settles as failed when the server reports it
     assert.equal(launchRejection({ clientId: "x" }, rejected), null);
     assert.equal(launchRejection({}, rejected), null);
     assert.equal(launchRejection({ clientId: "c" }), null);
+});
+
+test("a snapshot without the working set reuses the panel's copy only for the revision the panel holds", () => {
+    const issues = [{ id: "1", key: "DEMO-1" }];
+    const held = { issuesRevision: "a:1", issues };
+    const full = { issuesRevision: "a:2", issues: [{ id: "2", key: "DEMO-2" }], executions: [] };
+    assert.equal(resolveSnapshot(full, held), full, "a full snapshot is used as sent");
+    const unchanged = { issuesRevision: "a:1", issues: null, executions: [{ nodeId: "1" }] };
+    const resolved = resolveSnapshot(unchanged, held);
+    assert.equal(resolved.issues, issues, "the held working set fills in");
+    assert.deepEqual(resolved.executions, [{ nodeId: "1" }], "everything else comes from the response");
+    assert.equal(unchanged.issues, null, "the response is not modified");
+    // A response compared against a revision this panel no longer (or never) held: the caller must refetch in full.
+    assert.equal(resolveSnapshot({ issuesRevision: "a:1", issues: null }, { issuesRevision: "a:2", issues }), null);
+    assert.equal(resolveSnapshot({ issuesRevision: "a:1", issues: null }, { issues: [] }), null);
+    assert.equal(resolveSnapshot({ issuesRevision: "a:1", issues: null }, { issuesRevision: "a:1" }), null);
+    assert.equal(resolveSnapshot({ issues: null }, { issues }), null);
+    assert.equal(resolveSnapshot({ issuesRevision: "a:1" }, held), null, "a missing working set is never treated as unchanged");
+    assert.equal(resolveSnapshot(null, held), null);
+});
+
+test("render digests ignore freshness stamps rows never show but keep what the inspector shows", () => {
+    const links = stamp => ({ "c/42/2": {
+        verifiedAt: `2026-11-03T10:15:${stamp}.000Z`,
+        sessions: [{ id: "s1", activity: "idle", verifiedAt: `2026-11-03T10:15:${stamp}.000Z` }],
+        prs: [], sourceStatus: { sessions: { state: "fresh", fetchedAt: `2026-11-03T10:15:${stamp}.000Z`, error: null } },
+    } });
+    assert.equal(linksDigest(links("01")), linksDigest(links("59")), "a re-observation with the same evidence keeps the row digest");
+    const minute = value => value.slice(0, 16);
+    assert.equal(linksDigest(links("01"), minute), linksDigest(links("59"), minute), "same minute, same inspector");
+    const later = links("01");
+    later["c/42/2"].sourceStatus.sessions.fetchedAt = "2026-11-03T10:16:00.000Z";
+    assert.notEqual(linksDigest(links("01"), minute), linksDigest(later, minute), "the inspector shows the new minute");
+    const changed = links("59");
+    changed["c/42/2"].sessions[0].activity = "running";
+    assert.notEqual(linksDigest(links("01")), linksDigest(changed), "observed evidence still changes the digest");
+    const stale = links("59");
+    stale["c/42/2"].sourceStatus.sessions.state = "stale";
+    assert.notEqual(linksDigest(links("01")), linksDigest(stale), "a source turning stale changes the digest");
+});
+
+test("request statuses in a render digest change when a request crosses its expiry", () => {
+    const at = "2026-11-03T10:00:00.000Z";
+    const requests = [{ requestId: "r1", nodeId: "2", status: "queued", at }];
+    const start = Date.parse(at);
+    assert.deepEqual(requestStatuses(requests, start + 1000), ["queued"]);
+    assert.deepEqual(requestStatuses(requests, start + REQUEST_TTL_MS + 1000), ["expired"]);
 });

@@ -48,6 +48,7 @@ node --test com.github.copilot/extensions/jira-workbench/test/*.test.mjs
 WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-canvas.mjs
 WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-reconnect.mjs
 WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-scope.mjs
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-poll.mjs
 
 # 3. Only if you changed the UI: regenerate the guide screenshots
 WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs
@@ -69,7 +70,7 @@ shows how to use a scratch directory, and documents the `BROWSER_EXECUTABLE` and
 CI runs on every pull request and on every push to `main`:
 
 - **Unit tests**: step 1, on Node 20, 22 and 24.
-- **Browser harnesses**: all three harnesses from step 2, on Linux with Google
+- **Browser harnesses**: all four harnesses from step 2, on Linux with Google
   Chrome. Their screenshots are uploaded as an artifact when one fails.
 - **No private data**: rejects a committed `artifacts/` directory or an absolute
   home path.

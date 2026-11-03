@@ -1,9 +1,9 @@
-import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } from "/model.mjs";
+import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness, buildTree } from "/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
-    retryNotice, nextFocusKey,
+    retryNotice, nextFocusKey, resolveSnapshot, linksDigest, requestStatuses,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -16,7 +16,7 @@ const token = location.hash.slice(1);
 const filters = [["needs-me", "Needs me"], ["running", "Running"], ["prs", "PRs to review"], ["available", "Available to start"], ["all", "All work"]];
 const defaults = () => ({ view: "execution", executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", sprint: "all", scrollTop: 0, detailsOpen: false });
 let state = { sites: [], projects: [], appProjects: [], issues: [], links: {}, requests: [], executions: [], navigationReceipts: [], tree: { roots: [], warnings: [] }, catalogErrors: [] };
-let itemsById = new Map();
+let itemsById = new Map(), itemsSource = null;
 let ui = defaults(), tab = "trace", focusedNode = null, scopeEpoch = 0;
 let selecting = false, scopeConfirmed = true, selectionVersion = 0, selectionChain = Promise.resolve(), pollPending = false, snapshotVersion = 0;
 let preferenceTimer, preferenceRequest, preferenceRevision = 0;
@@ -146,7 +146,7 @@ function refreshExecution(source = "all", epoch = scopeEpoch, afterCurrent = fal
     // Earlier callers report their failures; an explicit refresh still gets its own attempt.
     const pending = Promise.allSettled(preceding).then(() => {
         if (epoch !== scopeEpoch || selecting || !scopeConfirmed) throw new Error("Project selection changed before the live refresh could run.");
-        return api("refresh-execution", poll ? { source, poll } : { source });
+        return api("refresh-execution", { source, ...(poll ? { poll } : {}), ...(state.issuesRevision ? { since: state.issuesRevision } : {}) });
     }).finally(() => {
         if (executionRefreshes.get(key) === pending) executionRefreshes.delete(key);
     });
@@ -272,18 +272,32 @@ function acceptSnapshot(snapshot, { allowScopeChange = false } = {}) {
         treeDigest = inspectorDigest = "";
     }
     if (preview && state.mapping?.id !== snapshot.mapping?.id) markPreviewDirty();
-    state = { ...snapshot, executions: snapshot.executions || [], navigationReceipts: snapshot.navigationReceipts || [] };
-    itemsById = new Map(state.issues.map(issue => [issue.id, issue]));
+    // The tree is derived from the working set, so it is rebuilt only when the working set is replaced.
+    const tree = snapshot.issues === state.issues ? state.tree : buildTree(snapshot.issues);
+    state = { ...snapshot, tree, executions: snapshot.executions || [], navigationReceipts: snapshot.navigationReceipts || [] };
+    if (snapshot.issues !== itemsSource) { itemsSource = snapshot.issues; itemsById = new Map(state.issues.map(issue => [issue.id, issue])); }
     reconcileReceipts();
     render({ force: changedScope });
     updateLaunchControls();
     if (changedScope && (localPreferences.has(state.scope) || hasInitialEdits)) savePreferences();
     return true;
 }
-async function sync(epoch = scopeEpoch) {
+// Applies a snapshot that may leave out the working set (`issues: null` for the revision this panel holds).
+// False when this panel does not hold that revision: the caller must read the full snapshot instead.
+function applySnapshot(snapshot, options) {
+    const resolved = resolveSnapshot(snapshot, state);
+    if (!resolved) return false;
+    acceptSnapshot(resolved, options);
+    return true;
+}
+async function sync(epoch = scopeEpoch, full = false) {
     const version = ++snapshotVersion;
-    const snapshot = await api("state");
-    if (epoch === scopeEpoch && version === snapshotVersion && !selecting) acceptSnapshot(snapshot);
+    const since = full ? null : state.issuesRevision;
+    const snapshot = await api(since ? `state?since=${encodeURIComponent(since)}` : "state");
+    if (epoch !== scopeEpoch || version !== snapshotVersion || selecting) return;
+    if (applySnapshot(snapshot)) return;
+    if (full) throw new Error("The workbench returned an invalid snapshot.");
+    await sync(epoch, true);
 }
 
 function configureActionControl(control, kind, target, disabled = false, scope = state.scope) {
@@ -363,7 +377,7 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         // The control normally keeps focus (see setInert); if it was hidden or replaced, focus its row instead.
         if (restoreControlFocus && (global || scope === state.scope) && epoch === scopeEpoch && !selecting
             && (document.activeElement === document.body || document.activeElement?.disabled)) {
-            if (kind === "load-more") renderTree(true);
+            if (kind === "load-more") renderTree();
             const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && !element.hidden);
             if (control) control.focus({ preventScroll: true });
             else if (!focusRow(nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
@@ -748,7 +762,8 @@ function refreshSourceButton(label, source = "all", nodeId) {
 }
 function renderTree(force = false) {
     const container = $("tree");
-    const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issues, state.tree, state.executions, state.links, state.requests, state.mapping, selecting, scopeConfirmed]);
+    // The revision stands for the working set and its tree; links leave out stamps that rows never show.
+    const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issuesRevision ?? state.issues, state.executions, linksDigest(state.links), state.requests, requestStatuses(state.requests), state.mapping, selecting, scopeConfirmed]);
     if (!force && (container.contains(document.activeElement) || signature === treeDigest)) return;
     const focus = captureFocus(container);
     treeDigest = signature;
@@ -997,7 +1012,7 @@ function reviewedContext(receipt, key) {
 }
 function renderInspector(force = false) {
     const panel = $("inspector-content"), item = getItem(ui.selected);
-    const signature = JSON.stringify([ui.selected, tab, item, state.links, state.executions, state.mapping, state.requests, selecting, scopeConfirmed]);
+    const signature = JSON.stringify([ui.selected, tab, item, linksDigest(state.links, time), state.executions, state.mapping, state.requests, requestStatuses(state.requests), selecting, scopeConfirmed]);
     if (!force && (panel.contains(document.activeElement) || signature === inspectorDigest)) return;
     const focus = captureFocus(panel);
     inspectorDigest = signature;
@@ -1419,7 +1434,8 @@ $("apply-scope").addEventListener("click", async () => {
 // Keyed by working-set generation: a Load more still pending for a replaced scope must not disable the new one.
 function loadMoreTarget() { return `working-set:${state.workingSetGeneration ?? 0}`; }
 $("load-more").addEventListener("click", () => void perform({
-    kind: "load-more", target: loadMoreTarget(), label: "Load more", work: loadMoreAction, refresh: true,
+    // The Load more response is the full snapshot, so no second read follows it.
+    kind: "load-more", target: loadMoreTarget(), label: "Load more", work: loadMoreAction,
     success: "Working-set page loaded.",
 }));
 $("search").addEventListener("input", () => { ui.query = $("search").value; savePreferences("query"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
@@ -1539,12 +1555,23 @@ async function poll() {
     pollPending = true;
     const epoch = scopeEpoch;
     try {
+        let applied = false, full = false;
         if (state.project && scopeConfirmed && !state.warming && !state.refreshing && !standaloneHost(state) && Date.now() - lastSessionPoll >= 4500) {
             lastSessionPoll = Date.now();
-            await refreshExecution("sessions", epoch, false, true);
+            const version = snapshotVersion;
+            const snapshot = await refreshExecution("sessions", epoch, false, true);
+            if (epoch !== scopeEpoch || pollingPaused()) return;
+            // The refresh returns the snapshot read after it, so no second read is needed. If another read started
+            // meanwhile, fall back to a fresh read as before; otherwise apply it and retire any older read in flight.
+            if (version === snapshotVersion && !selecting) {
+                snapshotVersion++;
+                applied = applySnapshot(snapshot);
+                // Compared against a revision this panel does not hold: read the whole snapshot, not a stale delta.
+                full = !applied;
+            }
         }
         if (epoch !== scopeEpoch || pollingPaused()) return;
-        await sync(epoch);
+        if (!applied) await sync(epoch, full);
         warmingMessage();
         if (epoch === scopeEpoch) connectionMessage("poll", "");
     } catch (error) {
