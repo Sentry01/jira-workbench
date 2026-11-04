@@ -117,11 +117,14 @@ export class Trace {
         const owner = link.sessions.find(s => s.prNumber === number && s.prRepo?.toLowerCase() === repo.toLowerCase());
         return wb.hostActions.openPr(repo, number, owner ? { sessionId: owner.id } : {});
     }
-    async refreshExecution({ source = "all" } = {}) {
+    // poll: the panel's background session poll, which stops asking about sessions confirmed missing. Any other
+    // refresh, such as Refresh Sessions, is the user's request and checks them again.
+    async refreshExecution({ source = "all", poll = false } = {}) {
         const wb = this.workbench;
         if (!["all", "sessions", "github"].includes(source)) throw new Error("Choose a supported execution source.");
+        poll = poll === true;
         const scope = wb.selectedScope(), generation = wb.refreshGeneration;
-        const key = `${wb.loadKey()}/${generation}/${source}`;
+        const key = `${wb.loadKey()}/${generation}/${source}${poll ? "/poll" : ""}`;
         if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key);
         const pending = (async () => {
             const data = await wb.store.read();
@@ -139,7 +142,7 @@ export class Trace {
                 try { statuses = objects(await wb.gateway.call("get_sessions_status", {})); }
                 catch (error) { statusError = error.message; }
             }
-            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, statuses, statusError }));
+            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError }));
             if (traces.length) await wb.store.update(current => { for (const trace of traces) mergeTrace(current, trace); });
             return wb.snapshot();
         })();
@@ -157,7 +160,7 @@ export class Trace {
     }
     // Observes every source for one scope concurrently, then folds results in stored order so
     // evidence and error attribution stay deterministic.
-    async collectTrace({ scope, previous, source = "all", statuses, statusError = null }) {
+    async collectTrace({ scope, previous, source = "all", poll = false, statuses, statusError = null }) {
         const wb = this.workbench;
         const stamp = new Date().toISOString();
         const next = {
@@ -174,7 +177,7 @@ export class Trace {
         const observations = await mapLimit(previous.sessions, 4, async stored => {
             const result = { stored, record: stored, observed: false, pr: null, error: null };
             // Polls stop asking about a session confirmed missing; an explicit refresh still checks it.
-            if (source === "sessions" && stored.activity === "missing" && stored.missingPolls >= MISSING_POLLS) {
+            if (poll && stored.activity === "missing" && stored.missingPolls >= MISSING_POLLS) {
                 result.observed = true;
                 return result;
             }

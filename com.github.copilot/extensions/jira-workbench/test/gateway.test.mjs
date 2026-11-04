@@ -454,3 +454,18 @@ test("a host tool that itself no longer exists still invalidates the tool list",
     assert.equal(error.notFound, undefined, "the tool is gone, not the session");
     assert.equal(invalidations, 1);
 });
+
+test("a missing legacy host tool resolved for its new name invalidates the tool list and is not marked notFound", async () => {
+    // Older app builds offer only list_projects, which the gateway resolves for list_repositories.
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: async () => ({ tools: [{ name: "list_projects" }] }),
+        execute: async () => ({ resultType: "failure", error: "Tool 'list_projects' does not exist." }),
+    } } }, { rebuildMinMs: 60_000 });
+    let invalidations = 0;
+    const invalidate = gateway.invalidate.bind(gateway);
+    gateway.invalidate = () => { invalidations++; invalidate(); };
+    const error = await gateway.call("list_repositories", {}).then(() => null, e => e);
+    assert.equal(error.kind, "permanent");
+    assert.equal(error.notFound, undefined, "the tool is gone, not a record it looked up");
+    assert.equal(invalidations, 1);
+});

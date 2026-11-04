@@ -288,7 +288,7 @@ test("a deleted session neither hides a live sibling's question nor stales the l
         ] };
     });
     let snapshot;
-    for (let poll = 0; poll < 5; poll++) snapshot = await workbench.refreshExecution({ source: "sessions" });
+    for (let poll = 0; poll < 5; poll++) snapshot = await workbench.refreshExecution({ source: "sessions", poll: true });
     const execution = snapshot.executions.find(e => e.nodeId === "2");
     assert.equal(execution.primary?.label, "Answer question");
     assert.ok(execution.signals.some(s => s.kind === "session_missing" && /Deleted: session no longer exists/.test(s.reason)));
@@ -307,6 +307,11 @@ test("a deleted session neither hides a live sibling's question nor stales the l
     // An explicit trace refresh still checks, so a restored session comes back.
     await workbench.refreshTrace("2");
     assert.equal(reads.gone, 4);
+    // So does Refresh Sessions, which reads the same source as the poll but is the user's explicit request.
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(reads.gone, 5);
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal(reads.gone, 5, "the poll still skips it");
 });
 
 test("a session found again after being missing loses its missing marker", async t => {

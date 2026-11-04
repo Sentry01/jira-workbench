@@ -442,3 +442,20 @@ test("the restart watchdog is armed when the reload is sent, not when it answers
     assert.match(status.message, /did not restart/);
     assert.equal(updater.applying, false);
 });
+
+test("a late failure from an earlier reload attempt cannot end a newer attempt", async () => {
+    const session = fakeSession();
+    let reloads = 0;
+    session.rpc.plugins.reload = () => { reloads++; return never(); };
+    // The watchdog ends the first attempt at 30ms while its reload call stays pending until its 150ms bound.
+    const updater = pluginUpdater(session, { reloadTimeoutMs: 150, restartTimeoutMs: 30 });
+    await updater.apply();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.deepEqual([updater.status().state, updater.applying], ["error", false]);
+    updater.restartTimeoutMs = 1_000;
+    updater.reloadTimeoutMs = 1_000;
+    assert.equal((await updater.apply()).state, "reloading", "the user retries");
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(reloads, 2);
+    assert.deepEqual([updater.status().state, updater.applying], ["reloading", true], "the first reload's timeout does not touch the retry");
+});

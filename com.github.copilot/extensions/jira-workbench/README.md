@@ -339,9 +339,10 @@ the real session.
 - A linked session the host reports as not found is recorded with activity
   `missing` and `missingSince`, and shown as "Session no longer exists". It is not
   a failed observation: it does not stale the sessions source or make sibling
-  sessions uncertain. Session polls stop asking about it after 3 misses; an
-  explicit **Refresh** or **Refresh trace** still checks, so a restored session
-  returns. The link itself is kept.
+  sessions uncertain. The panel's background session poll stops asking about it
+  after 3 misses; an explicit **Refresh**, **Refresh live state**, **Refresh
+  Sessions** or **Refresh trace** still checks, so a restored session returns. The
+  link itself is kept.
 
 The header's **Refresh** re-reads Jira, then the project's linked sessions and
 GitHub evidence. **Refresh live state** re-reads only the linked sessions and

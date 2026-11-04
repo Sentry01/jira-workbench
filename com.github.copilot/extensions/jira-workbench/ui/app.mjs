@@ -112,15 +112,17 @@ async function loadMoreAction(context) {
     if (snapshot.pageResult?.error) throw new Error(snapshot.pageResult.error);
     return snapshot;
 }
-function refreshExecution(source = "all", epoch = scopeEpoch, afterCurrent = false) {
-    const key = `${epoch}:${source}`;
-    const existing = executionRefreshes.get(`${epoch}:all`) || executionRefreshes.get(key);
+// poll: the background session poll. It may share an explicit refresh, but an explicit refresh never shares a poll,
+// because a poll skips sessions confirmed missing.
+function refreshExecution(source = "all", epoch = scopeEpoch, afterCurrent = false, poll = false) {
+    const key = poll ? `${epoch}:poll` : `${epoch}:${source}`;
+    const existing = executionRefreshes.get(`${epoch}:all`) || executionRefreshes.get(key) || (poll && executionRefreshes.get(`${epoch}:${source}`));
     if (existing && !afterCurrent) return existing;
-    const preceding = source === "all" ? ["all", "sessions", "github"].map(name => executionRefreshes.get(`${epoch}:${name}`)).filter(Boolean) : [];
+    const preceding = source === "all" ? ["all", "sessions", "github", "poll"].map(name => executionRefreshes.get(`${epoch}:${name}`)).filter(Boolean) : [];
     // Earlier callers report their failures; an explicit refresh still gets its own attempt.
     const pending = Promise.allSettled(preceding).then(() => {
         if (epoch !== scopeEpoch || selecting || !scopeConfirmed) throw new Error("Project selection changed before the live refresh could run.");
-        return api("refresh-execution", { source });
+        return api("refresh-execution", poll ? { source, poll } : { source });
     }).finally(() => {
         if (executionRefreshes.get(key) === pending) executionRefreshes.delete(key);
     });
@@ -1428,7 +1430,7 @@ async function poll() {
     try {
         if (state.project && scopeConfirmed && !state.warming && !state.refreshing && !standaloneHost(state) && Date.now() - lastSessionPoll >= 4500) {
             lastSessionPoll = Date.now();
-            await refreshExecution("sessions", epoch);
+            await refreshExecution("sessions", epoch, false, true);
         }
         if (epoch !== scopeEpoch || pollingPaused()) return;
         await sync(epoch);

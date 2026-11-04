@@ -262,7 +262,9 @@ export class Gateway {
                 if (GONE.test(message) && !TRANSIENT.test(message)) {
                     // A host tool's own "not found" (e.g. a deleted session) is its answer, never Atlassian's fault,
                     // and says nothing about the tool list; only a message naming the tool means the tool is gone.
-                    if (!jira && !message.includes(name)) throw Object.assign(classify(error, "permanent"), { notFound: true });
+                    // The tool can be a prefixed or legacy name (list_projects for list_repositories), so check every one.
+                    const names = [name, tool.name, tool.mcpToolName, ...(HOST_FALLBACKS[name] || [])].filter(Boolean);
+                    if (!jira && !names.some(n => message.includes(n))) throw Object.assign(classify(error, "permanent"), { notFound: true });
                     this.invalidate();
                     if (!jira) throw classify(error, "permanent");
                     if (attempt < retries && await reroute()) continue;

@@ -211,9 +211,11 @@ export class Updater {
             throw error;
         }
         this.state = { ...this.state, state: "reloading", action: null, message: "Restarting the Workbench…" };
-        let watchdog = null;
+        // Each attempt ends once: a watchdog or a late reload failure from an earlier attempt must not end a retry.
+        let watchdog = null, done = false;
         const failed = message => {
-            if (!this.applying || this.state.state !== "reloading") return;
+            if (done) return;
+            done = true;
             clearTimeout(watchdog);
             this.applying = false;
             this.state = { state: "error", action: "reload", target: null, message };
