@@ -407,6 +407,8 @@ test("invalidate() clears runtime calls that already outlived their timeout", as
         getCurrentMetadata: () => ++calls === 1 ? new Promise(() => {}) : new Promise(resolve => { answer = () => resolve({ tools }); }),
     } } }, { timeouts: { metadata: 30 } });
     await assert.rejects(gateway.metadata(), /did not answer/);
+    // A timer can fire a millisecond before Date.now() shows its full delay; wait until the call has clearly outlived it.
+    await new Promise(resolve => setTimeout(resolve, 15));
     gateway.invalidate();
     const second = gateway.metadata();
     await new Promise(resolve => setTimeout(resolve, 5));
