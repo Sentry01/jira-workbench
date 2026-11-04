@@ -126,7 +126,8 @@ reaches the panel on the next poll, including the row that has keyboard focus: t
 row updates and keeps focus (on its own control, even when another row has a
 control with the same key), and unchanged rows stay the same elements. When a poll
 removes the focused row, focus moves to the next row, else the previous one, else
-the search field. No real
+the search field. When a Jira change moves the focused row from the bottom of the
+list to the top, focus stays on it and it is scrolled into view. No real
 service is contacted.
 
 ```sh

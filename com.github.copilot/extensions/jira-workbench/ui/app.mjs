@@ -937,12 +937,16 @@ function renderTree(force = false) {
             const at = shownOrder.indexOf(focusedRowId);
             const near = row ? focusedRowId : at < 0 ? focusedNode
                 : [...shownOrder.slice(at + 1), ...shownOrder.slice(0, at).reverse()].find(id => visibleRows.has(id));
-            if (!focusRow(near, { scroll: !row })) {
+            if (!focusRow(near)) {
                 const rendered = element => element && element.getClientRects().length > 0;
                 const target = [$("search"), $(`view-${ui.view}`), $("back-to-work")].find(rendered);
                 if (target) focusInView(target);
             }
         }
+        // A rebuilt row can also have moved (its rank changed): keep the restored focus in view, scrolling no further than
+        // needed, so it is not left on an offscreen control.
+        const restored = container.contains(document.activeElement) ? document.activeElement.closest("[data-node-id]") || document.activeElement : null;
+        restored?.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
 }
 function executionRow(item, execution, trace) {

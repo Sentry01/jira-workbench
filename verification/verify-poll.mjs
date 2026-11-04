@@ -126,9 +126,30 @@ try {
     await rename(await page.evaluate(() => document.querySelector("#tree [data-node-id]").dataset.nodeId), "Left the list entirely");
     assert.deepEqual(await focused(), { row: undefined, id: "search" }, "focus moves to the search field when no row is left");
     await search(page, "");
+
+    // A poll that changes the focused row's rank moves the row; focus stays on it and the row is scrolled into view.
+    // The last available item becomes blocked in Jira, which ranks it above every available item: bottom to top.
+    const index391 = () => page.evaluate(() => [...document.querySelectorAll("#tree [data-node-id]")].findIndex(row => row.dataset.nodeId === "391"));
+    const rankBefore = await index391();
+    await page.evaluate(() => document.querySelector('#tree [data-node-id="391"]').scrollIntoView({ block: "center" }));
+    await page.locator('#tree [data-node-id="391"] .row-select').focus();
+    working = working.map(item => item.id === "391" ? { ...item, dependencies: [{ key: "DEMO-6", relationship: "is blocked by", status: "To Do", category: "new" }] } : item);
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(before => [...document.querySelectorAll("#tree [data-node-id]")].findIndex(row => row.dataset.nodeId === "391") !== before, rankBefore, { timeout: 15_000 });
+    const moved = await page.evaluate(() => {
+        const active = document.activeElement, box = active.getBoundingClientRect(), view = document.getElementById("work-scroll").getBoundingClientRect();
+        return {
+            row: active.closest("#tree [data-node-id]")?.dataset.nodeId, key: active.dataset.focusKey,
+            index: [...document.querySelectorAll("#tree [data-node-id]")].findIndex(row => row.dataset.nodeId === "391"),
+            inView: box.top >= view.top - 1 && box.bottom <= view.bottom + 1,
+        };
+    });
+    assert.ok(rankBefore - moved.index > 20, `the row moved further than one screen: ${rankBefore} to ${moved.index}`);
+    assert.deepEqual({ row: moved.row, key: moved.key, inView: moved.inView }, { row: "391", key: "row:391", inView: true },
+        `after its rank changes, the focused row keeps focus inside the visible list: ${JSON.stringify({ rankBefore, ...moved })}`);
     await page.screenshot({ path: screenshotPath("poll.png") });
     assert.deepEqual(errors, []);
-    console.log("PASS: 300 issues with linked sessions; unchanged session polls send no working set, make one request each and record no mutation in #tree, #inspector-content or the action controls; a response for an unknown revision triggers a full read; a Jira change reaches the panel on the next poll, including the focused row, which keeps focus (on its own control even when another row has one with the same key) while unchanged rows stay in place; when a poll removes the focused row, focus moves to the next or previous row, or to the search field when none is left. All services were synthetic; no Jira writes.");
+    console.log("PASS: 300 issues with linked sessions; unchanged session polls send no working set, make one request each and record no mutation in #tree, #inspector-content or the action controls; a response for an unknown revision triggers a full read; a Jira change reaches the panel on the next poll, including the focused row, which keeps focus (on its own control even when another row has one with the same key) while unchanged rows stay in place; when a poll removes the focused row, focus moves to the next or previous row, or to the search field when none is left; when a poll moves the focused row, it is scrolled into view. All services were synthetic; no Jira writes.");
 } finally {
     await page.close();
     await browser.close();

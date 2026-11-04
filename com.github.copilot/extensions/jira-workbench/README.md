@@ -545,7 +545,7 @@ minute, and a launch request still redraws when it expires.
 The list is updated in place, keyed by issue ID: a poll, a selection, an expand or
 collapse, or a filter change replaces only the rows whose content changed and keeps
 the others as they are, so it also stays current while keyboard focus is inside it.
-A replaced row that had focus gets it back; if the focused row leaves the list, focus moves to the next row, else the previous one, else the search field. Rows a filter hides are kept for the
+A replaced row that had focus gets it back, scrolled into view if its rank moved it; if the focused row leaves the list, focus moves to the next row, else the previous one, else the search field. Rows a filter hides are kept for the
 current view until their issue leaves the working set, so clearing a search does
 not rebuild them. Off-screen rows skip layout and paint (`content-visibility`).
 Search renders about 180 ms after the last key rather than on every key. Action
