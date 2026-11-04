@@ -8,7 +8,8 @@ name: stack gate
 # See CONTRIBUTING.md.
 #
 # Any change to a member re-evaluates the whole stack, so every member's status stays in step:
-# pull request, review and review comment events, and every completed run of the tests workflow.
+# pull request, review and review comment events, and every run of the tests workflow when it is
+# requested, starts and completes, so a re-run blocks the stack while its checks are pending.
 # A schedule also sweeps every open pull request from the default branch, because:
 # - resolving or reopening a review thread triggers no workflow (pull_request_review_thread is a
 #   webhook event, not an Actions trigger);
@@ -28,7 +29,7 @@ on:
     types: [created, edited, deleted]
   workflow_run:
     workflows: [tests]
-    types: [completed]
+    types: [requested, in_progress, completed]
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:

@@ -1,0 +1,57 @@
+name: ccr gate
+
+# Posts the "CCR gate" commit status on every open pull request: success only when Copilot code
+# review has reviewed the current head commit, recommends approval and lists no open issues.
+# Required on main, it stops any merge, by a person or an agent, until that clean review exists.
+# Unresolved review threads are blocked separately by main's conversation resolution rule.
+# See CONTRIBUTING.md.
+#
+# A new push gets no status until the gate posts one, so a required CCR gate blocks the new head
+# from the moment it is pushed. Copilot's own review events need manual approval to run workflows,
+# so the schedule picks up new reviews; pushes are also checked at once.
+#
+# pull_request_target runs with a write token, so this workflow never checks out or runs pull
+# request code. It checks out the default branch for .github/scripts alone and reads the pull
+# requests through the API.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request number to check; empty checks every open pull request
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ccr-gate-${{ github.event.pull_request.number || inputs.pull_request || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Check Copilot code review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Post the CCR gate status
+        run: node .github/scripts/ccr-gate.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST: ${{ inputs.pull_request }}

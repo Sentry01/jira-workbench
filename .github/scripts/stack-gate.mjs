@@ -163,13 +163,15 @@ export async function unresolvedThreads(api, number) {
 }
 
 // Posts only a change: GitHub keeps at most 1000 statuses per commit and context, and the sweep re-posts often.
-async function post(api, sha, { state, description }, targetUrl, statuses) {
+export async function postStatus(api, sha, context, { state, description }, targetUrl, statuses) {
     statuses ??= (await api.get(`commits/${sha}/status?per_page=100`))?.statuses ?? [];
-    const current = statuses.find(s => s.context === CONTEXT);
+    const current = statuses.find(s => s.context === context);
     if (current?.state === state && current.description === description) return false;
-    await api.post(`statuses/${sha}`, { state, description, context: CONTEXT, ...(targetUrl ? { target_url: targetUrl } : {}) });
+    await api.post(`statuses/${sha}`, { state, description, context, ...(targetUrl ? { target_url: targetUrl } : {}) });
     return true;
 }
+
+const post = (api, sha, result, targetUrl, statuses) => postStatus(api, sha, CONTEXT, result, targetUrl, statuses);
 
 // Recomputes one stack and posts the verdict to the head commit of every open member.
 // If the evaluation fails partway, a success posted earlier must not stand: the members are blocked first.
