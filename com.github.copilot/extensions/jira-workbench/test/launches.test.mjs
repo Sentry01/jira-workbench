@@ -741,6 +741,14 @@ test("an Update Jira rejected before it is queued is remembered by its client ID
     workbench.send = async () => { throw new Error("connection disposed"); };
     await assert.rejects(workbench.syncJira({ clientId: "client-2" }), /after the prompt was sent/);
     assert.deepEqual((await workbench.snapshot()).syncRejections.map(r => r.clientId), ["client-1"]);
+    // Unchanged polls leave out the working set, but a rejection still reaches the panel on them.
+    const since = workbench.issuesRevision;
+    const unchanged = await workbench.snapshot({ since });
+    assert.equal(unchanged.issues, null);
+    assert.deepEqual(unchanged.syncRejections.map(r => r.clientId), ["client-1"]);
+    const polled = await workbench.refreshExecution({ source: "sessions", poll: true, since });
+    assert.equal(polled.issues, null);
+    assert.deepEqual(polled.syncRejections.map(r => r.clientId), ["client-1"]);
 });
 
 test("an unknown send outcome stays visible when saving it fails, until a claim or receipt resolves it", async t => {

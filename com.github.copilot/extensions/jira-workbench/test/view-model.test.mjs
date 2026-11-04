@@ -398,6 +398,8 @@ test("a snapshot without the working set reuses the panel's copy only for the re
     const resolved = resolveSnapshot(unchanged, held);
     assert.equal(resolved.issues, issues, "the held working set fills in");
     assert.deepEqual(resolved.executions, [{ nodeId: "1" }], "everything else comes from the response");
+    const rejected = resolveSnapshot({ ...unchanged, syncRejections: [{ clientId: "c", error: "Rejected" }] }, { ...held, syncRejections: [] });
+    assert.deepEqual(rejected.syncRejections, [{ clientId: "c", error: "Rejected" }], "fields sent on an unchanged poll replace the panel's");
     assert.equal(unchanged.issues, null, "the response is not modified");
     // A response compared against a revision this panel no longer (or never) held: the caller must refetch in full.
     assert.equal(resolveSnapshot({ issuesRevision: "a:1", issues: null }, { issuesRevision: "a:2", issues }), null);
