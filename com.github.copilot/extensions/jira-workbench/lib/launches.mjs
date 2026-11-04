@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { launchPrompt, launchKickoff, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue, issueParent, issueIndex, kickoffBytes, KICKOFF_BUDGET_BYTES, CLAIM_TTL_MS } from "./model.mjs";
+import { launchPrompt, launchKickoff, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue, issueParent, issueIndex, kickoffBytes, KICKOFF_BUDGET_BYTES, CLAIM_TTL_MS, BLOCKING_REQUEST } from "./model.mjs";
 import { createBrief, acknowledgeBrief } from "./brief.mjs";
 import { dependencyWarnings } from "./execution.mjs";
 
@@ -174,7 +174,7 @@ export class Launches {
             if (preview.workingSetKey !== wb.loadKey() || preview.scopeGeneration !== wb.refreshGeneration)
                 throw new Error("Working scope changed while launching. Review the scope again.");
             if (data.mappings[wb.selectedScope()]?.id !== preview.mapping.id) throw new Error("Repository mapping changed after preview.");
-            if (Object.values(data.requests).some(r => r.scope === preview.scope && requestStatus(r) === "queued"))
+            if (Object.values(data.requests).some(r => r.scope === preview.scope && BLOCKING_REQUEST.has(requestStatus(r))))
                 throw new Error("A session request is already queued for this scope. Wait for its receipt; do not create a duplicate.");
             data.requests[requestId] = request;
         });
@@ -182,8 +182,11 @@ export class Launches {
         await this.deliver(requestId, prompt);
         return { status: "queued", requestId };
     }
-    async syncJira() {
+    // clientId: an ID the panel chose before calling, stored with the request so the panel can match it after a timeout.
+    async syncJira({ clientId } = {}) {
         const wb = this.workbench;
+        if (clientId !== undefined && (typeof clientId !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(clientId)))
+            throw new Error("The Update Jira client ID must be 1 to 64 letters, digits or hyphens.");
         // Read everything from the selected project now: an await below can outlast a project switch.
         const site = wb.site, project = wb.project, selection = wb.selections, issues = wb.issues, statuses = wb.statuses;
         if (!site || !project) throw new Error("Select a Jira project first.");
@@ -229,12 +232,13 @@ export class Launches {
             if (wb.selections !== selection || wb.selectedScope() !== scope || wb.site?.id !== site.id || wb.project?.id !== project.id)
                 throw new Error("Project changed while preparing the sync. Confirm Update Jira again for the selected project.");
             if (current.mappings[scope]?.id !== mapping.id) throw new Error("Repository mapping changed while preparing the sync.");
-            if (Object.values(current.requests).some(r => r.scope === scope && requestStatus(r) === "queued"))
+            if (Object.values(current.requests).some(r => r.scope === scope && BLOCKING_REQUEST.has(requestStatus(r))))
                 throw new Error("A session request is already queued for this project. Wait for its receipt; do not create a duplicate.");
             current.requests[requestId] = {
                 requestId, kind: "jira-sync", scope, nodeId: "project", issueKey: project.key,
                 cloudId: site.id, jiraProjectId: project.id, copilotProjectId: mapping.id,
                 mode: "autopilot", status: "queued", at: new Date().toISOString(),
+                ...(clientId ? { clientId } : {}),
             };
         });
         await this.deliver(requestId, prompt);
@@ -251,7 +255,7 @@ export class Launches {
         }
         // A late receipt for an expired, cleared or superseded request still records the session that was actually
         // created. Requests queued before claims existed carry no claim, so a receipt never requires one.
-        if (!["queued", "expired", "cancelled"].includes(status) && !(status === "failed" && request.supersededBy))
+        if (!["queued", "unknown", "expired", "cancelled"].includes(status) && !(status === "failed" && request.supersededBy))
             throw new Error("This request is not awaiting a session receipt.");
         await wb.attach(request.scope, sessionId, request.copilotProjectId, requestId);
         return { status: "attached", sessionId };
@@ -289,7 +293,7 @@ export class Launches {
         await wb.store.update(data => {
             const request = data.requests[requestId];
             if (request?.status === "cancelled") throw new Error("This request was cleared in the Workbench; no failure was recorded.");
-            if (!request || !["queued", "expired"].includes(requestStatus(request))) throw new Error("This request is not awaiting a receipt.");
+            if (!request || !["queued", "unknown", "expired"].includes(requestStatus(request))) throw new Error("This request is not awaiting a receipt.");
             Object.assign(request, { status: "failed", error: message.slice(0, 2000) });
         });
         return { status: "failed", requestId };
@@ -303,7 +307,7 @@ export class Launches {
             const request = Object.hasOwn(data.requests, requestId) ? data.requests[requestId] : null;
             if (typeof request?.nodeId !== "string" || !request.nodeId || request.scope !== wb.selectedScope(request.nodeId))
                 throw new Error("That request is not in the selected Jira project.");
-            if (!["queued", "expired"].includes(requestStatus(request)))
+            if (!["queued", "unknown", "expired"].includes(requestStatus(request)))
                 throw new Error("Only a queued or expired request can be cleared.");
             if (Date.now() - Date.parse(request.claimedAt) <= CLAIM_TTL_MS)
                 throw new Error("The launching agent claimed this request and may be creating its session. Wait for its receipt before clearing it.");

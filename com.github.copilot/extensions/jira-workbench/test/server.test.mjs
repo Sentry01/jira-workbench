@@ -217,12 +217,14 @@ test("an unknown launch outcome keeps its 5xx status so the panel shows it as un
     const post = await panel(t, {
         snapshot: async () => ({}),
         launch: async () => { throw Object.assign(new Error("Copilot did not confirm it received the prompt within 30s"), { status: 504 }); },
-        syncJira: async () => { throw Object.assign(new Error("Copilot reported an error after the prompt was sent"), { status: 502 }); },
+        syncJira: async input => { throw Object.assign(new Error(`Copilot reported an error after the prompt was sent (${input.clientId})`), { status: 502, requestId: "sync-1" }); },
         prepare: async () => { throw Object.assign(new Error("Refused"), { status: 302 }); },
     });
     const launch = await post("/api/launch", {});
     assert.equal(launch.status, 504);
     assert.deepEqual(await launch.json(), { error: "Copilot did not confirm it received the prompt within 30s" });
-    assert.equal((await post("/api/sync-jira", {})).status, 502);
+    const sync = await post("/api/sync-jira", { clientId: "client-1" });
+    assert.equal(sync.status, 502);
+    assert.deepEqual(await sync.json(), { error: "Copilot reported an error after the prompt was sent (client-1)", requestId: "sync-1" }, "the request ID lets the panel reconcile");
     assert.equal((await post("/api/prepare", {})).status, 400, "only a 5xx passes through");
 });

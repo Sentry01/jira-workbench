@@ -143,13 +143,17 @@ export const CLAIM_TTL_MS = 10 * 60_000;
 
 // A queued request whose receipt never arrived (a dropped agent turn, a closed panel) stops blocking its scope
 // once it is older than the TTL. Expiry is derived on read, so it needs no timer or write: the stored status
-// stays "queued", and a late receipt still attaches the real session. A request the launching agent claimed is
-// creating its session, so it keeps blocking for CLAIM_TTL_MS after the claim, even past the request TTL.
+// stays "queued", and a late receipt still attaches the real session. A request the launching agent claimed may
+// still produce a session at any time, so it never expires: it is "queued" for CLAIM_TTL_MS after the claim, then
+// "unknown", which keeps blocking Start until a receipt, a failure or the user's Clear settles it.
 export function requestStatus(request, now = Date.now()) {
     if (request?.status !== "queued") return request?.status;
-    if (now - Date.parse(request.claimedAt) <= CLAIM_TTL_MS) return "queued";
+    if (request.claimedAt) return now - Date.parse(request.claimedAt) <= CLAIM_TTL_MS ? "queued" : "unknown";
     return now - Date.parse(request.at) > REQUEST_TTL_MS ? "expired" : "queued";
 }
+
+// Statuses that block a new launch for the same scope.
+export const BLOCKING_REQUEST = new Set(["queued", "unknown"]);
 
 const PROGRESS_STAGES = [
     { id: "jira", label: "In Jira", source: "jira", reached: () => true },
@@ -346,7 +350,8 @@ function fitEvidence(build, evidence, omitted) {
         size += kickoffBytes(untrusted(evidence[kept++]));
     for (;; kept--) {
         const kickoff = build(evidence.slice(0, kept), omitted + evidence.length - kept);
-        if (kept === 0 || kickoffBytes(kickoff) <= KICKOFF_BUDGET_BYTES) return kickoff;
+        if (kickoffBytes(kickoff) <= KICKOFF_BUDGET_BYTES) return kickoff;
+        if (kept === 0) throw new Error(`The project's workflow statuses alone exceed the ${KICKOFF_BUDGET_BYTES / 1024} KB Update Jira limit, so no sync was queued.`);
     }
 }
 

@@ -421,13 +421,13 @@ test("both kickoffs put the write rules above the brief and forbid Confluence an
 });
 
 
-test("a claimed request stays queued for the claim window, then expires like any other", () => {
+test("a claimed request stays queued for the claim window, then reads as unknown instead of expiring", () => {
     const now = Date.parse("2026-01-01T12:00:00Z"), ago = ms => new Date(now - ms).toISOString();
     const request = { status: "queued", at: ago(REQUEST_TTL_MS + 60_000) };
     assert.equal(requestStatus(request, now), "expired");
     assert.equal(requestStatus({ ...request, claimedAt: ago(CLAIM_TTL_MS) }, now), "queued");
-    assert.equal(requestStatus({ ...request, claimedAt: ago(CLAIM_TTL_MS + 1) }, now), "expired");
-    assert.equal(requestStatus({ status: "queued", at: ago(60_000), claimedAt: ago(CLAIM_TTL_MS + 1) }, now), "queued", "the request TTL still applies");
+    assert.equal(requestStatus({ ...request, claimedAt: ago(CLAIM_TTL_MS + 1) }, now), "unknown", "a claimed request never expires");
+    assert.equal(requestStatus({ status: "queued", at: ago(60_000), claimedAt: ago(CLAIM_TTL_MS + 1) }, now), "unknown");
     assert.equal(requestStatus({ status: "failed", at: ago(60_000), claimedAt: ago(1) }, now), "failed");
 });
 
@@ -476,4 +476,12 @@ test("Update Jira for 300 issues with 10 sessions and 10 PRs each stays under th
     assert.deepEqual(first.sessions.map(s => s.name), ["Session 0-7", "Session 0-8", "Session 0-9"], "the most recently linked sessions are kept");
     assert.deepEqual(first.prs.map(pr => pr.number), [9, 8, 7], "the highest-numbered PRs are kept");
     assert.match(kickoff, /lists only its 3 most recently linked sessions and its 3 highest-numbered PRs/);
+});
+
+test("Update Jira refuses a kickoff whose workflow statuses alone exceed the budget", () => {
+    const statuses = Array.from({ length: 500 }, (_, n) => ({ name: `${n} ${"s".repeat(195)}`, category: "indeterminate" }));
+    assert.throws(() => jiraSyncPrompt({
+        requestId: "r", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", projectKey: "DEMO", copilotProjectId: "p",
+        repo: "example/demo", siteUrl: "https://example.atlassian.net", evidence: [{ key: "DEMO-1", sessions: [], prs: [] }], statuses,
+    }), /workflow statuses alone exceed the 48 KB Update Jira limit, so no sync was queued/);
 });

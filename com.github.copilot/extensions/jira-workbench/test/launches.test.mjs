@@ -591,7 +591,7 @@ test("a cleared request's stale prompt is refused, so a new Start gives one sess
     assert.equal(data.requests[retry.requestId].status, "queued");
 });
 
-test("a claimed request keeps blocking past its expiry until the claim window ends, and cannot be cleared meanwhile", async t => {
+test("a claimed request keeps blocking past its expiry, cannot be cleared within its claim window, and blocks Start until cleared after it", async t => {
     const { workbench, store } = await fixture(t);
     await workbench.map({ copilotProjectId: copilot.id });
     const claimed = await launchIssue(workbench);
@@ -602,7 +602,32 @@ test("a claimed request keeps blocking past its expiry until the claim window en
     const execution = (await workbench.snapshot()).executions.find(e => e.nodeId === "2");
     assert.ok(execution.signals.some(s => s.kind === "request_queued" && /claimed/.test(s.reason)));
     await store.update(data => { data.requests[claimed.requestId].claimedAt = new Date(Date.now() - 11 * 60_000).toISOString(); });
+    // Past the claim window the agent may still create its session, so Start is never freed or superseded on its own.
+    await assert.rejects(launchIssue(workbench), /already queued/i, "an unknown claimed outcome still blocks Start");
+    const unknown = (await workbench.snapshot()).executions.find(e => e.nodeId === "2");
+    assert.ok(unknown.signals.some(s => s.kind === "request_unknown" && /A session may still appear/.test(s.reason)));
+    assert.deepEqual(unknown.primary, { kind: "clear_request", label: "Clear stuck request", requestId: claimed.requestId });
+    assert.ok(unknown.views.includes("needs-me"));
     assert.equal((await workbench.clearRequest({ requestId: claimed.requestId })).status, "cancelled");
+    const retry = await launchIssue(workbench);
+    assert.equal(retry.status, "queued");
+    // The first agent finishes after all: its late receipt still attaches, and nothing is overwritten.
+    assert.deepEqual(await workbench.recordSession({ requestId: claimed.requestId, sessionId: "session-1" }), { status: "attached", sessionId: "session-1" });
+    assert.equal((await store.read()).requests[retry.requestId].status, "queued");
+});
+
+test("a claimed request past its window accepts a late receipt or failure without being cleared", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const first = await launchIssue(workbench);
+    await workbench.claimRequest({ requestId: first.requestId });
+    const old = new Date(Date.now() - 20 * 60_000).toISOString();
+    await store.update(data => Object.assign(data.requests[first.requestId], { at: old, claimedAt: old }));
+    assert.deepEqual(await workbench.recordSession({ requestId: first.requestId, sessionId: "session-1" }), { status: "attached", sessionId: "session-1" });
+    const second = await launchIssue(workbench);
+    await workbench.claimRequest({ requestId: second.requestId });
+    await store.update(data => Object.assign(data.requests[second.requestId], { at: old, claimedAt: old }));
+    assert.equal((await workbench.failRequest({ requestId: second.requestId, message: "create_session failed" })).status, "failed");
     assert.equal((await launchIssue(workbench)).status, "queued");
 });
 
@@ -661,4 +686,17 @@ test("a launch kickoff sends the description and descendants once", async t => {
     assert.equal(kickoff.split("Epic description").length - 1, 1);
     assert.equal(kickoff.split('"key":"DEMO-2"').length - 1, 1);
     assert.doesNotMatch(kickoff, /"fields":/);
+});
+
+test("an Update Jira send failure carries its request ID and the panel's client ID is stored with the request", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await assert.rejects(workbench.syncJira({ clientId: "not valid!" }), /client ID/);
+    workbench.send = async value => { sent.push(value); throw new Error("connection disposed"); };
+    const error = await workbench.syncJira({ clientId: "client-1" }).catch(caught => caught);
+    assert.equal(error.status, 502);
+    const [request] = Object.values((await store.read()).requests);
+    assert.equal(error.requestId, request.requestId);
+    assert.equal(request.clientId, "client-1");
+    assert.equal(request.status, "queued");
 });

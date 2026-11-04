@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS } from "../lib/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
-    requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
+    requestOutcome, receiptMessage, launchUpdate, launchReceipt, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption,
 } from "../lib/view-model.mjs";
@@ -167,6 +167,7 @@ test("a launch request card states its outcome, including expired and cleared re
     assert.equal(requestOutcome({ status: "queued", at: old, claimedAt: ago(60_000) }, NOW), "Queued (claimed by the launching agent)");
     assert.equal(requestOutcome({ status: "queued", at, sendError: "Timed out" }, NOW), "Outcome unknown (Copilot did not confirm the prompt; no retry was sent)");
     assert.equal(requestOutcome({ status: "failed", at, supersededBy: "r2" }, NOW), "Superseded (no session was created)");
+    assert.equal(requestOutcome({ status: "queued", at: old, claimedAt: old }, NOW), "Outcome unknown (claimed, no receipt after 10 minutes; blocks Start until cleared)");
 });
 
 test("an unconfirmed or claimed launch is never shown as done, and an unconfirmed one reads as unknown", () => {
@@ -331,4 +332,24 @@ test("the Smart Commit comment option is offered only for a single issue", () =>
     const option = smartCommitOption({ id: "2", key: "DEMO-2" });
     assert.match(option.label, /DEMO-2 #comment/);
     assert.match(option.hint, /does not remove it/);
+});
+
+test("a claimed request past its window reads as unknown and keeps blocking Start", () => {
+    const old = ago(REQUEST_TTL_MS + 1);
+    const request = { requestId: "r", nodeId: "6", status: "queued", at: old, claimedAt: old };
+    const state = launchState({ requests: [request], nodeId: "6", now: NOW });
+    assert.equal(state, "uncertain");
+    assert.ok(launchBlocks(state));
+    const update = launchUpdate(request, { now: NOW });
+    assert.equal(update.status, "uncertain");
+    assert.match(update.message, /A session may still appear\. Start stays blocked until you clear the request; a late receipt still attaches its session\./);
+});
+
+test("a launch action finds its stored request by request ID, preview ID or the panel's client ID", () => {
+    const requests = [{ requestId: "a", previewId: "p" }, { requestId: "b", clientId: "c" }];
+    assert.equal(launchReceipt({ requestId: "a" }, requests).requestId, "a");
+    assert.equal(launchReceipt({ previewId: "p" }, requests).requestId, "a");
+    assert.equal(launchReceipt({ clientId: "c" }, requests).requestId, "b", "an Update Jira that timed out still reconciles");
+    assert.equal(launchReceipt({ clientId: "x" }, requests), null);
+    assert.equal(launchReceipt({}, [{ requestId: "z" }]), null);
 });

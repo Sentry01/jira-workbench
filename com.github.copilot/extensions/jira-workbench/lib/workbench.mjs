@@ -21,7 +21,7 @@ function cachedIssues(issues) {
 function trackedIds(data, prefix) {
     const ids = new Set();
     for (const request of Object.values(data.requests))
-        if (request.scope?.startsWith(prefix) && /^\d+$/.test(request.nodeId) && ["queued", "expired", "failed"].includes(requestStatus(request)))
+        if (request.scope?.startsWith(prefix) && /^\d+$/.test(request.nodeId) && ["queued", "unknown", "expired", "failed"].includes(requestStatus(request)))
             ids.add(request.nodeId);
     for (const [key, link] of Object.entries(data.links)) {
         const id = key.startsWith(prefix) ? key.slice(prefix.length) : "";
@@ -642,7 +642,7 @@ export class Workbench {
     // Delegates: F-owned; C must not edit; L may append clearRequest
     prepare(input) { return this.inSession(() => this.launches.prepare(input)); }
     launch(input) { return this.inSession(() => this.launches.launch(input)); }
-    syncJira() { return this.inSession(() => this.launches.syncJira()); }
+    syncJira(input) { return this.inSession(() => this.launches.syncJira(input)); }
     recordSession(input) { return this.launches.recordSession(input); }
     failRequest(input) { return this.launches.failRequest(input); }
     claimRequest(input) { return this.launches.claimRequest(input); }

@@ -145,7 +145,8 @@ linked sessions and its 3 highest-numbered PRs, with `omittedSessions` and
 `omittedPrs` counts for the rest, and issues are dropped from the end of the list
 (and counted as omitted) until the kickoff fits the 48 KB kickoff budget (see
 [Launch requests that never report back](#launch-requests-that-never-report-back)).
-It reads the selected project's issues and statuses
+If the workflow statuses alone exceed the budget, the sync is refused before it is
+queued. It reads the selected project's issues and statuses
 before any wait and rejects the sync if the project selection changed in the
 meantime, including a switch away and back. Workflow status choices exclude
 foreign context items.
@@ -319,9 +320,12 @@ retry was sent), refused, or superseded.
   the same scope exists (for example a second **Start** after the first expired),
   the older request is marked failed as "Superseded by a newer launch; no session
   was created." and the agent stops. So a stale prompt that the agent drains late
-  cannot create a second session. A claimed request that has no receipt yet keeps
-  blocking **Start** for 10 minutes after the claim, even past its 15-minute
-  expiry, and cannot be cleared during that time.
+  cannot create a second session. A claimed request never expires, because its
+  agent may still create the session. It blocks **Start** and cannot be cleared
+  for 10 minutes after the claim. After that it reads as "outcome unknown" and
+  still blocks **Start**, and nothing supersedes it automatically: the user
+  checks the project's sessions and clears it. A late receipt or `fail_request`
+  still settles it, before or after the clear.
 - **Unknown send outcome.** The prompt send to the owning agent (`session.send`)
   is bounded at 30 seconds. A rejection does not prove the host refused the prompt
   (it can enqueue it and then lose the reply), so a rejection or a timeout keeps
@@ -329,7 +333,9 @@ retry was sent), refused, or superseded.
   retried. The panel shows "Launch outcome unknown ... No retry was sent." and
   offers **Clear stuck request**. A late receipt still attaches; once cleared, the
   prompt's claim is refused. The panel also stops waiting for `/api/launch` and
-  `/api/sync-jira` after 45 seconds.
+  `/api/sync-jira` after 45 seconds. Error responses carry the `requestId`, and
+  **Update Jira** sends a panel-chosen `clientId` that is stored with its request,
+  so the panel matches its action to the stored request even after a timeout.
 - **Legacy requests.** Requests queued by an earlier version carry no claim, and
   their late receipts are still accepted.
 - **Kickoff budget.** The owning agent re-emits `kickoff.prompt` in one tool call,

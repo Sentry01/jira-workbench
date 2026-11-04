@@ -1,6 +1,6 @@
 // Pure view-model helpers for the panel: every input is explicit, with no DOM and no node: imports.
 // The server serves this file as /view-model.mjs next to /model.mjs, which it imports.
-import { REQUEST_TTL_MS, jiraFreshness, requestStatus, issueIndex, issueParent } from "./model.mjs";
+import { REQUEST_TTL_MS, CLAIM_TTL_MS, jiraFreshness, requestStatus, issueIndex, issueParent } from "./model.mjs";
 
 export const humanize = value => String(value || "unknown").replace(/[_-]/g, " ");
 
@@ -69,6 +69,7 @@ export function sessionsBadge(sessions) {
 
 const BLOCKING = new Set(["pending", "queued", "uncertain"]);
 const EXPIRED = `Launch outcome unknown: no session receipt after ${REQUEST_TTL_MS / 60_000} minutes. Check the project's sessions before starting again.`;
+const UNCLAIMED = `Launch outcome unknown: the launching agent claimed it but reported no session within ${CLAIM_TTL_MS / 60_000} minutes. A session may still appear. Start stays blocked until you clear the request; a late receipt still attaches its session.`;
 
 // One work item's launch state: this panel's own launch action first, then the stored requests.
 // An expired request is reported but, like a cleared one, never blocks a new launch.
@@ -76,6 +77,7 @@ export function launchState({ local = null, requests = [], nodeId, now = Date.no
     if (local && BLOCKING.has(local.status)) return local.status;
     const own = requests.filter(request => request.nodeId === nodeId);
     const statuses = own.map(request => requestStatus(request, now));
+    if (statuses.includes("unknown")) return "uncertain";
     if (own.some(request => request.sendError && !request.claimedAt && requestStatus(request, now) === "queued")) return "uncertain";
     if (statuses.includes("queued")) return "queued";
     if (statuses.includes("expired")) return "expired";
@@ -90,6 +92,7 @@ export function launchLabel(state) {
 export function requestOutcome(request, now = Date.now()) {
     const status = requestStatus(request, now);
     if (status === "queued" && request.claimedAt) return "Queued (claimed by the launching agent)";
+    if (status === "unknown") return `Outcome unknown (claimed, no receipt after ${CLAIM_TTL_MS / 60_000} minutes; blocks Start until cleared)`;
     if (status === "queued" && request.sendError) return "Outcome unknown (Copilot did not confirm the prompt; no retry was sent)";
     if (status === "queued") return "Queued";
     if (status === "failed" && request.supersededBy) return "Superseded (no session was created)";
@@ -106,6 +109,14 @@ export function receiptMessage(kind, receipt) {
     return `${label} queued; ${kind === "launch" ? "waiting for an attached session receipt" : "waiting for host acknowledgement"}${receipt.message ? ` - ${receipt.message}` : ""}.`;
 }
 
+// The stored request behind this panel's launch action: by its request ID, or by the ID the panel knew before the
+// call returned (a launch's preview, an Update Jira client ID), so a timed-out or failed call still reconciles.
+export function launchReceipt(record, requests = []) {
+    return requests.find(r => (record.requestId && r.requestId === record.requestId)
+        || (record.previewId && r.previewId === record.previewId)
+        || (record.clientId && r.clientId === record.clientId)) || null;
+}
+
 // What a stored request says about this panel's own launch action, or null to keep the action as it is
 // (an attached receipt whose session the trace has not shown yet).
 export function launchUpdate(receipt, { linkedSessionIds = [], now = Date.now() } = {}) {
@@ -115,6 +126,7 @@ export function launchUpdate(receipt, { linkedSessionIds = [], now = Date.now() 
     if (status === "failed") return { status: "failed", message: receiptMessage("launch", receipt) };
     if (status === "queued" && receipt.sendError && !receipt.claimedAt)
         return { status: "uncertain", message: `Launch outcome unknown: ${receipt.sendError}. No retry was sent. Refresh live state and inspect the launch receipt before starting again.` };
+    if (status === "unknown") return { status: "uncertain", message: UNCLAIMED };
     if (status === "expired") return { status: "expired", message: EXPIRED };
     if (status === "cancelled") return { status: "cancelled", message: "Launch request cleared without a session receipt. A late receipt still attaches its session." };
     if (status === "queued") return { status: "queued", message: receiptMessage("launch", receipt) };

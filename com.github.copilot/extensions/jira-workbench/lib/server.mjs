@@ -62,7 +62,7 @@ export async function startServer(workbench, { assets = pinned, updater = null }
         "/api/preferences": input => workbench.savePreferences(input),
         "/api/prepare": input => workbench.prepare(input),
         "/api/launch": input => workbench.launch(input),
-        "/api/sync-jira": () => workbench.syncJira(),
+        "/api/sync-jira": input => workbench.syncJira(input),
         "/api/link": input => workbench.linkSession(input),
         "/api/open": input => workbench.openSession(input),
         "/api/open-pr": input => workbench.openPr(input),
@@ -118,7 +118,7 @@ export async function startServer(workbench, { assets = pinned, updater = null }
             const internal = !outcome && isInternalError(error);
             if (internal) console.error("Jira Workbench: internal error", req.method, req.url?.split("?")[0], error);
             if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
-            else if (outcome) reply(res, error.status, { error: error.message });
+            else if (outcome) reply(res, error.status, { error: error.message, ...(typeof error.requestId === "string" ? { requestId: error.requestId } : {}) });
             else if (internal) reply(res, 500, { error: INTERNAL_MESSAGE });
             else reply(res, 400, { error: error.message || "Workbench action failed." });
         });

@@ -199,7 +199,9 @@ to verify, not as evidence that no work exists. Each issue lists at most its 3
 most recently linked sessions and its 3 highest-numbered pull requests, and the
 kickoff states how many it left out. On projects with many linked issues, issues
 are dropped from the evidence until the session's instructions fit the 48 KB
-launch limit, and the kickoff counts them as omitted.
+launch limit, and the kickoff counts them as omitted. If the project's workflow
+statuses alone are larger than that limit, Update Jira is refused and nothing is
+queued.
 
 ---
 
@@ -356,9 +358,12 @@ before its session reports back:
   earlier launch stops without creating a session, so only the newer one starts.
 
 Keep the panel open until the session starts: the agent checks in with the panel
-before it creates the session. Once it has, the launch keeps blocking Start for up
-to 10 minutes while the session is created, and cannot be cleared during that
-time.
+before it creates the session. Once it has, the launch keeps blocking Start while
+the session is created, and cannot be cleared for 10 minutes. If the session has
+still not reported back after that, the item shows **Launch outcome unknown** and
+Start stays blocked, because the session may still appear. Check the project's
+sessions, then press **Clear stuck request** and **Confirm clear** to start again.
+If the session does appear later, it is still linked to the item.
 
 ### Large epics
 
