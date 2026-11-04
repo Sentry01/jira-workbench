@@ -51,6 +51,23 @@ test("a commit status satisfies only an unpinned required check", () => {
     assert.deepEqual(checkStates(required, [], statuses).map(c => c.state), ["pass", "pending", "fail"]);
 });
 
+test("a check pinned to GitHub Actions accepts only statuses github-actions[bot] posted, newest first", () => {
+    const actionsBot = { id: 41898282, login: "github-actions[bot]" };
+    const required = [{ context: "CCR gate", appId: ACTIONS }];
+    const state = statuses => checkStates(required, [], statuses)[0].state;
+    assert.equal(state([{ context: "CCR gate", state: "success", creator: actionsBot }]), "pass");
+    assert.equal(state([{ context: "CCR gate", state: "success", creator: { id: 1, login: "someone" } }]), "pending");
+    assert.equal(state([
+        { context: "CCR gate", state: "success", creator: { id: 1, login: "someone" } },
+        { context: "CCR gate", state: "failure", creator: actionsBot },
+    ]), "fail");
+    assert.equal(state([
+        { context: "CCR gate", state: "failure", creator: actionsBot },
+        { context: "CCR gate", state: "success", creator: actionsBot },
+    ]), "fail");
+    assert.equal(checkStates([{ context: "X", appId: 999 }], [], [{ context: "X", state: "success", creator: actionsBot }])[0].state, "pending");
+});
+
 test("a check run and a commit status with one unpinned name must both pass", () => {
     const required = [{ context: "A", appId: null }, { context: "B", appId: null }, { context: "C", appId: null }];
     const runs = [run("A", "success"), run("B", "failure"), run("C", "success")];
@@ -136,7 +153,7 @@ const pull = (number, sha, extra = {}) => ({ number, state: "open", merged_at: n
 const memberResponses = (number, sha, runs, reviews = []) => ({
     [`pulls/${number}`]: pull(number, sha),
     [`commits/${sha}/check-runs?filter=latest&per_page=100`]: { check_runs: runs },
-    [`commits/${sha}/status?per_page=100`]: { statuses: [{ context: CONTEXT, state: "failure" }] },
+    [`commits/${sha}/statuses?per_page=100`]: [{ context: CONTEXT, state: "failure" }],
     [`pulls/${number}/reviews?per_page=100`]: reviews,
 });
 const stackResponses = members => ({
@@ -151,6 +168,21 @@ test("a ready stack posts success to every open member, ignoring its own failing
     const result = await evaluateStack(api, 26, { log: () => {} });
     assert.equal(result.state, "success");
     assert.deepEqual(api.posted.map(p => [p.sha, p.state, p.context]), [["aaa", "success", CONTEXT], ["bbb", "success", CONTEXT]]);
+});
+
+test("a stack passes a required CCR gate pinned to GitHub Actions once every member's gate passes", async () => {
+    const actionsBot = { id: 41898282, login: "github-actions[bot]" };
+    const responses = stackResponses([[19, "aaa", [run("Tests", "success")]], [20, "bbb", [run("Tests", "success")]]]);
+    responses["branches/main"].protection.required_status_checks.checks.push({ context: "CCR gate", app_id: ACTIONS });
+    responses["commits/aaa/statuses?per_page=100"] = [{ context: "CCR gate", state: "success", creator: actionsBot }];
+    responses["commits/bbb/statuses?per_page=100"] = [{ context: "CCR gate", state: "failure", creator: actionsBot }];
+    let api = fakeApi(responses);
+    await evaluateStack(api, 26, { log: () => {} });
+    assert.equal(api.posted[0].description, "Stack #26 not ready: #20 (checks failing)");
+    responses["commits/bbb/statuses?per_page=100"] = [{ context: "CCR gate", state: "success", creator: actionsBot }];
+    api = fakeApi(responses);
+    await evaluateStack(api, 26, { log: () => {} });
+    assert.deepEqual(api.posted.map(p => p.state), ["success", "success"]);
 });
 
 test("one member that is not ready fails the gate on every member, including the ready ones", async () => {
@@ -183,7 +215,7 @@ test("unresolved threads are counted across every page", async () => {
 test("a status that has not changed is not posted again", async () => {
     const responses = stackResponses([[19, "aaa", [run("Tests", "success")]], [20, "bbb", [run("Tests", "success")]]]);
     const ready = { context: CONTEXT, state: "success", description: "All 2 open pull requests in stack #26 are ready." };
-    responses["commits/aaa/status?per_page=100"] = { statuses: [ready] };
+    responses["commits/aaa/statuses?per_page=100"] = [ready];
     const api = fakeApi(responses);
     await evaluateStack(api, 26, { log: () => {} });
     assert.deepEqual(api.posted.map(p => p.sha), ["bbb"]);
@@ -218,8 +250,8 @@ test("an evaluation that fails partway blocks every open member before it fails"
                 { number: 22, state: "open", merged_at: null, head: { sha: "bbb" } },
             ],
         },
-        "commits/aaa/status?per_page=100": { statuses: [ready] },
-        "commits/bbb/status?per_page=100": { statuses: [ready] },
+        "commits/aaa/statuses?per_page=100": [ready],
+        "commits/bbb/statuses?per_page=100": [ready],
     });
     await assert.rejects(evaluateStack(api, 26, { log: () => {} }), /unexpected request: branches\/main/);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"], ["bbb", "failure"]]);
@@ -233,7 +265,7 @@ test("a dissolved stack posts nothing", async () => {
 });
 
 test("a pull request outside any stack gets success at once", async () => {
-    const api = fakeApi({ "pulls/5": pull(5, "eee"), "stacks?pull_request=5": [], "commits/eee/status?per_page=100": { statuses: [] } });
+    const api = fakeApi({ "pulls/5": pull(5, "eee"), "stacks?pull_request=5": [], "commits/eee/statuses?per_page=100": [] });
     const stacks = await resolve(api, "pull_request_target", { pull_request: { number: 5 } }, { log: () => {} });
     assert.deepEqual(stacks, []);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state, p.description]), [["eee", "success", "Not in a stack."]]);
@@ -276,8 +308,8 @@ test("the schedule sweeps every open pull request", async () => {
         "pulls?state=open&per_page=100": [pull(15, "ddd"), pull(16, "eee"), pull(19, "aaa", { stack: { number: 26 } }), pull(20, "bbb", { stack: { number: 26 } })],
         "stacks?pull_request=15": [],
         "stacks?pull_request=16": [],
-        "commits/ddd/status?per_page=100": { statuses: [] },
-        "commits/eee/status?per_page=100": { statuses: [{ context: CONTEXT, state: "success", description: "Not in a stack." }] },
+        "commits/ddd/statuses?per_page=100": [],
+        "commits/eee/statuses?per_page=100": [{ context: CONTEXT, state: "success", description: "Not in a stack." }],
     });
     assert.deepEqual(await resolve(api, "schedule", {}, { log: () => {} }), [26]);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["ddd", "success"]]);

@@ -46,15 +46,41 @@ export async function pullNumbers(api, eventName, event, input) {
     return (await api.list("pulls?state=open&per_page=100")).map(p => p.number);
 }
 
+// Several open pull requests can share a head commit, and a status belongs to the commit, so success needs a
+// clean review on every one of them. If a check fails partway, its commit is blocked rather than left with an
+// earlier success, and the rest are still checked; the run then fails with every error.
 export async function run(api, eventName, event, { input, targetUrl, log = console.log } = {}) {
+    const done = new Set();
+    const errors = [];
     for (const number of await pullNumbers(api, eventName, event, input)) {
-        const pull = await api.get(`pulls/${number}`);
-        if (!pull || pull.state !== "open") continue;
-        const reviews = await api.list(`pulls/${number}/reviews?per_page=100`);
-        const result = ccrStatus(pull, reviews);
-        const posted = await postStatus(api, pull.head.sha, CONTEXT, result, targetUrl);
-        log(`#${number}: ${result.state}: ${result.description}${posted ? "" : " (unchanged)"}`);
+        let sha;
+        try {
+            const pull = await api.get(`pulls/${number}`);
+            if (!pull || pull.state !== "open" || done.has(pull.head.sha)) continue;
+            sha = pull.head.sha;
+            done.add(sha);
+            const sharing = (await api.list(`commits/${sha}/pulls?per_page=100`))
+                .filter(p => p.state === "open" && p.head?.sha === sha && p.number !== number);
+            const results = [];
+            for (const p of [pull, ...sharing]) {
+                results.push({ number: p.number, ...ccrStatus(p, await api.list(`pulls/${p.number}/reviews?per_page=100`)) });
+            }
+            const failed = results.find(r => r.state !== "success");
+            const result = !failed ? results[0]
+                : results.length > 1 ? { state: "failure", description: `#${failed.number}: ${failed.description}` }
+                : failed;
+            const posted = await postStatus(api, sha, CONTEXT, result, targetUrl);
+            log(`${results.map(r => `#${r.number}`).join(", ")}: ${result.state}: ${result.description}${posted ? "" : " (unchanged)"}`);
+        } catch (error) {
+            errors.push(`#${number}: ${error.message}`);
+            log(`#${number}: ${error.message}`);
+            if (!sha) continue;
+            const blocked = { state: "failure", description: "Could not check Copilot code review; blocked until the CCR gate runs again." };
+            try { await postStatus(api, sha, CONTEXT, blocked, targetUrl); }
+            catch (postError) { log(`Could not block ${sha.slice(0, 7)}: ${postError.message}`); }
+        }
     }
+    if (errors.length) throw new Error(`CCR gate failed for ${errors.join("; ")}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

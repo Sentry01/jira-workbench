@@ -32,15 +32,20 @@ export function requiredChecks(branch, rules = []) {
     return [...found.values()];
 }
 
-// Each required check is "pass", "fail" or "pending", from its latest check run and its commit status.
-// A check pinned to an app accepts only that app's check runs; commit statuses carry no app to match.
-// When a check run and a commit status share an unpinned name, GitHub requires both, so every one present must pass.
+// The bot account each app posts commit statuses as. GitHub Actions (app 15368) posts as github-actions[bot].
+const APP_BOTS = new Map([[15368, 41898282]]);
+
+// Each required check is "pass", "fail" or "pending", from its latest check run and its latest commit status.
+// `statuses` is the commit's status list, newest first, which names each status's creator.
+// A check pinned to an app accepts only that app's check runs, and only statuses its bot posted; a status
+// from any other app is ignored. When a check run and a commit status share a name, GitHub requires both,
+// so every one present must pass.
 export function checkStates(required, checkRuns = [], statuses = []) {
     return required.map(({ context, appId }) => {
         const run = checkRuns
             .filter(r => r.name === context && (!appId || r.app?.id === appId))
             .sort((a, b) => b.id - a.id)[0];
-        const status = appId ? null : statuses.find(s => s.context === context);
+        const status = statuses.find(s => s.context === context && (!appId || s.creator?.id === APP_BOTS.get(appId)));
         const states = [
             !run ? null : run.status !== "completed" ? "pending" : PASSING.has(run.conclusion) ? "pass" : "fail",
             !status ? null : status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail",
@@ -164,7 +169,7 @@ export async function unresolvedThreads(api, number) {
 
 // Posts only a change: GitHub keeps at most 1000 statuses per commit and context, and the sweep re-posts often.
 export async function postStatus(api, sha, context, { state, description }, targetUrl, statuses) {
-    statuses ??= (await api.get(`commits/${sha}/status?per_page=100`))?.statuses ?? [];
+    statuses ??= (await api.get(`commits/${sha}/statuses?per_page=100`)) ?? [];
     const current = statuses.find(s => s.context === context);
     if (current?.state === state && current.description === description) return false;
     await api.post(`statuses/${sha}`, { state, description, context, ...(targetUrl ? { target_url: targetUrl } : {}) });
@@ -204,13 +209,12 @@ async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
         const pull = await api.get(`pulls/${entry.number}`);
         if (!pull || pull.state !== "open" || pull.merged_at) continue;
         const sha = pull.head.sha;
-        const [checkRuns, combined, reviews, threads] = await Promise.all([
+        const [checkRuns, statuses, reviews, threads] = await Promise.all([
             api.list(`commits/${sha}/check-runs?filter=latest&per_page=100`, "check_runs"),
-            api.get(`commits/${sha}/status?per_page=100`),
+            api.list(`commits/${sha}/statuses?per_page=100`),
             api.list(`pulls/${pull.number}/reviews?per_page=100`),
             unresolvedThreads(api, pull.number),
         ]);
-        const statuses = combined?.statuses ?? [];
         members.push({ ...memberProblems({ pull, required, checkRuns, statuses, reviews, unresolvedThreads: threads }), sha, statuses });
     }
     if (!members.length) {

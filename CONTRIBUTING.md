@@ -129,7 +129,10 @@ on the head commit of every open pull request:
 - It is success only when the latest Copilot code review is of the current head
   commit, its verdict is "Approval recommended", and it lists no open issues.
   "Changes recommended", "Needs a closer look", a review of an older commit, or
-  no review at all is a failure, and the description says which.
+  no review at all is a failure, and the description says which. If several
+  open pull requests share a head commit, each of them needs that clean review.
+- If the gate cannot read a pull request, it marks the head commit as failed
+  rather than leave an earlier success, and checks the others.
 - A new push has no **CCR gate** status until the gate posts one, so a required
   gate blocks the new head commit until Copilot reviews it. The workflow checks
   pushes at once, and a schedule checks every open pull request every 5 minutes
