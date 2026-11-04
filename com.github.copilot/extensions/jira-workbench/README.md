@@ -611,16 +611,15 @@ and stable issue ID, not canvas panel IDs. Atomic writes and a short-lived file
 lock protect `state.json` updates from multiple extension processes. Writers in
 one process queue in memory instead of contending for the lock. The lock holds a
 random token, and its owner refreshes the lock's timestamp every 5 seconds, so a
-slow but live writer is never treated as crashed. If the lock's owner is still
-running, another writer takes the lock over only when it has gone 30 seconds
-without a refresh and then stays unrefreshed for 15 more seconds, so an owner that
-was only paused (for example, laptop sleep) refreshes it on waking and keeps it.
-Just before replacing `state.json`, just after it, and before removing the lock, a
-writer checks that the lock is still its own. A writer that lost its lock fails
-with "The state lock was taken over" and saves nothing, or, if the takeover
-happened during the save itself, reports that one of the two changes may be lost.
-Node has no advisory file locks, so that last window is narrowed and reported,
-not closed.
+slow but live writer is never treated as crashed. The lock also records the
+owner's process ID and machine name. A lock from this machine is never taken over
+while its owner process is running, however long that process pauses (for
+example, laptop sleep or a debugger); it is recovered as soon as the owner has
+exited. A lock from another machine sharing the directory is recovered only after
+two minutes without a refresh. A writer that cannot get the lock within 5 seconds
+saves nothing and fails with "State is locked by process <pid> on <machine>", so
+you can try again. Just before replacing `state.json`, just after it, and before
+removing the lock, a writer also checks that the lock is still its own.
 
 `state.json` is written as compact JSON. Every write also compacts it, because the
 panel re-reads it every few seconds and rewrites it on each preference change:
@@ -647,8 +646,8 @@ the `artifacts/` directory.** It is git-ignored; `.local/` is also hidden from t
 canvas-extension sharing mechanism.
 
 A `write.lock` left by a crashed writer is recovered automatically once its owning
-process has exited, or when it has not been refreshed for 30 seconds (45 seconds if
-its owner is still running). Corrupt or
+process has exited, or after 30 seconds if the writer crashed before recording
+itself in the lock. Corrupt or
 unsupported state is reported rather than silently reset; a corrupt cache is simply
 ignored. A single malformed entry in an otherwise valid `state.json` (for example,
 a link whose `sessions` is not a list) is ignored instead: the panel lists it once

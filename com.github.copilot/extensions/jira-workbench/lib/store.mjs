@@ -1,10 +1,13 @@
 import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { isSessionId } from "./validate.mjs";
 
 const STALE_LOCK_MS = 30_000;
+const REMOTE_STALE_LOCK_MS = 120_000;
+const LOCK_WAIT_MS = 5_000;
 const HEARTBEAT_MS = 5_000;
 const FINISHED_REQUESTS_KEPT = 20;
 const isObject = value => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -15,31 +18,32 @@ function alive(pid) {
     catch (error) { return error.code === "EPERM"; }
 }
 
-// A writer that crashed between creating and removing the lock must not block every later write. A live owner
-// refreshes its lock every heartbeat; one that was only paused (a debugger, laptop sleep) refreshes it as soon as it
-// resumes. So a lock whose owner is alive is taken over only if it stays unrefreshed for `confirmMs` more.
-async function breakStaleLock(lockPath, confirmMs) {
+// Who holds the lock, as written by its owner: "<pid> <created ms> <token> <host>". Locks from earlier versions
+// have no host and were written on this machine.
+async function lockOwner(lockPath) {
+    const [pid, , , host] = (await readFile(lockPath, "utf8")).trim().split(" ");
+    return { pid: Number.parseInt(pid, 10), host: host ? decodeURIComponent(host) : hostname() };
+}
+
+// A lock is taken over only when its owner cannot still be writing: a lock from this machine only once its owner
+// process has exited, never while that process is alive, however long it pauses (a debugger, laptop sleep). A lock
+// without an owner (the writer crashed before writing it) is recovered after 30 s without a heartbeat. A lock from
+// another machine sharing this directory is recovered only after two minutes without a heartbeat, since its owner
+// cannot be checked from here.
+async function breakStaleLock(lockPath) {
     let info, owner;
     try {
         info = await stat(lockPath);
-        owner = Number.parseInt((await readFile(lockPath, "utf8")).split(" ")[0], 10);
+        owner = await lockOwner(lockPath);
     } catch (error) {
         if (error.code === "ENOENT") return true;
         throw error;
     }
     const age = Date.now() - info.mtimeMs;
-    const live = Number.isSafeInteger(owner) && alive(owner);
-    if (age < STALE_LOCK_MS && (!Number.isSafeInteger(owner) || live)) return false;
-    if (live) {
-        await delay(confirmMs);
-        try {
-            const again = await stat(lockPath);
-            if (again.ino !== info.ino || again.mtimeMs !== info.mtimeMs) return false;
-        } catch (error) {
-            if (error.code === "ENOENT") return true;
-            throw error;
-        }
-    }
+    if (owner.host === hostname()) {
+        if (Number.isSafeInteger(owner.pid) && owner.pid > 0) { if (alive(owner.pid)) return false; }
+        else if (age < STALE_LOCK_MS) return false;
+    } else if (age < REMOTE_STALE_LOCK_MS) return false;
     const aside = `${lockPath}.stale-${randomUUID()}`;
     try { await rename(lockPath, aside); }
     catch (error) { if (error.code === "ENOENT") return true; throw error; }
@@ -121,9 +125,10 @@ function compact(data) {
 }
 
 export class Store {
-    constructor(path, { heartbeatMs = HEARTBEAT_MS } = {}) {
+    constructor(path, { heartbeatMs = HEARTBEAT_MS, lockWaitMs = LOCK_WAIT_MS } = {}) {
         this.path = path;
         this.heartbeatMs = heartbeatMs;
+        this.lockWaitMs = lockWaitMs;
         // Writers in this process wait here instead of polling write.lock; the lock still guards other processes.
         this.queue = Promise.resolve();
         this.problems = new Map();
@@ -159,15 +164,20 @@ export class Store {
         await mkdir(this.path, { recursive: true, mode: 0o700 });
         const lockPath = join(this.path, "write.lock");
         let lock;
-        for (let attempt = 0; attempt < 100; attempt++) {
+        for (const deadline = Date.now() + this.lockWaitMs; !lock;) {
             try { lock = await open(lockPath, "wx", 0o600); break; }
             catch (error) {
                 if (error.code !== "EEXIST") throw error;
-                if (await breakStaleLock(lockPath, this.heartbeatMs * 3)) continue;
+                if (await breakStaleLock(lockPath)) continue;
+                if (Date.now() >= deadline) break;
                 await delay(50);
             }
         }
-        if (!lock) throw new Error(`State is locked by another writer. If all Workbench sessions are stopped, inspect ${lockPath}.`);
+        if (!lock) {
+            const owner = await lockOwner(lockPath).catch(() => null);
+            const holder = owner && Number.isSafeInteger(owner.pid) ? `process ${owner.pid} on ${owner.host}` : "another writer";
+            throw new Error(`State is locked by ${holder}; nothing was saved. Try again in a moment. If no Copilot session with Jira Workbench is running, remove ${lockPath}.`);
+        }
         const temp = join(this.path, `state-${randomUUID()}.tmp`);
         // After a long stall another writer may have taken this lock as stale; then this writer must neither replace
         // state.json nor remove that writer's lock. The open handle pins this lock's inode, so the path still naming
@@ -183,7 +193,7 @@ export class Store {
         const heartbeat = setInterval(() => { const now = new Date(); void lock.utimes(now, now).catch(() => {}); }, this.heartbeatMs);
         heartbeat.unref();
         try {
-            await lock.writeFile(`${process.pid} ${Date.now()} ${token}`);
+            await lock.writeFile(`${process.pid} ${Date.now()} ${token} ${encodeURIComponent(hostname())}`);
             const data = await this.read();
             const result = await change(data);
             compact(data);

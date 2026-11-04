@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, open, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Store } from "../lib/store.mjs";
@@ -182,21 +182,25 @@ function lockHolder(path, holdMs, heartbeatMs = 5_000) {
     return child;
 }
 
-async function ageLockOf(path, pid) {
+// Waits for the child's lock, then makes it look `ageMs` old and, with `host`, written on another machine. Rewriting
+// the content keeps the lock's inode, which is what its owner checks.
+async function ageLockOf(path, pid, { ageMs = 31_000, host = null } = {}) {
     const lock = join(path, "write.lock");
-    for (let i = 0; i < 200 && !(await readFile(lock, "utf8").catch(() => "")).startsWith(`${pid} `); i++) await sleep(10);
-    const old = new Date(Date.now() - 31_000);
+    let text = "";
+    for (let i = 0; i < 200 && !(text = await readFile(lock, "utf8").catch(() => "")).startsWith(`${pid} `); i++) await sleep(10);
+    if (host) await writeFile(lock, [...text.trim().split(" ").slice(0, 3), host].join(" "));
+    const old = new Date(Date.now() - ageMs);
     await utimes(lock, old, old);
 }
 
-test("a writer that lost its lock fails loudly and never removes the new owner's lock", async t => {
+// The only takeover of a running writer: a lock from another machine sharing the directory, unrefreshed for 2 minutes.
+test("a writer whose lock was taken over fails loudly and never removes the new owner's lock", async t => {
     const path = await directory(t);
     await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
     const owner = lockHolder(path, 1500);
-    await ageLockOf(path, owner.pid);
+    await ageLockOf(path, owner.pid, { ageMs: 121_000, host: "other-machine" });
     let lockWhileHeld = null;
-    // The stealer waits three of its own heartbeats for the owner to refresh the lock; this owner never does.
-    await new Store(path, { heartbeatMs: 20 }).update(async data => {
+    await new Store(path).update(async data => {
         // Stay inside the update until the original owner has finished, so it would be able to unlink this lock.
         const result = await owner.done;
         lockWhileHeld = await readFile(join(path, "write.lock"), "utf8").catch(() => null);
@@ -302,16 +306,44 @@ for (const [name, corrupt] of Object.entries(malformed)) {
     });
 }
 
-// Copilot review C1: a live owner that was only paused (its lock looked stale) refreshes the lock as soon as it
-// resumes, and a writer that saw the stale lock waits for that instead of taking it over.
-test("a paused owner that resumes keeps its lock and both updates are saved", async t => {
+// Copilot review C1: a live owner on this machine is never taken over, however long it pauses.
+test("a paused live owner is never taken over, however old its lock looks", async t => {
     const path = await directory(t);
     await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
-    const owner = lockHolder(path, 400, 50);
-    await ageLockOf(path, owner.pid);
-    await new Store(path, { heartbeatMs: 400 }).update(data => { data.mappings.waiter = { id: "waiter" }; });
+    const owner = lockHolder(path, 1000);
+    await ageLockOf(path, owner.pid, { ageMs: 3_600_000 });
+    await new Store(path).update(data => { data.mappings.waiter = { id: "waiter" }; });
     const { code, output } = await owner.done;
     assert.equal(code, 0, output);
     const saved = await new Store(path).read();
     assert.ok(saved.mappings.owner && saved.mappings.waiter, JSON.stringify(Object.keys(saved.mappings)));
+});
+
+test("a write that outwaits a live owner fails with an error naming the holder and saves nothing", async t => {
+    const path = await directory(t);
+    await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
+    const owner = lockHolder(path, 1500);
+    await ageLockOf(path, owner.pid, { ageMs: 3_600_000 });
+    await assert.rejects(new Store(path, { lockWaitMs: 200 }).update(data => { data.mappings.waiter = { id: "waiter" }; }),
+        new RegExp(`locked by process ${owner.pid} on ${hostname().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; nothing was saved`));
+    const { code, output } = await owner.done;
+    assert.equal(code, 0, output);
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.owner && !saved.mappings.waiter);
+});
+
+test("a dead owner's lock is recovered at once; another machine's lock only after two minutes without a heartbeat", async t => {
+    const path = await directory(t);
+    const lock = join(path, "write.lock");
+    await writeFile(lock, `2147483646 ${Date.now()} token ${encodeURIComponent(hostname())}`);
+    const started = Date.now();
+    await new Store(path).update(data => { data.mappings.recovered = { id: "recovered" }; });
+    assert.ok(Date.now() - started < 1000);
+    await writeFile(lock, `${process.pid} ${Date.now()} token other-machine`);
+    await assert.rejects(new Store(path, { lockWaitMs: 100 }).update(() => {}), /locked by process \d+ on other-machine/);
+    const old = new Date(Date.now() - 121_000);
+    await utimes(lock, old, old);
+    await new Store(path).update(data => { data.mappings.remote = { id: "remote" }; });
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.recovered && saved.mappings.remote);
 });
