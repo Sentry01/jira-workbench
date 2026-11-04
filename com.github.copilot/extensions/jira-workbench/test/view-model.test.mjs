@@ -5,7 +5,8 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
-    smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses,
+    smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor,
+    flattenTree, timeLabel,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -446,4 +447,71 @@ test("the inspector digest keys trace times by minute without formatting them", 
     const links = stamp => ({ "c/42/2": { verifiedAt: stamp, sessions: [], prs: [], sourceStatus: { sessions: { state: "fresh", fetchedAt: stamp } } } });
     assert.equal(linksDigest(links("2026-11-03T10:15:01.000Z"), minuteKey), linksDigest(links("2026-11-03T10:15:58.000Z"), minuteKey));
     assert.notEqual(linksDigest(links("2026-11-03T10:15:58.000Z"), minuteKey), linksDigest(links("2026-11-03T10:16:02.000Z"), minuteKey));
+});
+
+test("the indexed execution lookup returns what the linear find returned, including the unobserved fallback", () => {
+    const fallback = id => ({
+        nodeId: id, views: ["all"], signals: [], reasons: ["Live execution state has not been observed. Refresh live state to check."],
+        primary: { kind: "inspect", label: "Inspect work" }, rank: Number.MAX_SAFE_INTEGER,
+    });
+    const linear = (executions, id) => executions.find(item => item.nodeId === id) || fallback(id);
+    const executions = [
+        { nodeId: "project", views: ["all"], signals: [], reasons: ["Project"], primary: { kind: "prepare", mode: "plan" }, rank: 1 },
+        { nodeId: "2", views: ["needs-me", "all"], signals: [{ kind: "awaiting_input" }], reasons: ["Waiting"], primary: { kind: "open_session", sessionId: "s" }, rank: 0 },
+        // A repeated node keeps the first record, as find did.
+        { nodeId: "2", views: ["all"], signals: [], reasons: ["Later duplicate"], primary: { kind: "inspect" }, rank: 9 },
+        { nodeId: "3", views: ["all"], signals: [], reasons: [], rank: 5 },
+    ];
+    const index = indexExecutions(executions);
+    for (const id of ["project", "2", "3", "4", "", undefined]) assert.deepEqual(executionFor(index, id), linear(executions, id), String(id));
+    assert.equal(executionFor(index, "2"), executions[1], "the stored record itself, not a copy");
+    assert.notEqual(executionFor(index, "4"), executionFor(index, "4"), "a fresh fallback per call, so a caller cannot change another's");
+    assert.deepEqual(executionFor(indexExecutions(), "x"), fallback("x"));
+    // 10x the executions with a lookup per row costs about 10x, not 100x.
+    const timing = count => {
+        const list = Array.from({ length: count }, (_, n) => ({ nodeId: String(n), views: ["all"], signals: [], reasons: [] }));
+        const started = performance.now();
+        const map = indexExecutions(list);
+        for (let run = 0; run < 4; run++) for (let n = 0; n < count; n++) executionFor(map, String(n));
+        return performance.now() - started;
+    };
+    timing(1000);
+    const small = timing(1000), large = timing(10_000);
+    assert.ok(large < Math.max(small, 0.5) * 40, `1k: ${small.toFixed(2)}ms, 10k: ${large.toFixed(2)}ms`);
+});
+
+test("an unfiltered tree is returned as is, and a filtered one is unchanged", () => {
+    const list = [issue("1", "DEMO-1", null, "Epic"), issue("2", "DEMO-2", "DEMO-1"), issue("3", "DEMO-3", "DEMO-2", "Subtask", "done"), issue("4", "DEMO-4")];
+    const { roots } = buildTree(list);
+    assert.equal(filterTree(roots), roots, "no copy and no traversal when nothing is filtered");
+    assert.equal(filterTree(roots, "  "), roots, "a blank query filters nothing");
+    const done = filterTree(roots, "", "done");
+    assert.deepEqual(done.map(node => node.issue.key), ["DEMO-1"]);
+    assert.deepEqual(done[0].children[0].children.map(node => node.issue.key), ["DEMO-3"]);
+    assert.deepEqual(filterTree(roots, "demo-4").map(node => node.issue.key), ["DEMO-4"]);
+});
+
+test("the hierarchy flattens to rows with depth, parent, position and expansion, skipping collapsed subtrees", () => {
+    const list = [issue("1", "DEMO-1", null, "Epic"), issue("2", "DEMO-2", "DEMO-1"), issue("3", "DEMO-3", "DEMO-2", "Subtask"), issue("5", "DEMO-5", "DEMO-1"), issue("4", "DEMO-4")];
+    const { roots } = buildTree(list);
+    const rows = flattenTree(roots, () => true);
+    assert.deepEqual(rows.map(row => [row.node.issue.key, row.depth, row.parentId, row.index, row.count, row.expanded]), [
+        ["DEMO-1", 0, "", 0, 2, true], ["DEMO-2", 1, "1", 0, 2, true], ["DEMO-3", 2, "2", 0, 1, true],
+        ["DEMO-5", 1, "1", 1, 2, true], ["DEMO-4", 0, "", 1, 2, true],
+    ]);
+    const collapsed = flattenTree(roots, id => id !== "2");
+    assert.deepEqual(collapsed.map(row => [row.node.issue.key, row.expanded]), [["DEMO-1", true], ["DEMO-2", false], ["DEMO-5", true], ["DEMO-4", true]]);
+    assert.deepEqual(flattenTree(roots, id => id !== "1").map(row => row.node.issue.key), ["DEMO-1", "DEMO-4"]);
+    assert.deepEqual(flattenTree([], () => true), []);
+});
+
+test("times show as not refreshed, as the formatted value, or as an invalid date without throwing", () => {
+    const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+    const format = date => clock.format(date);
+    assert.equal(timeLabel(undefined, format), "not refreshed");
+    assert.equal(timeLabel("", format), "not refreshed");
+    assert.equal(timeLabel("2026-10-02T06:05:59.000Z", format), "06:05");
+    assert.equal(timeLabel(Date.parse("2026-10-02T23:59:00.000Z"), format), "23:59");
+    // toLocaleTimeString returned "Invalid Date" here; a cached DateTimeFormat would throw instead.
+    assert.equal(timeLabel("not a date", format), "Invalid Date");
 });

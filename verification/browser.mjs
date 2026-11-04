@@ -18,3 +18,10 @@ export function screenshotPath(name) {
     mkdirSync(directory, { recursive: true });
     return join(directory, name);
 }
+
+// The panel renders a search about 180 ms after the last key. A page timer set after that one fires after it, so once
+// this resolves the filtered list is on screen.
+export async function search(page, text) {
+    await page.locator("#search").fill(text);
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 250)));
+}

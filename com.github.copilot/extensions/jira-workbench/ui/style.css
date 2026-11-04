@@ -135,6 +135,8 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 365px; margin: 0 28p
 .tree-header, .tree-row { display: grid; grid-template-columns: minmax(140px, 1fr) 82px minmax(92px, .6fr) 100px; gap: 9px; align-items: center; padding: 10px 14px; }
 .tree-header { background: var(--tint); border-block: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 600; position: sticky; top: 0; z-index: 1; }
 .tree-row { border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); min-height: 67px; cursor: pointer; }
+/* Rows outside the viewport skip layout and paint; the remembered size keeps the scrollbar and anchoring stable. */
+.tree-row { content-visibility: auto; contain-intrinsic-size: auto 67px; }
 .tree-row:hover { background: var(--tint); }
 .tree-row.selected { background: var(--soft-accent); box-shadow: inset 3px 0 var(--accent); }
 .item-name { display: flex; align-items: start; gap: 8px; min-width: 0; }

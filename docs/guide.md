@@ -160,7 +160,8 @@ items already shown stay, labeled **Linked, not re-read from Jira**; they ask fo
 a **Refresh** and cannot start work until a later read confirms them.
 
 **Search loaded items**, status and sprint controls only filter the loaded
-copy. They do not change the server scope or discover unloaded matches.
+copy. They do not change the server scope or discover unloaded matches. The
+list updates a moment after you stop typing.
 Metrics, progress and descendant counts describe loaded items, not complete
 project or child totals.
 

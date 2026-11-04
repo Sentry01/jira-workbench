@@ -1,10 +1,22 @@
-import { launchBrowser, screenshotPath } from "./browser.mjs";
+import { launchBrowser, screenshotPath, search } from "./browser.mjs";
 import { createFixture, seedProject, scope, issues } from "./fixture.mjs";
 import { verifyAccessibility } from "./accessibility.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Rows use content-visibility: auto and render incrementally, so an offscreen or just-rebuilt row can report empty
+// innerText. Scroll it into view and wait for its rendered text before asserting on it.
+async function rowText(row) {
+    await row.scrollIntoViewIfNeeded();
+    await row.evaluate(el => new Promise((resolve, reject) => {
+        const deadline = Date.now() + 10_000;
+        const check = () => el.innerText.trim() ? resolve() : Date.now() > deadline ? reject(new Error("Row text never rendered.")) : requestAnimationFrame(check);
+        check();
+    }));
+    return row.innerText();
+}
 
 const directory = await mkdtemp(join(tmpdir(), "jira-workbench-v2-browser-"));
 const { workbench, store, sent, navigations, navigationSelections, navigation, startServer } = await createFixture({ directory });
@@ -58,9 +70,8 @@ try {
     await sprintSaved;
     await page.locator("#view-execution").click();
     await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "list");
-    assert.match(await page.locator("body").innerText(), /Answer question/);
-    assert.match(await page.locator("body").innerText(), /Review PR/);
-    assert.match(await page.locator("body").innerText(), /Interrupted/);
+    // Rows render incrementally and skip offscreen paint, so wait for their text instead of reading innerText once.
+    await page.waitForFunction(() => ["Answer question", "Review PR", "Interrupted"].every(text => document.getElementById("tree").textContent.includes(text)));
     const queue = (await workbench.snapshot()).executions;
     assert.equal(queue.find(item => item.nodeId === "4").views.includes("prs"), false);
     assert.equal(queue.find(item => item.nodeId === "6").primary.mode, "autopilot");
@@ -94,7 +105,7 @@ try {
     assert.equal(navigationSelections[0], "2", "The acted-on item is persisted before native navigation");
     assert.equal(sent.length, 0, "Navigation must not launch work");
 
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     await page.getByRole("button", { name: "Prepare implementation", exact: true }).click();
     await page.locator("#launch-dialog[open]").waitFor();
     assert.equal(await page.locator("#launch-mode").inputValue(), "autopilot", "A story with subtasks keeps the implementation default");
@@ -105,7 +116,7 @@ try {
     await smartComment.check();
     assert.equal(await page.locator("#confirm-launch").isDisabled(), true, "Opting in needs a reviewed brief");
     await page.locator("#cancel-launch").click();
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     await page.locator("#project-start").click();
     await page.locator("#launch-dialog[open]").waitFor();
@@ -180,12 +191,12 @@ try {
                 repository: { projectId: "app-project", repo: "example/demo" }, sources: [], warnings: [], children: [] },
         };
     });
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     await byName("Refresh live state");
     const stuckRow = page.locator('#tree [data-node-id="6"]');
     await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor();
-    assert.match(await stuckRow.innerText(), /Launch outcome unknown: no session receipt after 15 minutes/);
-    assert.doesNotMatch(await stuckRow.innerText(), /Launch queued/, "an expired request is not shown as queued");
+    assert.match(await rowText(stuckRow), /Launch outcome unknown: no session receipt after 15 minutes/);
+    assert.doesNotMatch(await rowText(stuckRow), /Launch queued/, "an expired request is not shown as queued");
     await stuckRow.locator(".issue-key").click();
     const inspector = page.locator("#inspector"), requestCard = inspector.locator(".session-card", { hasText: "Launch request" });
     await requestCard.getByText("Outcome unknown (no receipt after 15 minutes)").waitFor();
@@ -198,6 +209,27 @@ try {
     await page.locator("#launch-dialog[open]").waitFor();
     assert.equal(await page.locator("#launch-mode").inputValue(), "autopilot", "the inspector's Start opens a leaf in Implement, like the queue row");
     await page.locator("#cancel-launch").click();
+    // A row kept while a search hides it shows the current confirmation state when it returns. It is rebuilt while
+    // armed, the confirmation times out, a search hides it, and the inspector arms the same request again.
+    await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).click();
+    await stuckRow.getByRole("button", { name: "Confirm clear", exact: true }).waitFor();
+    const readySummary = issues[5].summary;
+    issues[5].summary = `${readySummary}, renamed`;
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(() => document.querySelector('#tree [data-node-id="6"]')?.textContent.includes("renamed"));
+    await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor({ timeout: 15_000 });
+    await search(page, "Needs your answer");
+    await stuckRow.waitFor({ state: "detached" });
+    await inspector.getByRole("button", { name: "Clear stuck request", exact: true }).click();
+    await inspector.getByRole("button", { name: "Confirm clear", exact: true }).waitFor();
+    await search(page, "Ready example");
+    assert.deepEqual(await stuckRow.locator("[data-clear-label]").evaluateAll(controls => controls.map(control => control.textContent)), ["Confirm clear"],
+        "a row shown again from the cache matches the request's current confirmation state");
+    await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor({ timeout: 15_000 });
+    issues[5].summary = readySummary;
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(() => !document.querySelector('#tree [data-node-id="6"]')?.textContent.includes("renamed"));
+    assert.equal((await store.read()).requests.stuck.status, "queued", "arming and timing out sends nothing");
     await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).click();
     const confirmClear = stuckRow.getByRole("button", { name: "Confirm clear", exact: true });
     await confirmClear.waitFor();
@@ -213,14 +245,14 @@ try {
     assert.equal((await store.read()).requests.stuck.status, "cancelled");
     await requestCard.getByText("Cleared", { exact: true }).waitFor();
     assert.equal(sent.length, 2, "Clearing a request launches nothing");
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     await byName("Hierarchy");
     // One search rule in both views: a parent key finds its children (DEMO-8 is a subtask of DEMO-6).
-    await page.locator("#search").fill("DEMO-6");
+    await search(page, "DEMO-6");
     await page.waitForFunction(() => document.querySelectorAll('#tree [role="treeitem"]').length === 3);
     assert.deepEqual(await page.$$eval('#tree [role="treeitem"]', rows => rows.map(row => row.dataset.nodeId)), ["1", "6", "8"]);
-    await page.locator("#search").fill("");
+    await search(page, "");
     // The status filter is built from the project's own workflow, including a step no issue is in yet.
     const statusOptions = () => page.$$eval("#status-filter option", options => options.map(o => [o.parentElement.label || "", o.value, o.textContent]));
     assert.deepEqual(await statusOptions(), [
@@ -238,7 +270,7 @@ try {
     assert.match(await page.locator("#inspector").innerText(), /Missing criteria and blocked/);
     const preferencesSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok()
         && response.request().postDataJSON()?.preferences?.query === "Ready example");
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     await preferencesSaved;
     await page.locator("#project").selectOption("43");
     await page.waitForFunction(() => document.getElementById("project-title").textContent === "Another project");
@@ -252,7 +284,7 @@ try {
     await page.waitForFunction(() => document.getElementById("project-title").textContent === "Daily execution demo");
     await page.waitForFunction(() => document.getElementById("search").value === "Ready example");
     assert.match(await page.locator("#inspector").innerText(), /Missing criteria and blocked/);
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     const epic = page.getByRole("treeitem", { name: /DEMO-1 / });
     await epic.focus();
@@ -295,7 +327,7 @@ try {
     await verifyAccessibility({ page, workbench });
     assert.equal(sent.length, 3, "The accessibility checks queue exactly one confirmed launch");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();

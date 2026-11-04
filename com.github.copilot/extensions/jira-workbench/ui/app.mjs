@@ -1,9 +1,10 @@
-import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness, buildTree } from "/model.mjs";
+import { scopeKey, descendants, childIndex, progressRollup, freshnessTone, jiraFreshness, buildTree } from "/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
-    retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses,
+    retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor as indexedExecution,
+    flattenTree, timeLabel,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -16,7 +17,8 @@ const token = location.hash.slice(1);
 const filters = [["needs-me", "Needs me"], ["running", "Running"], ["prs", "PRs to review"], ["available", "Available to start"], ["all", "All work"]];
 const defaults = () => ({ view: "execution", executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", sprint: "all", scrollTop: 0, detailsOpen: false });
 let state = { sites: [], projects: [], appProjects: [], issues: [], links: {}, requests: [], executions: [], navigationReceipts: [], tree: { roots: [], warnings: [] }, catalogErrors: [] };
-let itemsById = new Map(), itemsSource = null;
+// Indexes rebuilt once per snapshot: issues by ID, executions by node, and (on first use) children by parent.
+let itemsById = new Map(), itemsSource = null, issueChildren = null, executionsById = new Map();
 let ui = defaults(), tab = "trace", focusedNode = null, scopeEpoch = 0;
 let selecting = false, scopeConfirmed = true, selectionVersion = 0, selectionChain = Promise.resolve(), pollPending = false, snapshotVersion = 0;
 let preferenceTimer, preferenceRequest, preferenceRevision = 0;
@@ -60,21 +62,40 @@ function link(text, href, className = "") {
     return a;
 }
 const badge = (text, tone = "") => el("span", text, `badge ${tone}`);
-// One formatter for every label: toLocaleTimeString with options builds a new one on each call.
+// One formatter per label width: toLocaleTimeString with options builds a new one on each call. Minute labels are also
+// memoized, because a render formats thousands of stamps that share a minute.
 const clock = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
-const time = value => {
-    if (!value) return "not refreshed";
-    const at = new Date(value);
-    return Number.isNaN(at.getTime()) ? "Invalid Date" : clock.format(at);
-};
-const clockTime = value => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const secondClock = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const minuteLabels = new Map();
+const time = value => timeLabel(value, date => {
+    const minute = Math.floor(date.getTime() / 60_000);
+    if (!minuteLabels.has(minute)) {
+        if (minuteLabels.size > 2000) minuteLabels.clear();
+        minuteLabels.set(minute, clock.format(date));
+    }
+    return minuteLabels.get(minute);
+});
+const clockTime = value => timeLabel(value, date => secondClock.format(date));
 // A control that becomes unavailable while it has focus keeps the focus: it is marked aria-disabled instead of
 // disabled (a disabled element drops focus to the page), and the click guard below ignores it.
 function setInert(control, inert) {
     const keep = inert && document.activeElement === control;
-    control.disabled = inert && !keep;
-    if (keep) control.setAttribute("aria-disabled", "true");
-    else control.removeAttribute("aria-disabled");
+    if (control.disabled !== (inert && !keep)) control.disabled = inert && !keep;
+    if (keep && control.getAttribute("aria-disabled") !== "true") control.setAttribute("aria-disabled", "true");
+    else if (!keep && control.hasAttribute("aria-disabled")) control.removeAttribute("aria-disabled");
+}
+// Writes only a value that differs: a same-value write still replaces a text node or records an attribute change.
+function setText(element, text) {
+    if (element.textContent !== text) element.textContent = text;
+}
+function setHidden(element, hidden) {
+    if (element.hidden !== hidden) element.hidden = hidden;
+}
+function setAttr(element, name, value) {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+}
+function setData(element, key, value) {
+    if (element.dataset[key] !== value) element.dataset[key] = value;
 }
 const inert = control => control.disabled || control.getAttribute("aria-disabled") === "true";
 // For focus moved to a different place (not restored in place after a rebuild): scroll only as far as needed, in
@@ -86,20 +107,40 @@ function focusInView(element) {
 const actionKey = (kind, target, scope = state.scope) => JSON.stringify([scope || "", kind, target]);
 const jiraUrl = key => `${state.site.url}/browse/${encodeURIComponent(key)}`;
 const itemUrl = item => item.id === "project" ? `${state.site.url}/jira/software/projects/${encodeURIComponent(state.project.key)}/summary` : jiraUrl(item.key);
+// Memoized per snapshot (the state object is replaced, never changed in place): a render reads every issue's trace
+// several times. Callers must not change the result.
+let linksState = null, linksCache = new Map();
 function nodeLinks(id) {
-    if (foreignContext(getItem(id))) return { sessions: [], prs: [] };
-    const trace = state.site && state.project ? state.links[scopeKey(state.site.id, state.project.id, id)] : null;
-    return { sessions: [], prs: [], ...trace };
+    if (linksState !== state) { linksState = state; linksCache = new Map(); }
+    if (linksCache.has(id)) return linksCache.get(id);
+    let result;
+    if (foreignContext(getItem(id))) result = { sessions: [], prs: [] };
+    else {
+        const trace = state.site && state.project ? state.links[scopeKey(state.site.id, state.project.id, id)] : null;
+        result = { sessions: [], prs: [], ...trace };
+    }
+    linksCache.set(id, result);
+    return result;
 }
 // Traces belong to the selected project's own issues; anything else (including unknown project) is foreign context.
 const foreignContext = item => Boolean(item && item.id !== "project" && item.projectId !== state.project?.id);
 function setSource(element, text, tone, detail) {
-    element.textContent = text;
-    element.dataset.tone = tone;
-    element.dataset.detail = detail;
-    element.setAttribute("aria-label", detail ? `${text}. ${detail}` : text);
+    setText(element, text);
+    setData(element, "tone", tone);
+    setData(element, "detail", detail);
+    setAttr(element, "aria-label", detail ? `${text}. ${detail}` : text);
 }
-const nodeLaunch = id => launchState({ local: actions.get(actionKey("launch", id)), requests: state.requests, nodeId: id });
+// Requests grouped by node once per snapshot: launchState keeps only the node's own requests, so it gets just those.
+let requestsState = null, requestsByNode = new Map();
+function nodeRequests(id) {
+    if (requestsState !== state) {
+        requestsState = state;
+        requestsByNode = new Map();
+        for (const request of state.requests) requestsByNode.set(request.nodeId, [...requestsByNode.get(request.nodeId) || [], request]);
+    }
+    return requestsByNode.get(id) || [];
+}
+const nodeLaunch = id => launchState({ local: actions.get(actionKey("launch", id)), requests: nodeRequests(id), nodeId: id });
 const nodePending = id => launchBlocks(nodeLaunch(id));
 function getItem(id) {
     if (id !== "project") return itemsById.get(id);
@@ -283,7 +324,8 @@ function acceptSnapshot(snapshot, { allowScopeChange = false } = {}) {
     // The tree is derived from the working set, so it is rebuilt only when the working set is replaced.
     const tree = snapshot.issues === state.issues ? state.tree : buildTree(snapshot.issues);
     state = { ...snapshot, tree, executions: snapshot.executions || [], navigationReceipts: snapshot.navigationReceipts || [] };
-    if (snapshot.issues !== itemsSource) { itemsSource = snapshot.issues; itemsById = new Map(state.issues.map(issue => [issue.id, issue])); }
+    if (snapshot.issues !== itemsSource) { itemsSource = snapshot.issues; itemsById = new Map(state.issues.map(issue => [issue.id, issue])); issueChildren = null; }
+    executionsById = indexExecutions(state.executions);
     reconcileReceipts();
     render({ force: changedScope });
     updateLaunchControls();
@@ -309,12 +351,12 @@ async function sync(epoch = scopeEpoch, full = false) {
 }
 
 function configureActionControl(control, kind, target, disabled = false, scope = state.scope) {
-    control.dataset.actionKey = actionKey(kind, target, scope);
+    setData(control, "actionKey", actionKey(kind, target, scope));
     if (!control.dataset.baseLabel) control.dataset.baseLabel = control.textContent;
-    control.dataset.baseDisabled = String(disabled);
-    control.dataset.focusKey = `${kind}:${target}`;
-    control.dataset.prepareNode = kind === "prepare" ? target : "";
-    control.dataset.projectAction = String(scope !== null);
+    setData(control, "baseDisabled", String(disabled));
+    setData(control, "focusKey", `${kind}:${target}`);
+    setData(control, "prepareNode", kind === "prepare" ? target : "");
+    setData(control, "projectAction", String(scope !== null));
     updateActionControl(control);
     return control;
 }
@@ -324,8 +366,8 @@ function updateActionControl(control) {
     const launchPending = control.dataset.prepareNode && nodePending(control.dataset.prepareNode);
     setInert(control, control.dataset.baseDisabled === "true" || Boolean(pending) || Boolean(launchPending) ||
         (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed || standaloneHost(state))));
-    control.textContent = pending ? action.status === "pending" ? "Working..." : action.status === "queued" ? "Queued" : "Check receipt" : control.dataset.baseLabel;
-    control.setAttribute("aria-busy", String(action?.status === "pending"));
+    setText(control, pending ? action.status === "pending" ? "Working..." : action.status === "queued" ? "Queued" : "Check receipt" : control.dataset.baseLabel);
+    setAttr(control, "aria-busy", String(action?.status === "pending"));
 }
 function actionButton(text, kind, target, nodeId, work, options = {}) {
     const b = button(text, () => void perform({ kind, target, nodeId, label: text, work, ...options }), options.className);
@@ -338,7 +380,9 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
     if (previous && ["pending", "queued", "uncertain"].includes(previous.status)) return;
     if ((selecting || !scopeConfirmed || standaloneHost(state)) && !global) return;
     if (kind === "prepare" && nodePending(nodeId)) return;
-    const record = { kind, scope, nodeId, previewId, clientId, status: "pending", message: `${label}...`, dismissed: false };
+    // The list row the control sits in, if any: action keys repeat across rows, so focus is put back within that row.
+    const originRowId = $("tree").contains(document.activeElement) ? document.activeElement.closest("[data-node-id]")?.dataset.nodeId : undefined;
+    const record = { kind, scope, nodeId, previewId, clientId, originRowId, status: "pending", message: `${label}...`, dismissed: false };
     const restoreControlFocus = document.activeElement?.dataset.actionKey === key;
     actions.set(key, record);
     paintFeedback();
@@ -386,11 +430,18 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         if (restoreControlFocus && (global || scope === state.scope) && epoch === scopeEpoch && !selecting
             && (document.activeElement === document.body || document.activeElement?.disabled)) {
             if (kind === "load-more") renderTree();
-            const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && !element.hidden);
+            const control = actionControl(key, originRowId, element => !element.disabled && !element.hidden);
             if (control) control.focus({ preventScroll: true });
-            else if (!focusRow(nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
+            else if (!focusRow(originRowId ?? nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
         }
     }
+}
+// The control that runs an action: inside the list row it was started from when there is one (keys repeat across
+// rows), otherwise the first one in the page.
+function actionControl(key, rowId, usable) {
+    const scope = rowId === undefined ? document : visibleRows.get(rowId);
+    if (!scope?.isConnected) return null;
+    return [...scope.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && usable(element)) || null;
 }
 function reconcileReceipts() {
     for (const record of actions.values()) {
@@ -417,16 +468,19 @@ function reconcileReceipts() {
 }
 function paintFeedback() {
     for (const control of document.querySelectorAll("[data-action-key]")) updateActionControl(control);
-    $("repository").disabled = selecting || !scopeConfirmed || !state.project || !state.appProjects.length || actions.get(actionKey("map", "repository"))?.status === "pending";
+    const repositoryDisabled = selecting || !scopeConfirmed || !state.project || !state.appProjects.length || actions.get(actionKey("map", "repository"))?.status === "pending";
+    if ($("repository").disabled !== repositoryDisabled) $("repository").disabled = repositoryDisabled;
     const entries = [...actions].filter(([, a]) => (a.scope === null || a.scope === state.scope) && !a.dismissed);
     const visible = entries.map(([, record]) => record);
     paintNotices(entries);
-    $("notice").hidden = !visible.length;
+    setHidden($("notice"), !visible.length);
+    // Each node's messages, gathered once rather than filtered again for every feedback node.
+    const messages = new Map();
+    for (const record of visible) messages.set(record.nodeId, [...messages.get(record.nodeId) || [], record.message]);
     for (const feedback of document.querySelectorAll("[data-feedback-node]")) {
-        const messages = visible.filter(a => a.nodeId === feedback.dataset.feedbackNode);
-        const text = messages.map(a => a.message).join(" ");
-        if (feedback.textContent !== text) feedback.textContent = text;
-        feedback.hidden = !text;
+        const text = (messages.get(feedback.dataset.feedbackNode) || []).join(" ");
+        setText(feedback, text);
+        setHidden(feedback, !text);
     }
 }
 // #notice is a polite live region that announces additions and text changes. Each action keeps its own row, so a new
@@ -445,8 +499,8 @@ function paintNotices(entries) {
         const [message, dismiss] = row.children;
         row.classList.toggle("notice-error", ["failed", "uncertain", "expired"].includes(record.status));
         if (message.textContent !== record.message) message.textContent = record.message;
-        dismiss.hidden = ["pending", "queued", "uncertain"].includes(record.status);
-        if (dismiss.getAttribute("aria-label") !== `Dismiss: ${record.message}`) dismiss.setAttribute("aria-label", `Dismiss: ${record.message}`);
+        setHidden(dismiss, ["pending", "queued", "uncertain"].includes(record.status));
+        setAttr(dismiss, "aria-label", `Dismiss: ${record.message}`);
     }
 }
 function dismissNotice(key) {
@@ -461,7 +515,7 @@ function dismissNotice(key) {
     // Dismiss removes its own button: move focus to the next notice, else to the control that ran the action. Only
     // rendered elements count: the narrow details view hides the list (and search) behind a display: none ancestor.
     const rendered = element => element && element.getClientRects().length > 0;
-    const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && rendered(element));
+    const control = actionControl(key, record.originRowId, element => !element.disabled && rendered(element));
     const target = [noticeRows.get(next)?.lastElementChild, control, $("search"), $("back-to-work")].find(rendered);
     if (target) focusInView(target);
 }
@@ -514,7 +568,8 @@ function captureFocus(container) {
 }
 function restoreFocus(container, key) {
     if (!key) return;
-    const element = [...container.querySelectorAll("[data-focus-key]")].find(candidate => candidate.dataset.focusKey === key);
+    // The container itself counts: a hierarchy row carries its own key.
+    const element = [container, ...container.querySelectorAll("[data-focus-key]")].find(candidate => candidate.dataset.focusKey === key);
     if (!element) return;
     // A rebuilt action control that is still pending is created disabled; keep it focusable as aria-disabled.
     if (element.disabled && element.dataset.actionKey) {
@@ -549,21 +604,21 @@ function render({ force = false } = {}) {
     }
     $("scope-value").disabled = $("scope-kind").value === "project" || selecting || !state.project;
     $("scope-kind").disabled = $("apply-scope").disabled = selecting || !state.project;
-    $("apply-scope").setAttribute("aria-busy", String(selecting));
+    setAttr($("apply-scope"), "aria-busy", String(selecting));
     const scopeSummary = state.project ? workingSetSummary(state) : "Choose a project to load a working set.";
     if ($("scope-summary").textContent !== scopeSummary) $("scope-summary").textContent = scopeSummary;
-    $("load-more").hidden = !state.page?.nextPageToken;
+    setHidden($("load-more"), !state.page?.nextPageToken);
     configureActionControl($("load-more"), "load-more", loadMoreTarget(), selecting || !state.project);
     configureActionControl($("project-start"), "prepare", "project", !state.project || !state.mapping || state.cached);
     configureActionControl($("sync-jira"), "launch", "project", selecting || !state.project || !state.mapping || Boolean(state.error) || state.cached || nodePending("project"));
     configureActionControl($("refresh"), "refresh-jira", "jira", selecting || !state.project);
     configureActionControl($("refresh-execution"), "refresh-execution", "all", selecting || !state.project);
     configureActionControl($("connections"), "catalog", "connections", false, null);
-    $("project-title").textContent = state.project?.name || "Your work, connected.";
+    setText($("project-title"), state.project?.name || "Your work, connected.");
     $("project-title").disabled = !state.project;
     const unavailableExecutions = state.executions.filter(execution => !getItem(execution.nodeId)).map(execution => execution.nodeId);
     const { signIn, errors, retryAt } = banner(state, { unavailable: unavailableExecutions });
-    $("sign-in").hidden = !signIn;
+    setHidden($("sign-in"), !signIn);
     if (signIn) {
         $("sign-in-server").textContent = signIn.server;
         $("sign-in-button").hidden = $("sign-in-mcp").hidden = signIn.connector;
@@ -577,11 +632,11 @@ function render({ force = false } = {}) {
         $("errors").dataset.signature = errorSignature;
         $("errors").replaceChildren(...errors.map(message => el("p", message)));
     }
-    $("errors").hidden = !errors.length;
+    setHidden($("errors"), !errors.length);
     // Outside the alert region: the next attempt time is read on demand, never announced.
     const retry = errors.length ? retryNotice(retryAt, { format: clockTime }) : "";
     if ($("retry-time").textContent !== retry) $("retry-time").textContent = retry;
-    $("retry-time").hidden = !retry;
+    setHidden($("retry-time"), !retry);
     const work = state.issues.filter(i => !i.contextOnly && i.level <= 0);
     const allLinks = ["project", ...state.issues.map(item => item.id)].map(nodeLinks);
     const metrics = [
@@ -591,11 +646,15 @@ function render({ force = false } = {}) {
         [new Set(allLinks.flatMap(trace => trace.sessions.map(s => s.id))).size, "Linked sessions"],
         [new Set(allLinks.flatMap(trace => trace.prs.map(p => `${p.repo}#${p.number}`))).size, "Pull requests"],
     ];
-    $("metrics").replaceChildren(...metrics.map(([value, label]) => {
-        const block = el("div", null, "metric");
-        block.append(el("strong", value), el("span", label));
-        return block;
-    }));
+    const metricSignature = JSON.stringify(metrics);
+    if ($("metrics").dataset.signature !== metricSignature) {
+        $("metrics").dataset.signature = metricSignature;
+        $("metrics").replaceChildren(...metrics.map(([value, label]) => {
+            const block = el("div", null, "metric");
+            block.append(el("strong", value), el("span", label));
+            return block;
+        }));
+    }
     const jira = jiraFreshness(state, time);
     setSource($("freshness"), `Jira: ${jira.text}`, jira.tone, jira.detail);
     const unverified = { jira: Boolean(state.stale || state.cached) };
@@ -606,13 +665,13 @@ function render({ force = false } = {}) {
         unverified[source] = freshness.needed && freshness.label !== "fresh";
     }
     renderProgress(work, unverified);
-    $("workbench").dataset.detailsOpen = String(ui.detailsOpen);
+    setData($("workbench"), "detailsOpen", String(ui.detailsOpen));
     $("show-details").disabled = !getItem(ui.selected);
-    $("view-execution").setAttribute("aria-pressed", String(ui.view === "execution"));
-    $("view-hierarchy").setAttribute("aria-pressed", String(ui.view === "hierarchy"));
-    $("execution-filters").hidden = ui.view !== "execution";
-    $("hierarchy-header").hidden = ui.view !== "hierarchy";
-    $("expand").hidden = ui.view !== "hierarchy";
+    setAttr($("view-execution"), "aria-pressed", String(ui.view === "execution"));
+    setAttr($("view-hierarchy"), "aria-pressed", String(ui.view === "hierarchy"));
+    setHidden($("execution-filters"), ui.view !== "execution");
+    setHidden($("hierarchy-header"), ui.view !== "hierarchy");
+    setHidden($("expand"), ui.view !== "hierarchy");
     renderExecutionFilters();
     renderTree(force);
     renderInspector(force);
@@ -639,12 +698,7 @@ function renderProgress(work, unverified) {
         return step;
     }));
 }
-function executionFor(id) {
-    return state.executions.find(item => item.nodeId === id) || {
-        nodeId: id, views: ["all"], signals: [], reasons: ["Live execution state has not been observed. Refresh live state to check."],
-        primary: { kind: "inspect", label: "Inspect work" }, rank: Number.MAX_SAFE_INTEGER,
-    };
-}
+const executionFor = id => indexedExecution(executionsById, id);
 function executionItems() {
     if (!state.project) return [];
     return state.executions.map(execution => ({ item: getItem(execution.nodeId), execution })).filter(entry => entry.item);
@@ -679,9 +733,9 @@ function renderExecutionFilters() {
     }));
     restoreFocus($("execution-filters"), focus);
 }
-function primaryAction(item) {
+function primaryAction(item, execution = executionFor(item.id)) {
     if (item.contextOnly) return badge(item.missing ? "Unavailable parent" : "Context-only ancestor");
-    const primary = executionFor(item.id).primary || { kind: "inspect", label: "Inspect work" };
+    const primary = execution.primary || { kind: "inspect", label: "Inspect work" };
     const label = primary.label || "Inspect work";
     if (primary.kind === "prepare") {
         return actionButton(label, "prepare", item.id, item.id, context => preparePreview(item.id, primary.mode, context), {
@@ -709,6 +763,15 @@ function armClear(key, armed) {
         control.classList.toggle("confirming", armed);
         updateActionControl(control);
     }
+}
+// armClear relabels only the Clear controls on screen, so a cached row can hold a label from an earlier confirmation
+// state; such a row is rebuilt rather than shown again.
+const clearRows = new WeakSet();
+function clearStateCurrent(row) {
+    if (!clearRows.has(row)) return true;
+    for (const control of row.querySelectorAll("[data-clear-label]"))
+        if (control.classList.contains("confirming") !== armedClears.has(control.dataset.actionKey)) return false;
+    return true;
 }
 function clearRequestButton(label, nodeId, requestId) {
     const key = actionKey("clear-request", requestId), armed = armedClears.has(key);
@@ -768,99 +831,188 @@ function refreshSourceButton(label, source = "all", nodeId) {
             `${source === "all" ? "Live sources" : humanize(source)} refresh returned; see each source's freshness.`,
     });
 }
+// Built rows by node ID with the digest of what each shows. A render rebuilds only the rows whose digest changed and
+// keeps the others (and the focus inside them) in place, so selecting, expanding, filtering or a poll touches only the
+// rows it changes. Rows a filter hides stay cached for the current view until their issue leaves the working set.
+let treeRows = [], rowCache = new Map(), visibleRows = new Map(), tabStopRow = null, rowView = null, rowIssues = null;
+const itemDigests = new WeakMap();
+const itemDigest = item => {
+    if (!itemDigests.has(item)) itemDigests.set(item, JSON.stringify(item));
+    return itemDigests.get(item);
+};
 function renderTree(force = false) {
     const container = $("tree");
     // The revision stands for the working set and its tree; links leave out stamps that rows never show.
     const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issuesRevision ?? state.issues, state.executions, linksDigest(state.links), state.requests, requestStatuses(state.requests), state.mapping, selecting, scopeConfirmed]);
-    if (!force && (container.contains(document.activeElement) || signature === treeDigest)) return;
-    const focus = captureFocus(container);
+    if (!force && signature === treeDigest) return;
+    const focus = captureFocus(container), hadFocus = container.contains(document.activeElement);
+    // Control keys repeat across rows (the same refresh action, or one session or PR linked to two issues), so focus is
+    // restored inside the row that had it.
+    const focusedRowId = hadFocus ? document.activeElement.closest("[data-node-id]")?.dataset.nodeId : undefined;
+    // The order the user saw, so a focused row that leaves the list hands focus to its nearest neighbour.
+    const shownOrder = focusedRowId === undefined ? [] : treeRows.map(row => row.dataset.nodeId);
+    // A cleared digest means the scope or working set was replaced: build every row afresh.
+    if (!treeDigest || rowView !== ui.view) rowCache = new Map();
+    else if (rowIssues !== state.issues) for (const id of rowCache.keys()) if (!itemsById.has(id)) rowCache.delete(id);
+    rowView = ui.view;
+    rowIssues = state.issues;
     treeDigest = signature;
-    container.replaceChildren();
     container.setAttribute("role", ui.view === "hierarchy" ? "tree" : "list");
     container.setAttribute("aria-label", ui.view === "hierarchy" ? "Jira work hierarchy" : "Daily execution queue");
     if (!state.project) {
         const empty = el("div", null, "empty");
         empty.append(el("h3", "Choose a Jira project"), el("p", "All epics, issues and subtasks. No active sprint required."));
-        container.append(empty);
+        container.replaceChildren(empty);
+        treeRows = [];
+        rowCache = new Map();
+        visibleRows = new Map();
+        tabStopRow = null;
         $("work-count").textContent = "No project loaded";
         return;
     }
+    // Every row is described by what it shows; `build` makes it only when that differs from the row on screen.
+    const entries = [];
+    // What a row's own controls were built from: its launch state, whether a repository is mapped, and an armed Clear.
+    const launchSummary = id => {
+        const primary = executionFor(id).primary;
+        return [nodeLaunch(id), Boolean(state.mapping), primary?.kind === "clear_request" && armedClears.has(actionKey("clear-request", primary.requestId))];
+    };
     if (ui.view === "execution") {
         const sprint = sprintFilter();
-        const entries = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category, sprint) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
-        entries.sort((a, b) => (a.execution.rank ?? Number.MAX_SAFE_INTEGER) - (b.execution.rank ?? Number.MAX_SAFE_INTEGER) || a.item.key.localeCompare(b.item.key));
-        for (const { item, execution } of entries) {
-            const row = createRow(item, 0);
-            row.classList.add("execution-row");
-            const name = itemName(item, null, true);
-            const why = el("div", null, "execution-why"), reason = el("p", primaryReason(execution), "execution-reason");
-            reason.title = reason.textContent;
-            why.append(reason);
-            const evidence = executionEvidence(item, execution, nodeLinks(item.id));
-            if (evidence.length) {
-                const details = disclosure("queue-evidence", "More evidence", item.id);
-                details.classList.add("execution-evidence");
-                details.querySelector("summary").dataset.focusKey = `evidence:${item.id}`;
-                details.addEventListener("click", event => event.stopPropagation());
-                details.append(evidenceList(evidence));
-                why.append(details);
-            }
-            name.append(why);
-            const observed = el("div", null, "observed-state");
-            observed.append(badge(`Jira: ${item.status}`, item.category));
-            appendCompactObserved(observed, item.id);
-            row.append(name, observed, primaryAction(item), feedbackFor(item.id));
-            container.append(row);
+        const queue = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category, sprint) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
+        queue.sort((a, b) => (a.execution.rank ?? Number.MAX_SAFE_INTEGER) - (b.execution.rank ?? Number.MAX_SAFE_INTEGER) || a.item.key.localeCompare(b.item.key));
+        for (const { item, execution } of queue) {
+            const trace = nodeLinks(item.id);
+            entries.push({
+                item, digest: JSON.stringify(["execution", ui.selected === item.id, execution, launchSummary(item.id)]) + linksDigest(trace),
+                build: () => executionRow(item, execution, trace),
+            });
         }
     } else {
         const roots = filterTree(state.tree.roots, ui.query, ui.category, sprintFilter());
         const childSessions = descendantSessionCounts(state.issues, id => nodeLinks(id).sessions.map(session => session.id));
-        const add = (node, depth, parentId = "", index = 0, count = 1) => {
-            const item = node.issue, expanded = !collapsed.has(item.id) || Boolean(ui.query);
-            const row = createRow(item, depth, parentId, node.children.length > 0);
-            row.setAttribute("aria-posinset", String(index + 1));
-            row.setAttribute("aria-setsize", String(count));
-            if (node.children.length) row.setAttribute("aria-expanded", String(expanded));
-            const name = el("div", null, "item-name");
-            name.style.paddingInlineStart = `${Math.min(depth, 6) * 18}px`;
-            if (node.children.length) {
-                const toggle = button(expanded ? "-" : "+", () => {
-                    if (collapsed.has(item.id)) collapsed.delete(item.id); else collapsed.add(item.id);
-                    focusedNode = item.id;
-                    savePreferences("collapsed");
-                    renderTree(true);
-                    focusRow(item.id);
-                    paintFeedback();
-                }, "toggle");
-                toggle.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${item.key}`);
-                toggle.tabIndex = -1;
-                name.append(toggle);
-            } else name.append(el("span", "", "toggle-placeholder"));
-            name.append(itemName(item, node));
-            const status = el("div");
-            status.append(badge(item.status, item.category));
-            const progress = el("div", null, "progress-cell");
-            appendObserved(progress, item.id);
-            const sessions = childSessions.get(item.id) || 0;
-            if (sessions) progress.append(badge(`${sessions} child session${sessions === 1 ? "" : "s"}`, "session"));
-            const signals = executionFor(item.id).signals;
-            if (signals.length) progress.append(el("span", signals.map(signal => signal.reason || humanize(signal.kind)).join("; "), "muted"));
-            const reason = el("p", executionFor(item.id).reasons.join(" "), "hierarchy-reason");
-            row.append(name, status, progress, primaryAction(item), reason, feedbackFor(item.id));
-            container.append(row);
-            if (expanded) node.children.forEach((child, childIndex) => add(child, depth + 1, item.id, childIndex, node.children.length));
-        };
-        roots.forEach((node, index) => add(node, 0, "", index, roots.length));
+        for (const entry of flattenTree(roots, id => !collapsed.has(id) || Boolean(ui.query))) {
+            const { node, depth, parentId, index, count, expanded } = entry, item = node.issue;
+            const sessions = childSessions.get(item.id) || 0, execution = executionFor(item.id);
+            entries.push({
+                item, digest: JSON.stringify(["hierarchy", depth, parentId, index, count, node.children.length, expanded, node.done, node.total,
+                    sessions, ui.selected === item.id, execution, launchSummary(item.id)]) + linksDigest(nodeLinks(item.id)),
+                build: () => hierarchyRow(entry, sessions, execution),
+            });
+        }
     }
-    const rows = [...container.querySelectorAll("[data-node-id]")];
+    const visible = new Map(), rows = [];
+    for (const { item, digest, build } of entries) {
+        const shown = `${itemDigest(item)}${digest}`, cached = rowCache.get(item.id);
+        let row = cached?.shown === shown && !visible.has(item.id) && clearStateCurrent(cached.row) ? cached.row : null;
+        if (!row) {
+            row = build();
+            if (row.querySelector("[data-clear-label]")) clearRows.add(row);
+            setRowTabStop(row, false);
+            if (!visible.has(item.id)) rowCache.set(item.id, { row, shown });
+        }
+        if (!visible.has(item.id)) visible.set(item.id, row);
+        rows.push(row);
+    }
+    const kept = new Set(rows), reused = rows.some(row => row.parentNode === container);
+    if (!reused) {
+        const fragment = document.createDocumentFragment();
+        for (const row of rows) fragment.append(row);
+        container.replaceChildren(fragment);
+    } else {
+        // Remove what goes first, so the rows that stay are never moved past each other; then insert the new ones.
+        for (const child of [...container.children]) if (!kept.has(child)) child.remove();
+        let cursor = container.firstElementChild;
+        for (const row of rows) {
+            if (row === cursor) cursor = cursor.nextElementSibling;
+            else container.insertBefore(row, cursor);
+        }
+    }
+    treeRows = rows;
+    visibleRows = visible;
     if (!rows.length) container.append(el("div", ui.view === "execution" && !state.executions.length
         ? "No execution entries reported for this project. Refresh live state, or inspect and start project work from the header."
         : state.issues.length ? "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters." : "No visible issues in this project.", "empty"));
-    if (!rows.some(row => row.dataset.nodeId === focusedNode)) focusedNode = rows.find(row => row.dataset.nodeId === ui.selected)?.dataset.nodeId || rows[0]?.dataset.nodeId;
+    if (!visibleRows.has(focusedNode)) focusedNode = visibleRows.has(ui.selected) ? ui.selected : rows[0]?.dataset.nodeId;
     setTabStop(focusedNode);
-    $("work-count").textContent = `${rows.length} visible loaded item${rows.length === 1 ? "" : "s"}`;
-    $("work-scroll").scrollTop = ui.scrollTop;
-    restoreFocus(container, focus);
+    setText($("work-count"), `${rows.length} visible loaded item${rows.length === 1 ? "" : "s"}`);
+    // Kept rows hold their scroll position; a list built afresh is put back where the user left it.
+    if (!reused) $("work-scroll").scrollTop = ui.scrollTop;
+    if (hadFocus && !container.contains(document.activeElement)) {
+        const row = focusedRowId === undefined ? container : visibleRows.get(focusedRowId);
+        if (row) restoreFocus(row, focus);
+        // The focused control went with its row's old content: keep focus on the row. If the row itself is gone, move to
+        // the next row the user saw, else the previous one, else out of the empty list, never to the page.
+        if (!container.contains(document.activeElement) && document.activeElement === document.body) {
+            const at = shownOrder.indexOf(focusedRowId);
+            const near = row ? focusedRowId : at < 0 ? focusedNode
+                : [...shownOrder.slice(at + 1), ...shownOrder.slice(0, at).reverse()].find(id => visibleRows.has(id));
+            if (!focusRow(near)) {
+                const rendered = element => element && element.getClientRects().length > 0;
+                const target = [$("search"), $(`view-${ui.view}`), $("back-to-work")].find(rendered);
+                if (target) focusInView(target);
+            }
+        }
+        // A rebuilt row can also have moved (its rank changed): keep the restored focus in view, scrolling no further than
+        // needed, so it is not left on an offscreen control.
+        const restored = container.contains(document.activeElement) ? document.activeElement.closest("[data-node-id]") || document.activeElement : null;
+        restored?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+}
+function executionRow(item, execution, trace) {
+    const row = createRow(item, 0);
+    row.classList.add("execution-row");
+    const name = itemName(item, null, true);
+    const why = el("div", null, "execution-why"), reason = el("p", primaryReason(execution), "execution-reason");
+    reason.title = reason.textContent;
+    why.append(reason);
+    const evidence = executionEvidence(item, execution, trace);
+    if (evidence.length) {
+        const details = disclosure("queue-evidence", "More evidence", item.id);
+        details.classList.add("execution-evidence");
+        details.querySelector("summary").dataset.focusKey = `evidence:${item.id}`;
+        details.addEventListener("click", event => event.stopPropagation());
+        details.append(evidenceList(evidence));
+        why.append(details);
+    }
+    name.append(why);
+    const observed = el("div", null, "observed-state");
+    observed.append(badge(`Jira: ${item.status}`, item.category));
+    appendCompactObserved(observed, item.id);
+    row.append(name, observed, primaryAction(item), feedbackFor(item.id));
+    return row;
+}
+function hierarchyRow({ node, depth, parentId, index, count, expanded }, sessions, execution) {
+    const item = node.issue;
+    const row = createRow(item, depth, parentId, node.children.length > 0);
+    row.setAttribute("aria-posinset", String(index + 1));
+    row.setAttribute("aria-setsize", String(count));
+    if (node.children.length) row.setAttribute("aria-expanded", String(expanded));
+    const name = el("div", null, "item-name");
+    name.style.paddingInlineStart = `${Math.min(depth, 6) * 18}px`;
+    if (node.children.length) {
+        const toggle = button(expanded ? "-" : "+", () => {
+            if (collapsed.has(item.id)) collapsed.delete(item.id); else collapsed.add(item.id);
+            focusedNode = item.id;
+            savePreferences("collapsed");
+            renderTree(true);
+            focusRow(item.id);
+            paintFeedback();
+        }, "toggle");
+        toggle.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${item.key}`);
+        toggle.tabIndex = -1;
+        name.append(toggle);
+    } else name.append(el("span", "", "toggle-placeholder"));
+    name.append(itemName(item, node));
+    const status = el("div");
+    status.append(badge(item.status, item.category));
+    const progress = el("div", null, "progress-cell");
+    appendObserved(progress, item.id, execution);
+    if (sessions) progress.append(badge(`${sessions} child session${sessions === 1 ? "" : "s"}`, "session"));
+    if (execution.signals.length) progress.append(el("span", execution.signals.map(signal => signal.reason || humanize(signal.kind)).join("; "), "muted"));
+    const reason = el("p", execution.reasons.join(" "), "hierarchy-reason");
+    row.append(name, status, progress, primaryAction(item, execution), reason, feedbackFor(item.id));
+    return row;
 }
 function itemName(item, node, compact = false) {
     const title = el("div", null, "item-title");
@@ -894,28 +1046,34 @@ function appendCompactObserved(container, nodeId) {
     }
     if (!trace.sessions.length && !trace.prs.length && !launchBlocks(launch)) container.append(badge("No linked activity"));
 }
-function appendObserved(container, nodeId) {
+function appendObserved(container, nodeId, execution = executionFor(nodeId)) {
     const traces = nodeLinks(nodeId), launch = nodeLaunch(nodeId);
     if (launchBlocks(launch)) container.append(badge(launchLabel(launch), "session"));
     for (const session of traces.sessions) container.append(badge(`Session: ${sessionState(session)}`, "session"));
     for (const pr of traces.prs) container.append(badge(`#${pr.number}: ${pr.stale ? "stale / " : ""}${pr.isDraft ? "draft / " : ""}${humanize(pr.state)}`, pr.state === "MERGED" ? "merged" : "pr"));
     if (!traces.sessions.length && !traces.prs.length && !launchBlocks(launch)) {
-        const observed = executionFor(nodeId).signals.map(signal => humanize(signal.kind));
+        const observed = execution.signals.map(signal => humanize(signal.kind));
         container.append(el("span", observed.length ? `Observed: ${[...new Set(observed)].join(" / ")}` : "Execution state unknown", "muted"));
     }
 }
 const rowLabel = item => `${item.key} ${item.summary}, Jira ${item.status}${scopeLabel(item) ? `, ${scopeLabel(item)}` : ""}`;
 // What takes focus for a row: the tree item itself, or the select button of a queue row.
 const rowTarget = row => row.querySelector(".row-select") || row;
-// One tab stop for the whole list: the focused row and its own controls. Arrow keys move between rows.
-function setTabStop(id) {
-    for (const row of $("tree").querySelectorAll("[data-node-id]")) {
-        const current = row.dataset.nodeId === id, target = rowTarget(row);
-        target.tabIndex = current ? 0 : -1;
-        for (const control of row.querySelectorAll("button, summary")) {
-            if (control !== target && !control.classList.contains("toggle")) control.tabIndex = current ? 0 : -1;
-        }
+// One tab stop for the whole list: the focused row and its own controls. Arrow keys move between rows. Only the row
+// that held the tab stop and the row that takes it are written.
+// Compared as the attribute: a div without one already reports tabIndex -1 yet cannot take focus.
+function setRowTabStop(row, current) {
+    const target = rowTarget(row), value = current ? "0" : "-1";
+    if (target.getAttribute("tabindex") !== value) target.setAttribute("tabindex", value);
+    for (const control of row.querySelectorAll("button, summary")) {
+        if (control !== target && !control.classList.contains("toggle") && control.getAttribute("tabindex") !== value) control.setAttribute("tabindex", value);
     }
+}
+function setTabStop(id) {
+    const row = visibleRows.get(id) || null;
+    if (tabStopRow && tabStopRow !== row) setRowTabStop(tabStopRow, false);
+    if (row) setRowTabStop(row, true);
+    tabStopRow = row;
 }
 function createRow(item, depth, parentId = "", hasChildren = false) {
     const row = el("div", null, `tree-row${ui.selected === item.id ? " selected" : ""}`);
@@ -930,23 +1088,26 @@ function createRow(item, depth, parentId = "", hasChildren = false) {
     } else row.setAttribute("role", "listitem");
     row.addEventListener("click", () => chooseItem(item.id));
     row.addEventListener("focusin", () => {
-        if (focusedNode === item.id) return;
+        if (focusedNode === item.id && tabStopRow === row) return;
         focusedNode = item.id;
         setTabStop(item.id);
     });
     row.addEventListener("keydown", event => {
         if (event.target !== rowTarget(row)) return;
         if (["Enter", " "].includes(event.key)) { event.preventDefault(); chooseItem(item.id); return; }
-        const rows = [...$("tree").querySelectorAll("[data-node-id]")], index = rows.indexOf(row);
+        // Rows are siblings in #tree, so the neighbours are found without collecting every row.
         if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
             event.preventDefault();
-            const next = event.key === "Home" ? rows[0] : event.key === "End" ? rows.at(-1) : rows[index + (event.key === "ArrowDown" ? 1 : -1)];
-            if (next) rowTarget(next).focus();
+            const next = event.key === "Home" ? treeRows[0] : event.key === "End" ? treeRows.at(-1)
+                : event.key === "ArrowDown" ? row.nextElementSibling : row.previousElementSibling;
+            if (next?.dataset.nodeId) rowTarget(next).focus();
         }
         if (ui.view !== "hierarchy" || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
         event.preventDefault();
         const expanded = row.getAttribute("aria-expanded") === "true";
-        if (event.key === "ArrowRight" && hasChildren && expanded) rows[index + 1]?.focus();
+        if (event.key === "ArrowRight" && hasChildren && expanded) {
+            if (row.nextElementSibling?.dataset.nodeId) rowTarget(row.nextElementSibling).focus();
+        }
         else if (event.key === "ArrowLeft" && (!hasChildren || !expanded)) focusRow(parentId);
         else if (hasChildren && !ui.query) {
             if (event.key === "ArrowLeft") collapsed.add(item.id); else collapsed.delete(item.id);
@@ -959,11 +1120,11 @@ function createRow(item, depth, parentId = "", hasChildren = false) {
     return row;
 }
 // Focuses without the browser's jump, then scrolls only as far as needed to keep the row in view.
-function focusRow(id) {
-    const row = [...$("tree").querySelectorAll("[data-node-id]")].find(item => item.dataset.nodeId === id);
-    if (!row) return false;
+function focusRow(id, { scroll = true } = {}) {
+    const row = visibleRows.get(id);
+    if (!row?.isConnected) return false;
     rowTarget(row).focus({ preventScroll: true });
-    row.scrollIntoView({ block: "nearest" });
+    if (scroll) row.scrollIntoView({ block: "nearest" });
     return true;
 }
 function disclosure(key, title, nodeId = ui.selected) {
@@ -1195,7 +1356,7 @@ function renderTrace(body, item) {
         prs.append(card);
     }
     for (const message of traces.errors || []) body.append(el("p", message, "trace-error"));
-    const children = (item.id === "project" ? state.issues : descendants(state.issues, item.id)).filter(child => nodeLinks(child.id).sessions.length || nodeLinks(child.id).prs.length);
+    const children = (item.id === "project" ? state.issues : descendants(state.issues, item.id, issueChildren ||= childIndex(state.issues))).filter(child => nodeLinks(child.id).sessions.length || nodeLinks(child.id).prs.length);
     if (children.length) {
         const rollup = el("section", null, "child-traces");
         rollup.append(el("h3", "Linked work in this scope"), el("p", "Child traces stay attached to their original Jira items.", "muted"));
@@ -1446,7 +1607,15 @@ $("load-more").addEventListener("click", () => void perform({
     kind: "load-more", target: loadMoreTarget(), label: "Load more", work: loadMoreAction,
     success: "Working-set page loaded.",
 }));
-$("search").addEventListener("input", () => { ui.query = $("search").value; savePreferences("query"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
+// Typing renders once per pause rather than once per key; the query itself is current at once for any other render.
+const SEARCH_RENDER_MS = 180;
+let searchTimer;
+$("search").addEventListener("input", () => {
+    ui.query = $("search").value;
+    savePreferences("query");
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { renderExecutionFilters(); renderTree(); paintFeedback(); }, SEARCH_RENDER_MS);
+});
 $("status-filter").addEventListener("change", () => { ui.category = $("status-filter").value; savePreferences("category"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("sprint-filter").addEventListener("change", () => { ui.sprint = $("sprint-filter").value || "all"; savePreferences("sprint"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("expand").addEventListener("click", () => { collapsed.clear(); savePreferences("collapsed"); renderTree(true); paintFeedback(); });
@@ -1547,9 +1716,10 @@ $("review-changes").addEventListener("click", () => void reviewChanges());
 $("cancel-launch").addEventListener("click", closePreview);
 $("launch-dialog").addEventListener("cancel", event => { event.preventDefault(); closePreview(); });
 $("confirm-launch").addEventListener("click", () => void confirmLaunch());
-for (const id of ["tree", "inspector-content"]) $(id).addEventListener("focusout", () => setTimeout(() => {
-    if ($(id).contains(document.activeElement)) return;
-    if (id === "tree") renderTree(); else renderInspector();
+// The tree updates in place while it has focus; the inspector still waits until focus leaves it.
+$("inspector-content").addEventListener("focusout", () => setTimeout(() => {
+    if ($("inspector-content").contains(document.activeElement)) return;
+    renderInspector();
     paintFeedback();
 }, 0));
 function pollingPaused() {
@@ -1634,7 +1804,13 @@ function showBuild(build) {
     button.textContent = ACTION_LABELS[build.action] || "";
     button.disabled = updating;
 }
-const checkBuild = () => api("version").then(showBuild).catch(() => {});
+let lastBuildCheck = 0;
+const checkBuild = () => { lastBuildCheck = Date.now(); return api("version").then(showBuild).catch(() => {}); };
+// No version reads while the panel is hidden; on return it checks at once if a check was skipped.
+const BUILD_CHECK_MS = 60_000;
+function checkBuildWhenVisible() {
+    if (!document.hidden && Date.now() - lastBuildCheck >= BUILD_CHECK_MS - 5000) void checkBuild();
+}
 $("update-action").addEventListener("click", async () => {
     updating = true;
     $("update-action").disabled = true;
@@ -1645,8 +1821,9 @@ $("update-action").addEventListener("click", async () => {
         if ($("update-banner").hidden) { $("update-banner").hidden = false; $("update-message").textContent = error.message; }
     }
 });
-void checkBuild();
-setInterval(() => void checkBuild(), 60_000);
+checkBuildWhenVisible();
+setInterval(checkBuildWhenVisible, BUILD_CHECK_MS);
+document.addEventListener("visibilitychange", checkBuildWhenVisible);
 // The server restores the last project from disk and revalidates it; show that first, then follow it.
 try { await sync(); }
 catch (error) { connectionMessage("poll", `Could not read the workbench state: ${error.message}`); }

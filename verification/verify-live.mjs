@@ -1,4 +1,4 @@
-import { launchBrowser } from "./browser.mjs";
+import { launchBrowser, search } from "./browser.mjs";
 import assert from "node:assert/strict";
 
 const address = new URL(process.env.WORKBENCH_URL);
@@ -20,7 +20,7 @@ try {
     const item = before.issues.find(issue => before.links[`${before.scope.slice(0, before.scope.lastIndexOf("/") + 1)}${issue.id}`]?.prs.length);
     assert.ok(item, "An existing verified PR is needed for this read-only navigation check");
     await page.waitForFunction(() => document.getElementById("project-title").textContent !== "Your work, connected.");
-    await page.locator("#search").fill(item.key);
+    await search(page, item.key);
     await page.getByText(item.summary, { exact: true }).first().click();
     const navigation = page.waitForResponse(response => response.url().endsWith("/api/open-pr"));
     await page.locator("#inspector").getByRole("button", { name: "Open PR", exact: true }).first().click();
@@ -32,7 +32,7 @@ try {
     assert.deepEqual(errors, []);
     const cleared = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok()
         && response.request().postDataJSON()?.preferences?.query === "");
-    await page.locator("#search").fill("");
+    await search(page, "");
     await cleared;
     console.log(JSON.stringify({
         project: before.project.key, issues: before.issues.length, linkedIssue: item.key,

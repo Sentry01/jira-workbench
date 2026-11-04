@@ -3,6 +3,7 @@
 // page, a parent row focused out of view, re-announced notices, tooltips that cannot be hovered or dismissed, and a
 // tab stop for every row control.
 import assert from "node:assert/strict";
+import { search } from "./browser.mjs";
 
 // The host injects its canvas theme contract at runtime, from the theme the user picked, so there is no single fixed
 // set of values. The semantic values below are the GitHub Copilot app's own standalone light and dark defaults
@@ -299,7 +300,7 @@ async function focusKept(page) {
 }
 
 async function launchFocus(page) {
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     const prepare = page.locator('#tree [data-node-id="6"]').getByRole("button", { name: "Prepare implementation", exact: true });
     await prepare.focus();
     await page.keyboard.press("Enter");
@@ -323,7 +324,7 @@ async function launchFocus(page) {
     const active = await focusInView(page);
     assert.deepEqual(active, { focused: "notice", inViewport: true, inScroller: true }, "after a confirmed launch, focus moves to the notice that reports it, in view");
     await page.setViewportSize({ width: 1440, height: 1080 });
-    await page.locator("#search").fill("");
+    await search(page, "");
 }
 
 // In the narrow details view the list is hidden. Dismissing the last notice for an action that has a control both in
