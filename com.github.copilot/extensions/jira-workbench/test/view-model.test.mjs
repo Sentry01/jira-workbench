@@ -5,7 +5,7 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
-    smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, requestStatuses,
+    smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -434,4 +434,14 @@ test("request statuses in a render digest change when a request crosses its expi
     const start = Date.parse(at);
     assert.deepEqual(requestStatuses(requests, start + 1000), ["queued"]);
     assert.deepEqual(requestStatuses(requests, start + REQUEST_TTL_MS + 1000), ["expired"]);
+});
+
+test("the inspector digest keys trace times by minute without formatting them", () => {
+    assert.equal(minuteKey("2026-11-03T10:15:01.000Z"), minuteKey("2026-11-03T10:15:59.999Z"));
+    assert.notEqual(minuteKey("2026-11-03T10:15:59.999Z"), minuteKey("2026-11-03T10:16:00.000Z"));
+    assert.equal(minuteKey(null), null);
+    assert.equal(minuteKey("not a time"), "not a time");
+    const links = stamp => ({ "c/42/2": { verifiedAt: stamp, sessions: [], prs: [], sourceStatus: { sessions: { state: "fresh", fetchedAt: stamp } } } });
+    assert.equal(linksDigest(links("2026-11-03T10:15:01.000Z"), minuteKey), linksDigest(links("2026-11-03T10:15:58.000Z"), minuteKey));
+    assert.notEqual(linksDigest(links("2026-11-03T10:15:58.000Z"), minuteKey), linksDigest(links("2026-11-03T10:16:02.000Z"), minuteKey));
 });

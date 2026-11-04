@@ -332,5 +332,12 @@ export function resolveSnapshot(snapshot, held) {
 export const linksDigest = (links, format = () => undefined) =>
     JSON.stringify(links, (key, value) => key === "verifiedAt" || key === "fetchedAt" ? format(value) : value);
 
+// The minute a timestamp falls in, for the inspector digest: the inspector shows trace times to the minute, and this
+// changes exactly when that label does without formatting every stamp on every poll. Unparseable values stay as sent.
+export const minuteKey = value => {
+    const at = Date.parse(value);
+    return Number.isNaN(at) ? value : Math.floor(at / 60_000);
+};
+
 // Request statuses depend on the clock: a queued request turns expired without any field changing.
 export const requestStatuses = (requests = [], now = Date.now()) => requests.map(request => requestStatus(request, now));

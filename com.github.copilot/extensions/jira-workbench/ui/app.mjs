@@ -3,7 +3,7 @@ import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
-    retryNotice, nextFocusKey, resolveSnapshot, linksDigest, requestStatuses,
+    retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -60,7 +60,13 @@ function link(text, href, className = "") {
     return a;
 }
 const badge = (text, tone = "") => el("span", text, `badge ${tone}`);
-const time = value => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "not refreshed";
+// One formatter for every label: toLocaleTimeString with options builds a new one on each call.
+const clock = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
+const time = value => {
+    if (!value) return "not refreshed";
+    const at = new Date(value);
+    return Number.isNaN(at.getTime()) ? "Invalid Date" : clock.format(at);
+};
 const clockTime = value => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 // A control that becomes unavailable while it has focus keeps the focus: it is marked aria-disabled instead of
 // disabled (a disabled element drops focus to the page), and the click guard below ignores it.
@@ -1012,7 +1018,7 @@ function reviewedContext(receipt, key) {
 }
 function renderInspector(force = false) {
     const panel = $("inspector-content"), item = getItem(ui.selected);
-    const signature = JSON.stringify([ui.selected, tab, item, linksDigest(state.links, time), state.executions, state.mapping, state.requests, requestStatuses(state.requests), selecting, scopeConfirmed]);
+    const signature = JSON.stringify([ui.selected, tab, item, linksDigest(state.links, minuteKey), state.executions, state.mapping, state.requests, requestStatuses(state.requests), selecting, scopeConfirmed]);
     if (!force && (panel.contains(document.activeElement) || signature === inspectorDigest)) return;
     const focus = captureFocus(panel);
     inspectorDigest = signature;
