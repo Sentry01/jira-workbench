@@ -772,6 +772,14 @@ test("an unknown send outcome stays visible when saving it fails, until a claim 
     const execution = snapshot.executions.find(e => e.nodeId === "2");
     assert.ok(execution.signals.some(s => s.kind === "request_unknown"));
     assert.deepEqual(execution.primary, { kind: "clear_request", label: "Clear stuck request", requestId: error.requestId });
+    // Unchanged polls leave out the working set, but the unsaved send error and what it means still reach the panel.
+    const unchanged = await workbench.snapshot({ since: workbench.issuesRevision });
+    assert.equal(unchanged.issues, null);
+    assert.match(unchanged.requests.find(r => r.requestId === error.requestId).sendError, /after the prompt was sent/);
+    assert.deepEqual(unchanged.executions.find(e => e.nodeId === "2").primary, execution.primary);
+    const polled = await workbench.refreshExecution({ source: "sessions", poll: true, since: workbench.issuesRevision });
+    assert.equal(polled.issues, null);
+    assert.match(polled.requests.find(r => r.requestId === error.requestId).sendError, /after the prompt was sent/);
     // The agent did receive it: its claim resolves the uncertainty.
     assert.equal((await workbench.claimRequest({ requestId: error.requestId })).status, "claimed");
     const claimed = await workbench.snapshot();
