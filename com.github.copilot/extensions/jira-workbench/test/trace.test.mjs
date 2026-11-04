@@ -619,3 +619,44 @@ test("a poll never stamps another panel's content as freshly checked, and rewrit
     await workbench.refreshExecution({ source: "sessions" });
     assert.equal((await store.read()).links[scope].sessions[1].activity, "idle");
 });
+
+test("a write keeps the newer times of sources it did not observe", async t => {
+    const { workbench, store, activity, writes } = await linkedProject(t);
+    await workbench.refreshExecution({ source: "sessions" });
+    const scope = "cloud-demo/42/100";
+    const before = writes();
+    await workbench.refreshExecution({ source: "github" });
+    assert.equal(writes(), before, "an unchanged GitHub refresh keeps its time in memory");
+    const checked = (await workbench.snapshot()).links[scope].sourceStatus.github.fetchedAt;
+    activity.set("s-100-1", "running");
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(writes(), before + 1);
+    assert.equal((await store.read()).links[scope].sourceStatus.github.fetchedAt, checked, "written with the session change");
+    assert.equal((await workbench.snapshot()).links[scope].sourceStatus.github.fetchedAt, checked);
+});
+
+test("a slower overlapping refresh cannot replace a newer unchanged poll's observation", async t => {
+    const { workbench, store, activity } = await linkedProject(t);
+    await workbench.refreshExecution({ source: "sessions" });
+    const scope = "cloud-demo/42/100";
+    const original = workbench.gateway.call;
+    let entered, release;
+    const inside = new Promise(resolve => { entered = resolve; }), resume = new Promise(resolve => { release = resolve; });
+    workbench.gateway.call = async (name, args) => {
+        const result = await original(name, args);
+        if (name === "get_session" && args.project_session_id === "s-100-1") { entered(); await resume; }
+        return result;
+    };
+    // The slow refresh observes "running"; by the time the poll runs, the session is idle again.
+    activity.set("s-100-1", "running");
+    const slow = workbench.refreshTrace("100");
+    await inside;
+    activity.set("s-100-1", "idle");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await workbench.refreshExecution({ source: "sessions" });
+    release();
+    await slow;
+    workbench.gateway.call = original;
+    assert.equal((await store.read()).links[scope].sessions[1].activity, "idle");
+    assert.equal((await workbench.snapshot()).links[scope].sessions[1].activity, "idle");
+});

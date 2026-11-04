@@ -243,12 +243,20 @@ export class Trace {
                 return;
             }
         }
-        const links = await store.update(current => traces.map(trace => mergeTrace(current, trace)));
+        const written = await store.update(current => traces.map(trace => this.merge(current, trace)));
         this.persistedAt = now;
-        traces.forEach((trace, index) => this.wrote(trace.scope, links[index]));
+        traces.forEach((trace, index) => this.wrote(trace.scope, written[index]));
     }
-    wrote(scope, link) {
-        this.stamps.delete(scope);
+    // Merges a trace and, while the stored content is still what they checked, the times kept in memory for it, so
+    // a write by one source also saves the newer times of sources it did not observe.
+    merge(current, trace) {
+        const kept = this.stamps.get(trace.scope);
+        if (kept && current.links[trace.scope]) current.links[trace.scope] = withStamps(current.links[trace.scope], kept);
+        return { link: mergeTrace(current, trace), kept };
+    }
+    // Forgets the kept times just written, unless another check kept newer ones meanwhile.
+    wrote(scope, { link, kept }) {
+        if (this.stamps.get(scope) === kept) this.stamps.delete(scope);
         this.written.set(scope, stampsOf(link));
     }
     keep({ scope, next, source }, stored) {
@@ -263,9 +271,9 @@ export class Trace {
         const scope = wb.selectedScope(nodeId);
         const data = await wb.store.read();
         const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] }, github: this.reader(true) });
-        const link = await wb.store.update(current => mergeTrace(current, trace));
-        this.wrote(scope, link);
-        return link;
+        const written = await wb.store.update(current => this.merge(current, trace));
+        this.wrote(scope, written);
+        return written.link;
     }
     async collectTrace(options) {
         this.collecting++;
