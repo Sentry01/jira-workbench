@@ -2,7 +2,8 @@ import { objects, settle } from "./runtime.mjs";
 import { assertSessionId } from "./validate.mjs";
 
 // Unchanged polls keep their freshness stamps in memory and persist them at most this often; a session already known
-// in full is read with get_session at most this often (get_sessions_status carries its live state every poll).
+// in full is read by background polls with get_session at most this often (get_sessions_status carries its live
+// state every poll); an explicit refresh reads every session in full.
 const STAMP_PERSIST_MS = 60_000;
 const DETAIL_EVERY_MS = 60_000;
 
@@ -310,7 +311,7 @@ export class Trace {
                     const listed = statuses.find(s => s.id === stored.id);
                     const due = Date.now() - (this.detailAt.get(stored.id) ?? -Infinity) >= DETAIL_EVERY_MS;
                     let detail, status = listed;
-                    if (!listed || source === "all" || due || !complete(stored, listed)) {
+                    if (!poll || !listed || source === "all" || due || !complete(stored, listed)) {
                         detail = await wb.gateway.call("get_session", { project_session_id: stored.id });
                         this.detailAt.set(stored.id, Date.now());
                         status ||= statuses.find(s => s.id === detail.id);

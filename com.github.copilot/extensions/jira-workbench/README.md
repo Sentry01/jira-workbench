@@ -461,9 +461,10 @@ refresh, and session polling skips projects with no linked sessions.
 
 Session polling reads live state from one `get_sessions_status` call. A linked
 session is read in full with `get_session` only when it is missing from that
-list, when its stored record has no name, branch or PR yet, during a full
-refresh, or once a minute. A session the host reports as deleted is no longer read
-by polls once it is confirmed missing. A poll that observes nothing new does not write
+list, when its stored record has no name, branch or PR yet, or once a minute.
+**Refresh**, **Refresh live state** and **Refresh Sessions** read every linked
+session in full. A session the host reports as deleted is no longer read by polls
+once it is confirmed missing. A poll that observes nothing new does not write
 `state.json`: the time of the check is kept in memory and shown in the panel,
 and is written at most once a minute. That time is shown only on the content it
 checked. A poll always writes when another panel or process has stored that

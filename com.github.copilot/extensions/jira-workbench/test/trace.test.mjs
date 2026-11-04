@@ -493,7 +493,7 @@ test("unchanged session polls at 100 links x 3 sessions make no get_session call
     counts.get_session = 0;
     for (let poll = 0; poll < 2; poll++) {
         await new Promise(resolve => setTimeout(resolve, 5));
-        await workbench.refreshExecution({ source: "sessions" });
+        await workbench.refreshExecution({ source: "sessions", poll: true });
     }
     assert.equal(counts.get_session, 0);
     assert.equal(counts.get_sessions_status >= 2, true);
@@ -504,12 +504,12 @@ test("unchanged session polls at 100 links x 3 sessions make no get_session call
     assert.equal(shown.sourceStatus.sessions.state, "fresh");
 
     activity.set("s-100-1", "running");
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(writes() - writesBefore, 1, "a real change is written");
     assert.equal(counts.get_session, 0, "activity comes from get_sessions_status");
 
     workbench.trace.persistedAt -= 61_000;
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(writes() - writesBefore, 2, "freshness stamps are persisted at most once a minute");
 });
 
@@ -517,11 +517,11 @@ test("a session is read in full only when it is missing from the status list, in
     const { workbench, counts, store } = await linkedProject(t);
     await store.update(data => { data.links["cloud-demo/42/100"].sessions[0].branch = null; });
     counts.get_session = 0;
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(counts.get_session, 1, "only the incomplete session");
     counts.get_session = 0;
     for (const id of ["s-101-0", "s-101-1"]) workbench.trace.detailAt.set(id, Date.now() - 61_000);
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(counts.get_session, 2, "only the sessions due for their slow check");
 });
 
@@ -580,7 +580,7 @@ test("an explicit refresh reads a PR shared by every issue once, across batches 
 // Copilot review C3: a skipped write never hides or misdates another panel's observation.
 test("a poll never stamps another panel's content as freshly checked, and rewrites what it observed", async t => {
     const { workbench, store, writes } = await linkedProject(t);
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     const scope = "cloud-demo/42/100";
     const before = writes();
     // Another panel commits a different, older observation while this poll is reading the host.
@@ -596,16 +596,16 @@ test("a poll never stamps another panel's content as freshly checked, and rewrit
         }
         return original(name, args);
     };
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     workbench.gateway.call = original;
     assert.equal((await store.read()).links[scope].sessions[1].activity, "idle", "this poll's newer observation is written");
     assert.ok(writes() - before >= 2);
 
     // After a skipped poll, another panel writes an older observation: the kept time is not shown on it, and the next
     // poll writes the newer content back.
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     const skipped = writes();
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(writes(), skipped, "an unchanged poll by the only observer still skips its write");
     const kept = (await workbench.snapshot()).links[scope].sourceStatus.sessions.fetchedAt;
     const older = new Date(Date.parse(kept) - 500).toISOString();
@@ -616,20 +616,20 @@ test("a poll never stamps another panel's content as freshly checked, and rewrit
     const shown = (await workbench.snapshot()).links[scope];
     assert.equal(shown.sessions[1].activity, "running");
     assert.equal(shown.sourceStatus.sessions.fetchedAt, older, "the other panel's content keeps its own time");
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal((await store.read()).links[scope].sessions[1].activity, "idle");
 });
 
 test("a write keeps the newer times of sources it did not observe", async t => {
     const { workbench, store, activity, writes } = await linkedProject(t);
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     const scope = "cloud-demo/42/100";
     const before = writes();
     await workbench.refreshExecution({ source: "github" });
     assert.equal(writes(), before, "an unchanged GitHub refresh keeps its time in memory");
     const checked = (await workbench.snapshot()).links[scope].sourceStatus.github.fetchedAt;
     activity.set("s-100-1", "running");
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(writes(), before + 1);
     assert.equal((await store.read()).links[scope].sourceStatus.github.fetchedAt, checked, "written with the session change");
     assert.equal((await workbench.snapshot()).links[scope].sourceStatus.github.fetchedAt, checked);
@@ -637,7 +637,7 @@ test("a write keeps the newer times of sources it did not observe", async t => {
 
 test("a slower overlapping refresh cannot replace a newer unchanged poll's observation", async t => {
     const { workbench, store, activity } = await linkedProject(t);
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     const scope = "cloud-demo/42/100";
     const original = workbench.gateway.call;
     let entered, release;
@@ -653,10 +653,19 @@ test("a slower overlapping refresh cannot replace a newer unchanged poll's obser
     await inside;
     activity.set("s-100-1", "idle");
     await new Promise(resolve => setTimeout(resolve, 5));
-    await workbench.refreshExecution({ source: "sessions" });
+    await workbench.refreshExecution({ source: "sessions", poll: true });
     release();
     await slow;
     workbench.gateway.call = original;
     assert.equal((await store.read()).links[scope].sessions[1].activity, "idle");
     assert.equal((await workbench.snapshot()).links[scope].sessions[1].activity, "idle");
+});
+
+test("an explicit Refresh Sessions reads every linked session in full; background polls do not", async t => {
+    const { workbench, counts } = await linkedProject(t);
+    counts.get_session = 0;
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal(counts.get_session, 0);
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(counts.get_session, 300);
 });
