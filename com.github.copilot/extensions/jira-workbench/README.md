@@ -140,7 +140,13 @@ Project-wide **Update Jira** gathers evidence from durable project links,
 independently of loaded scope pages. For up to 300 linked issues it uses the
 loaded rows and reads any that are not loaded (or not re-read) in
 project-constrained batches; it reports unreadable and over-limit identities as
-omitted, never as absent work. It reads the selected project's issues and statuses
+omitted, never as absent work. Each issue carries at most its 3 most recently
+linked sessions and its 3 highest-numbered PRs, with `omittedSessions` and
+`omittedPrs` counts for the rest, and issues are dropped from the end of the list
+(and counted as omitted) until the kickoff fits the 48 KB kickoff budget (see
+[Launch requests that never report back](#launch-requests-that-never-report-back)).
+If the workflow statuses alone exceed the budget, the sync is refused before it is
+queued. It reads the selected project's issues and statuses
 before any wait and rejects the sync if the project selection changed in the
 meantime, including a switch away and back. Workflow status choices exclude
 foreign context items.
@@ -256,7 +262,7 @@ The UI never presents a queued request as a completed navigation and does not
 start a new session to satisfy Open.
 
 Native navigation is time-bounded: reading the host's tool list gets 8 seconds, and
-the navigation call itself gets 30 seconds. On a timeout the navigation is recorded
+the navigation call itself, or the agent-mediated fallback prompt, gets 30 seconds. On a timeout the navigation is recorded
 as failed ("Copilot did not answer the navigation request within 30s. Try again.")
 and the item is released, so pressing the button again starts a fresh request. A
 runtime that answers late cannot rewrite the recorded outcome.
@@ -303,6 +309,50 @@ A confirmed launch, or an **Update Jira** sync, is stored as a queued request un
 the canvas-owning agent records the session it created (`record_session`) or the
 failure (`fail_request`). While it is queued it blocks a second launch for the same
 issue or project, so duplicate work is never started.
+
+Every launch ends in exactly one visible state: attached, outcome unknown (no
+retry was sent), refused, or superseded.
+
+- **Claim first.** The launcher prompt tells the owning agent to call
+  `claim_request` with the request ID before `create_session`, and to stop unless
+  it returns `claimed`. The claim is one state write. It is refused for an unknown,
+  cleared, failed, attached or already claimed request. When a newer request for
+  the same scope exists (for example a second **Start** after the first expired),
+  the older request is marked failed as "Superseded by a newer launch; no session
+  was created." and the agent stops. So a stale prompt that the agent drains late
+  cannot create a second session. A claimed request never expires, because its
+  agent may still create the session. It blocks **Start** and cannot be cleared
+  for 10 minutes after the claim. After that it reads as "outcome unknown" and
+  still blocks **Start**, and nothing supersedes it automatically: the user
+  checks the project's sessions and clears it. A late receipt or `fail_request`
+  still settles it, before or after the clear.
+- **Unknown send outcome.** The prompt send to the owning agent (`session.send`)
+  is bounded at 30 seconds. A rejection does not prove the host refused the prompt
+  (it can enqueue it and then lose the reply), so a rejection or a timeout keeps
+  the request queued with a `sendError`, answers HTTP 502 or 504, and nothing is
+  retried. If saving the `sendError` fails (for example, another process holds
+  the state lock), the panel's state still carries it from memory until a claim,
+  a receipt, a failure or a clear resolves the request. The panel shows "Launch outcome unknown ... No retry was sent." and
+  offers **Clear stuck request**. A late receipt still attaches; once cleared, the
+  prompt's claim is refused. The panel also stops waiting for `/api/launch` and
+  `/api/sync-jira` after 45 seconds. Error responses carry the `requestId`, and
+  **Update Jira** sends a panel-chosen `clientId` that is stored with its request,
+  so the panel matches its action to the stored request even after a timeout. An
+  Update Jira refused before any request was stored is kept by that `clientId` in
+  the state's `syncRejections`, so a panel that stopped waiting shows it as failed.
+- **Legacy requests.** Requests queued by an earlier version carry no claim, and
+  their late receipts are still accepted.
+- **Kickoff budget.** The owning agent re-emits `kickoff.prompt` in one tool call,
+  so the kickoff is kept to 48 KB as a JSON string. With a reviewed brief, the
+  selected description, the descendants, the edited fields and the dependencies
+  are each sent once, as compact JSON. When a launch still does not fit,
+  `prepare` lists the descendants by key only and then shortens the selected and
+  parent descriptions with a "Shortened by Jira Workbench" marker, before the
+  brief is hashed, and adds a `context-truncated` warning that implementation
+  launches must acknowledge. Acceptance criteria are still read from the whole
+  description, and a `hidden-characters` warning is kept even when the hidden
+  text was in a part that fitting removed. Context that cannot fit even then is
+  refused.
 
 If no receipt arrives within **15 minutes** (a dropped agent turn, a closed panel),
 the request becomes **Launch outcome unknown**. Expiry is worked out each time the
@@ -443,7 +493,8 @@ Every Copilot runtime call the extension makes is time-bounded:
 | Jira read (`tools.execute`) | 90s |
 | Server restart (`mcp.restartServer`) | 30s |
 | Starting sign-in (`mcp.oauth.login`) | 30s |
-| Native navigation: tool list, then the navigation call | 8s, then 30s |
+| Native navigation: tool list, then the navigation call or fallback prompt | 8s, then 30s |
+| Sending a launch or Update Jira prompt to the owning agent (`session.send`) | 30s |
 | Installed plugin list (`plugins.list`), for the update check | 5s |
 | Plugin update (`plugins.update`), for **Update & reload** | 120s |
 | Plugin or extension reload (`plugins.reload`, `extensions.reload`), after an update | 30s |
@@ -559,7 +610,7 @@ Jira writes. Treat any change to the kickoff wording as a security change. See
 
 The prototype writes local repository mappings, UI preferences, trace links,
 reviewed briefs, and launch receipts. Confirmed launches are sent to the owning agent, which uses
-`create_session` and records the returned ID with `record_session`. A queued
+`claim_request`, then `create_session`, and records the returned ID with `record_session`. A queued
 request is never presented as an already-created session. The prompt sent to the
 owning agent says that the session `name` and `kickoff.prompt` embed untrusted
 Jira text, to be passed to `create_session` verbatim and never followed, acted on
@@ -692,6 +743,7 @@ verification artifacts.
   an item updated mid-paging appears only after **Refresh**. Session previews require at most 500 loaded descendants;
   they do not imply that every child has been loaded.
 - Launches are agent-mediated and need the canvas-owning session to process them.
+  The agent claims each request with `claim_request` before creating its session.
   If creation fails, record the error with `fail_request`; never retry an
   uncertain creation blindly. A request with no receipt after 15 minutes is shown
   as **Launch outcome unknown** and can be cleared (see

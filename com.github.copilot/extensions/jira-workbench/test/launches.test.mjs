@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../lib/store.mjs";
 import { Workbench } from "../lib/workbench.mjs";
+import { KICKOFF_BUDGET_BYTES, kickoffBytes } from "../lib/model.mjs";
 
 const site = { id: "cloud-demo", name: "Demo", url: "https://demo.atlassian.net" };
 const project = { id: "42", key: "DEMO", name: "Demo project" };
@@ -24,7 +25,7 @@ async function fixture(t, options = {}) {
     const sent = [], store = new Store(directory);
     const gateway = {
         sites: async () => [site], projects: async () => [project],
-        issues: async () => ({ issues: rows, fetchedAt: new Date().toISOString() }),
+        issues: async () => ({ issues: options.rows || rows, fetchedAt: new Date().toISOString() }),
         call: async (name, args) => {
             if (name === "list_repositories") return [copilot];
             if (name === "get_sessions_status") return { sessions: [{ id: "session-1", activity: { status: "idle" } }] };
@@ -64,10 +65,10 @@ test("Update Jira queues one project-wide status sync session carrying linked ev
     assert.equal(request.nodeId, "project");
     assert.equal(request.scope, "cloud-demo/42/project");
     assert.match(sent[0].prompt, /create_session/);
-    assert.match(sent[0].prompt, /"project_id": "copilot-uuid"/);
+    assert.match(sent[0].prompt, /"project_id":"copilot-uuid"/);
     const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
-    assert.match(kickoff, /"key": "DEMO-2"/);
-    assert.match(kickoff, /"number": 9/);
+    assert.match(kickoff, /"key":"DEMO-2"/);
+    assert.match(kickoff, /"number":9/);
     await workbench.recordSession({ requestId: queued.requestId, sessionId: "session-1" });
     assert.equal((await store.read()).links["cloud-demo/42/project"].sessions[0].id, "session-1");
 });
@@ -94,9 +95,9 @@ test("Update Jira passes stale flags and source freshness to the session", async
     });
     await workbench.syncJira();
     const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
-    assert.match(kickoff, /"stale": true/);
-    assert.match(kickoff, /"sessions": "stale"/);
-    assert.match(kickoff, /"github": "unknown"/);
+    assert.match(kickoff, /"stale":true/);
+    assert.match(kickoff, /"sessions":"stale"/);
+    assert.match(kickoff, /"github":"unknown"/);
 });
 
 
@@ -157,8 +158,8 @@ test("project sync includes loaded linked work but not foreign workflow statuses
     assert.ok(!snapshot.statuses.some(status => status.name === "Foreign workflow"));
     await workbench.syncJira();
     const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
-    assert.match(kickoff, /"key": "DEMO-2"/);
-    assert.match(kickoff, /"name": "Implementation"/);
+    assert.match(kickoff, /"key":"DEMO-2"/);
+    assert.match(kickoff, /"name":"Implementation"/);
     assert.match(kickoff, /No linked issues were omitted/);
     assert.doesNotMatch(kickoff, /Foreign workflow/);
     assert.equal(Object.keys((await store.read()).links).length, 1);
@@ -192,8 +193,8 @@ test("project sync reads linked issues that are not loaded before counting them 
     };
     await workbench.syncJira();
     const kickoff = JSON.parse(sent[0].prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
-    assert.match(kickoff, /"key": "DEMO-7"/);
-    assert.match(kickoff, /"key": "DEMO-5"/);
+    assert.match(kickoff, /"key":"DEMO-7"/);
+    assert.match(kickoff, /"key":"DEMO-5"/);
     assert.match(kickoff, /1 linked issue\(s\) were omitted/);
 });
 
@@ -482,4 +483,290 @@ test("hidden characters in a Jira summary must be acknowledged before implementi
     await confirm(workbench, preview);
     assert.equal(sent.length, 1);
     assert.doesNotMatch(sent[0].prompt, /[\u{E0000}-\u{E007F}]/u);
+});
+
+
+const kickoffIn = prompt => JSON.parse(prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.prompt;
+const claimIn = prompt => JSON.parse(prompt.split("\n\n").find(part => part.includes('"claim_request"')));
+
+test("the launcher prompt claims its request before create_session and stops unless claimed", async t => {
+    const { workbench, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const queued = await launchIssue(workbench);
+    const parts = sent[0].prompt.split("\n\n");
+    const claim = parts.findIndex(part => part.includes('"claim_request"'));
+    assert.ok(claim >= 0 && claim < parts.findIndex(part => part.includes('"kickoff"')), "the claim comes before create_session");
+    assert.deepEqual(claimIn(sent[0].prompt), { instanceId: "test-workbench", actionName: "claim_request", input: { requestId: queued.requestId } });
+    assert.match(parts[claim + 1], /Continue only if it returns status "claimed"/);
+    assert.match(parts[claim + 1], /do not call create_session, record_session or fail_request/);
+});
+
+test("send rejecting after delivery keeps the request queued as an unknown outcome, and a late receipt attaches", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    workbench.send = async value => { sent.push(value); throw new Error("Pending response rejected since connection got disposed"); };
+    const error = await launchIssue(workbench).catch(caught => caught);
+    assert.equal(error.status, 502, "the server answers 502, which the panel shows as an unknown outcome");
+    assert.match(error.message, /after the prompt was sent \(Pending response rejected/);
+    assert.equal(sent.length, 1, "nothing is retried");
+    const [request] = Object.values((await store.read()).requests);
+    assert.equal(request.status, "queued");
+    assert.match(request.sendError, /connection got disposed/);
+    await assert.rejects(launchIssue(workbench), /already queued/i, "a second Start is refused, not sent");
+    assert.equal(sent.length, 1);
+    const execution = (await workbench.snapshot()).executions.find(e => e.nodeId === "2");
+    assert.ok(execution.signals.some(s => s.kind === "request_unknown" && /Launch outcome unknown/.test(s.reason)));
+    assert.deepEqual(execution.primary, { kind: "clear_request", label: "Clear stuck request", requestId: request.requestId });
+    // The host did deliver it: the agent claims, creates and records the session.
+    assert.equal((await workbench.claimRequest({ requestId: request.requestId })).status, "claimed");
+    assert.deepEqual(await workbench.recordSession({ requestId: request.requestId, sessionId: "session-1" }), { status: "attached", sessionId: "session-1" });
+    const data = await store.read();
+    assert.equal(data.requests[request.requestId].status, "attached");
+    assert.equal(data.links["cloud-demo/42/2"].sessions[0].id, "session-1");
+});
+
+test("a send that never settles answers within the bound and leaves the launch or sync queued", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    workbench.launches.sendTimeoutMs = 50;
+    workbench.send = value => { sent.push(value); return new Promise(() => {}); };
+    for (const start of [() => launchIssue(workbench), () => workbench.syncJira()]) {
+        const started = Date.now();
+        const error = await start().catch(caught => caught);
+        assert.ok(Date.now() - started < 2000, "the call settles at the bound");
+        assert.equal(error.status, 504);
+        assert.match(error.message, /did not confirm it received the prompt within/);
+    }
+    assert.equal(sent.length, 2);
+    const requests = Object.values((await store.read()).requests);
+    assert.deepEqual(requests.map(r => r.status), ["queued", "queued"]);
+    assert.ok(requests.every(r => /did not confirm/.test(r.sendError)));
+    await assert.rejects(launchIssue(workbench), /already queued/i);
+});
+
+test("after expiry a second Start and both drained prompts give one session; the stale one is superseded", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const stale = await launchIssue(workbench);
+    await expire(store, stale.requestId);
+    const retry = await launchIssue(workbench);
+    assert.equal(sent.length, 2, "both prompts wait at the launching agent");
+    // The agent drains its queue in order; each prompt claims first.
+    const created = [];
+    for (const { prompt } of sent) {
+        const { input } = claimIn(prompt);
+        const claim = await workbench.claimRequest(input);
+        if (claim.status !== "claimed") continue;
+        created.push(input.requestId);
+        await workbench.recordSession({ requestId: input.requestId, sessionId: "session-1" });
+    }
+    assert.deepEqual(created, [retry.requestId], "exactly one create_session runs");
+    const data = await store.read();
+    assert.equal(data.requests[stale.requestId].status, "failed");
+    assert.equal(data.requests[stale.requestId].supersededBy, retry.requestId);
+    assert.match(data.requests[stale.requestId].error, /Superseded by a newer launch; no session was created/);
+    assert.equal(data.requests[retry.requestId].status, "attached");
+    assert.equal(data.links["cloud-demo/42/2"].sessions.length, 1);
+    const execution = (await workbench.snapshot()).executions.find(e => e.nodeId === "2");
+    assert.ok(execution.signals.some(s => s.kind === "request_superseded"));
+    assert.ok(!execution.signals.some(s => s.kind === "request_failed"), "a superseded request is not reported as a failure to inspect");
+    // A repeated prompt for a claimed or finished request is refused.
+    assert.equal((await workbench.claimRequest({ requestId: retry.requestId })).status, "refused");
+    assert.equal((await workbench.claimRequest({ requestId: stale.requestId })).status, "refused");
+    assert.equal((await workbench.claimRequest({ requestId: "__proto__" })).status, "refused");
+});
+
+test("a cleared request's stale prompt is refused, so a new Start gives one session", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const stale = await launchIssue(workbench);
+    await workbench.clearRequest({ requestId: stale.requestId });
+    const retry = await launchIssue(workbench);
+    const first = await workbench.claimRequest(claimIn(sent[0].prompt).input);
+    assert.equal(first.status, "refused");
+    assert.match(first.message, /cleared/);
+    assert.equal((await workbench.claimRequest(claimIn(sent[1].prompt).input)).status, "claimed");
+    const data = await store.read();
+    assert.equal(data.requests[stale.requestId].status, "cancelled");
+    assert.equal(data.requests[retry.requestId].status, "queued");
+});
+
+test("a claimed request keeps blocking past its expiry, cannot be cleared within its claim window, and blocks Start until cleared after it", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const claimed = await launchIssue(workbench);
+    await expire(store, claimed.requestId);
+    assert.equal((await workbench.claimRequest({ requestId: claimed.requestId })).status, "claimed", "an expired, unreplaced request can still be claimed");
+    await assert.rejects(launchIssue(workbench), /already queued/i, "a Start waits for the claimed request's receipt");
+    await assert.rejects(workbench.clearRequest({ requestId: claimed.requestId }), /claimed this request/);
+    const execution = (await workbench.snapshot()).executions.find(e => e.nodeId === "2");
+    assert.ok(execution.signals.some(s => s.kind === "request_queued" && /claimed/.test(s.reason)));
+    await store.update(data => { data.requests[claimed.requestId].claimedAt = new Date(Date.now() - 11 * 60_000).toISOString(); });
+    // Past the claim window the agent may still create its session, so Start is never freed or superseded on its own.
+    await assert.rejects(launchIssue(workbench), /already queued/i, "an unknown claimed outcome still blocks Start");
+    const unknown = (await workbench.snapshot()).executions.find(e => e.nodeId === "2");
+    assert.ok(unknown.signals.some(s => s.kind === "request_unknown" && /A session may still appear/.test(s.reason)));
+    assert.deepEqual(unknown.primary, { kind: "clear_request", label: "Clear stuck request", requestId: claimed.requestId });
+    assert.ok(unknown.views.includes("needs-me"));
+    assert.equal((await workbench.clearRequest({ requestId: claimed.requestId })).status, "cancelled");
+    const retry = await launchIssue(workbench);
+    assert.equal(retry.status, "queued");
+    // The first agent finishes after all: its late receipt still attaches, and nothing is overwritten.
+    assert.deepEqual(await workbench.recordSession({ requestId: claimed.requestId, sessionId: "session-1" }), { status: "attached", sessionId: "session-1" });
+    assert.equal((await store.read()).requests[retry.requestId].status, "queued");
+});
+
+test("a claimed request past its window accepts a late receipt or failure without being cleared", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const first = await launchIssue(workbench);
+    await workbench.claimRequest({ requestId: first.requestId });
+    const old = new Date(Date.now() - 20 * 60_000).toISOString();
+    await store.update(data => Object.assign(data.requests[first.requestId], { at: old, claimedAt: old }));
+    assert.deepEqual(await workbench.recordSession({ requestId: first.requestId, sessionId: "session-1" }), { status: "attached", sessionId: "session-1" });
+    const second = await launchIssue(workbench);
+    await workbench.claimRequest({ requestId: second.requestId });
+    await store.update(data => Object.assign(data.requests[second.requestId], { at: old, claimedAt: old }));
+    assert.equal((await workbench.failRequest({ requestId: second.requestId, message: "create_session failed" })).status, "failed");
+    assert.equal((await launchIssue(workbench)).status, "queued");
+});
+
+test("a request queued before claims existed still accepts its late receipt without a claim", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const legacy = await launchIssue(workbench);
+    await expire(store, legacy.requestId);
+    const retry = await launchIssue(workbench);
+    // An old launcher prompt goes straight to create_session and record_session.
+    assert.deepEqual(await workbench.recordSession({ requestId: legacy.requestId, sessionId: "session-1" }), { status: "attached", sessionId: "session-1" });
+    assert.equal((await store.read()).requests[retry.requestId].status, "queued");
+});
+
+test("Update Jira is refused until Copilot repository projects are confirmed", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    workbench.verified.apps = false;
+    await assert.rejects(workbench.syncJira(), /not confirmed/);
+    assert.equal(sent.length, 0);
+    assert.deepEqual((await store.read()).requests, {});
+});
+
+test("a 500-descendant launch with 32,000-character descriptions fits the kickoff budget and says what it shortened", async t => {
+    const description = "Background. ".repeat(3_000).slice(0, 31_000) + "\nAcceptance criteria:\n- The last criterion survives shortening\n" + "z".repeat(900);
+    const big = [
+        { id: "1", key: "DEMO-1", type: "Initiative", level: 2, summary: "I".repeat(255), projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [], description: "P".repeat(32_000) },
+        { id: "2", key: "DEMO-2", type: "Epic", level: 1, parentKey: "DEMO-1", parentId: "1", summary: "E".repeat(255), projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [], description },
+        ...Array.from({ length: 500 }, (_, index) => ({
+            id: String(100 + index), key: `DEMO-${100 + index}`, type: "Story", level: 0, parentKey: "DEMO-2", parentId: "2",
+            summary: `<${"s".repeat(253)}>`, projectId: "42", category: "new", status: "In Progress", labels: [], dependencies: [], description: "D".repeat(32_000),
+        })),
+    ];
+    const { workbench, store, sent } = await fixture(t, { rows: big });
+    await workbench.map({ copilotProjectId: copilot.id });
+    const preview = await workbench.prepare({ nodeId: "2", mode: "plan" });
+    const warning = preview.brief.warnings.find(w => w.id === "context-truncated");
+    assert.match(warning.message, /48 KB launch limit, the 500 descendants are listed by key only and the description of DEMO-2 was shortened to \d+ of 31\d{3} characters and the description of DEMO-1 was shortened/);
+    assert.ok(preview.brief.children.every(child => child.summary === undefined && child.key));
+    assert.deepEqual(preview.brief.acceptanceCriteria, ["The last criterion survives shortening"], "criteria come from the whole description");
+    assert.match(preview.brief.sources[0].description, /\[Shortened by Jira Workbench: \d+ of 31\d{3} characters kept\. Read DEMO-2 in Jira for the rest\.\]$/);
+    const queued = await confirm(workbench, preview);
+    const kickoff = kickoffIn(sent[0].prompt);
+    assert.ok(kickoffBytes(kickoff) <= KICKOFF_BUDGET_BYTES, `kickoff is ${kickoffBytes(kickoff)} bytes`);
+    assert.ok(Buffer.byteLength(sent[0].prompt) < KICKOFF_BUDGET_BYTES + 4096, "the launcher prompt adds only its instructions");
+    assert.match(kickoff, /Shortened by Jira Workbench/);
+    assert.match(kickoff, new RegExp(preview.brief.hash), "the sent kickoff is the one the hash covers");
+    assert.equal((await store.read()).requests[queued.requestId].contextHash, preview.brief.hash);
+});
+
+test("a launch kickoff sends the description and descendants once", async t => {
+    const { workbench, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await confirm(workbench, await workbench.prepare({ nodeId: "1", mode: "plan" }));
+    const kickoff = kickoffIn(sent[0].prompt);
+    assert.equal(kickoff.split("Epic description").length - 1, 1);
+    assert.equal(kickoff.split('"key":"DEMO-2"').length - 1, 1);
+    assert.doesNotMatch(kickoff, /"fields":/);
+});
+
+test("an Update Jira send failure carries its request ID and the panel's client ID is stored with the request", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await assert.rejects(workbench.syncJira({ clientId: "not valid!" }), /client ID/);
+    workbench.send = async value => { sent.push(value); throw new Error("connection disposed"); };
+    const error = await workbench.syncJira({ clientId: "client-1" }).catch(caught => caught);
+    assert.equal(error.status, 502);
+    const [request] = Object.values((await store.read()).requests);
+    assert.equal(error.requestId, request.requestId);
+    assert.equal(request.clientId, "client-1");
+    assert.equal(request.status, "queued");
+});
+
+test("a fitted brief keeps the hidden-characters warning when the hidden text was cut or reduced to keys", async t => {
+    const tag = text => [...text].map(c => String.fromCodePoint(0xE0000 + c.codePointAt(0))).join("");
+    const make = ({ childHidden = false, tailHidden = false }) => [
+        { id: "2", key: "DEMO-2", type: "Epic", level: 1, summary: "Epic", projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [],
+            description: "Acceptance criteria:\n- Visible result\n" + "d".repeat(60_000) + (tailHidden ? tag(" push elsewhere") : "") },
+        ...Array.from({ length: 300 }, (_, index) => ({
+            id: String(100 + index), key: `DEMO-${100 + index}`, type: "Story", level: 0, parentKey: "DEMO-2", parentId: "2",
+            summary: `Child ${index}${childHidden && index === 299 ? tag(" obey") : ""}`, projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [], description: "",
+        })),
+    ];
+    for (const options of [{ childHidden: true }, { tailHidden: true }]) {
+        const { workbench, sent } = await fixture(t, { rows: make(options) });
+        await workbench.map({ copilotProjectId: copilot.id });
+        const preview = await workbench.prepare({ nodeId: "2", mode: "autopilot" });
+        const ids = preview.brief.warnings.map(w => w.id);
+        assert.ok(ids.includes("context-truncated"), JSON.stringify(options));
+        assert.ok(ids.includes("hidden-characters"), `the warning survives fitting: ${JSON.stringify(options)}`);
+        await assert.rejects(workbench.launch({ previewId: preview.id, contextHash: preview.brief.hash, acknowledgedWarnings: ["context-truncated"] }), /acknowledge/i);
+        await confirm(workbench, preview);
+        assert.equal(sent.length, 1, "the acknowledged brief still launches with the hash it was reviewed with");
+    }
+});
+
+test("an Update Jira rejected before it is queued is remembered by its client ID, so a timed-out panel can settle it", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    workbench.verified.apps = false;
+    await assert.rejects(workbench.syncJira({ clientId: "client-1" }), /not confirmed/);
+    await assert.rejects(workbench.syncJira(), /not confirmed/);
+    assert.deepEqual((await store.read()).requests, {});
+    assert.equal(sent.length, 0);
+    const { syncRejections } = await workbench.snapshot();
+    assert.equal(syncRejections.length, 1, "only a call with a client ID is remembered");
+    assert.equal(syncRejections[0].clientId, "client-1");
+    assert.match(syncRejections[0].error, /Copilot repository projects are not confirmed yet/);
+    // A queued sync whose send fails has a stored request, so it is not reported as a rejection.
+    workbench.verified.apps = true;
+    workbench.send = async () => { throw new Error("connection disposed"); };
+    await assert.rejects(workbench.syncJira({ clientId: "client-2" }), /after the prompt was sent/);
+    assert.deepEqual((await workbench.snapshot()).syncRejections.map(r => r.clientId), ["client-1"]);
+});
+
+test("an unknown send outcome stays visible when saving it fails, until a claim or receipt resolves it", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const commit = workbench.commit.bind(workbench);
+    workbench.send = async value => {
+        sent.push(value);
+        // Another process holds the state lock when the outcome is saved.
+        workbench.commit = async () => { throw new Error("State is locked by process 4242."); };
+        throw new Error("connection disposed");
+    };
+    const error = await launchIssue(workbench).catch(caught => caught);
+    workbench.commit = commit;
+    assert.equal(error.status, 502);
+    const stored = (await store.read()).requests[error.requestId];
+    assert.equal(stored.status, "queued");
+    assert.equal(stored.sendError, undefined, "the save failed");
+    const snapshot = await workbench.snapshot();
+    assert.match(snapshot.requests.find(r => r.requestId === error.requestId).sendError, /after the prompt was sent/);
+    const execution = snapshot.executions.find(e => e.nodeId === "2");
+    assert.ok(execution.signals.some(s => s.kind === "request_unknown"));
+    assert.deepEqual(execution.primary, { kind: "clear_request", label: "Clear stuck request", requestId: error.requestId });
+    // The agent did receive it: its claim resolves the uncertainty.
+    assert.equal((await workbench.claimRequest({ requestId: error.requestId })).status, "claimed");
+    const claimed = await workbench.snapshot();
+    assert.equal(claimed.requests.find(r => r.requestId === error.requestId).sendError, undefined);
+    assert.ok(claimed.executions.find(e => e.nodeId === "2").signals.some(s => s.kind === "request_queued"));
 });

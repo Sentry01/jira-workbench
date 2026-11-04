@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, requestStatus } from "../lib/model.mjs";
+import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, CLAIM_TTL_MS, requestStatus, KICKOFF_BUDGET_BYTES, kickoffBytes } from "../lib/model.mjs";
 
 const issue = (id, key, parent, type = "Story", category = "new") => ({
     id, key, fields: {
@@ -92,8 +92,8 @@ test("launch request uses Copilot project ID, requirements, untrusted context an
         node: rows[1], children: [rows[2]], mode: "plan",
     });
     assert.match(prompt, /create_session/);
-    assert.match(prompt, /"project_id": "copilot-project-uuid"/);
-    assert.doesNotMatch(prompt, /"project_id": "42"/);
+    assert.match(prompt, /"project_id":"copilot-project-uuid"/);
+    assert.doesNotMatch(prompt, /"project_id":"42"/);
     assert.match(prompt, /Acceptance: keep existing behavior/);
     assert.match(prompt, /untrusted/i);
     assert.match(prompt, /record_session/);
@@ -191,7 +191,7 @@ test("Jira sync kickoff authorizes only status transitions within the selected p
     assert.match(rules, /Do not reopen/i);
     assert.match(rules, /summary table/i);
     assert.doesNotMatch(rules, /MERGED/, "evidence stays inside untrusted context");
-    assert.match(kickoff, /<jira-context>[\s\S]*"number": 9[\s\S]*<\/jira-context>/);
+    assert.match(kickoff, /<jira-context>[\s\S]*"number":9[\s\S]*<\/jira-context>/);
     assert.equal(JSON.parse(prompt.split("\n\n").find(part => part.includes('"kickoff"'))).kickoff.mode, "autopilot");
 });
 
@@ -208,7 +208,7 @@ test("Jira sync kickoff targets the project's own workflow statuses, kept inside
     assert.match(rules, /listJiraIssueTransitions/);
     assert.match(rules, /whose target is the chosen status/);
     assert.doesNotMatch(rules, /"PR Waiting"/, "status names stay inside untrusted context");
-    assert.match(kickoff, /<jira-context>[\s\S]*"projectStatuses": \[[\s\S]*"PR Waiting"[\s\S]*<\/jira-context>/);
+    assert.match(kickoff, /<jira-context>[\s\S]*"projectStatuses":\[[\s\S]*"PR Waiting"[\s\S]*<\/jira-context>/);
 });
 
 test("project statuses merge the workflow listing with statuses seen on issues, ordered by category", () => {
@@ -243,7 +243,7 @@ test("Jira sync kickoff treats stale and omitted evidence as unverified", () => 
     const truncated = kickoffOf(jiraSyncPrompt({ ...base, evidence: [], omittedLinkedIssues: 7 }));
     const rules = truncated.slice(0, truncated.indexOf("\n\n<jira-context>\n\n"));
     assert.match(rules, /7 linked issue\(s\) were omitted/);
-    assert.match(truncated, /"omittedLinkedIssues": 7/);
+    assert.match(truncated, /"omittedLinkedIssues":7/);
 });
 
 
@@ -390,7 +390,9 @@ test("invisible code points reach the session only as visible escapes, and the c
     const args = argsOf(prompt);
     const context = contextOf(args.kickoff.prompt);
     assert.equal(context.selected.summary, summary);
-    assert.equal(context.selected.description, node.description);
+    // With a reviewed brief the description travels in the brief's sources, so check it on a launch without one.
+    assert.equal(context.selected.description, undefined);
+    assert.equal(contextOf(argsOf(launchPrompt({ ...launchBase, node })).kickoff.prompt).selected.description, node.description);
     assert.deepEqual(context.reviewedBrief, brief);
     assert.equal(args.name, "DEMO-2 Show the result txet x abc d e \u2764");
     assert.ok(!INVISIBLE_TEST.test(args.name));
@@ -416,4 +418,70 @@ test("both kickoffs put the write rules above the brief and forbid Confluence an
     assert.ok(issue.includes("The user reviewed work brief") && issue.indexOf("take precedence") < issue.indexOf("The user reviewed work brief"));
     const boundary = issue.split("\n\n").find(part => part.includes("Make no other Jira writes"));
     assert.match(boundary, /issue creation, deletion or links/);
+});
+
+
+test("a claimed request stays queued for the claim window, then reads as unknown instead of expiring", () => {
+    const now = Date.parse("2026-01-01T12:00:00Z"), ago = ms => new Date(now - ms).toISOString();
+    const request = { status: "queued", at: ago(REQUEST_TTL_MS + 60_000) };
+    assert.equal(requestStatus(request, now), "expired");
+    assert.equal(requestStatus({ ...request, claimedAt: ago(CLAIM_TTL_MS) }, now), "queued");
+    assert.equal(requestStatus({ ...request, claimedAt: ago(CLAIM_TTL_MS + 1) }, now), "unknown", "a claimed request never expires");
+    assert.equal(requestStatus({ status: "queued", at: ago(60_000), claimedAt: ago(CLAIM_TTL_MS + 1) }, now), "unknown");
+    assert.equal(requestStatus({ status: "failed", at: ago(60_000), claimedAt: ago(1) }, now), "failed");
+});
+
+test("a launch with a reviewed brief sends the description, descendants, fields and dependencies once, as compact JSON", () => {
+    const node = { ...rows[1], description: "Unique selected description", dependencies: [{ key: "DEMO-77", relationship: "blocks" }] };
+    const brief = {
+        hash: "h", objective: "Objective", acceptanceCriteria: ["Unique criterion"], constraints: "",
+        sources: [{ kind: "jira", key: node.key, description: node.description }],
+        children: [{ id: "3", key: "DEMO-3", summary: "Unique child" }], dependencies: node.dependencies, warnings: [],
+        fields: { objective: "Objective", acceptanceCriteria: ["Unique criterion"], constraints: "" },
+    };
+    const prompt = launchPrompt({ ...launchBase, node, children: [rows[2]], brief });
+    const kickoff = kickoffOf(prompt);
+    for (const text of ["Unique selected description", "Unique child", "Unique criterion", "DEMO-77"])
+        assert.equal(kickoff.split(text).length - 1, 1, text);
+    assert.doesNotMatch(kickoff, /"descendants"|"fields"/);
+    assert.doesNotMatch(kickoff, /\n {2}"/, "the context is compact JSON");
+    assert.ok(prompt.split("\n\n").some(part => part.startsWith('{"project_id":"p"')), "the create_session arguments are compact JSON");
+});
+
+test("Update Jira for 300 issues with 10 sessions and 10 PRs each stays under the budget and reports what it omitted", () => {
+    const evidence = Array.from({ length: 300 }, (_, issue) => ({
+        key: `DEMO-${issue + 1}`, summary: `<${"s".repeat(253)}>`, status: "In Progress", category: "indeterminate",
+        sourceFreshness: { sessions: "fresh", github: "fresh" },
+        sessions: Array.from({ length: 10 }, (_, n) => ({ name: `Session ${issue}-${n}`, activity: "idle", stale: false, branch: `feature/demo-${issue}-${n}`, prRepo: "example/demo", prNumber: n })),
+        prs: Array.from({ length: 10 }, (_, n) => ({ repo: "example/demo", number: issue * 10 + n, state: "OPEN", isDraft: false, stale: false, url: `https://github.com/example/demo/pull/${issue * 10 + n}` })),
+    }));
+    const prompt = jiraSyncPrompt({
+        requestId: "r", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", projectKey: "DEMO", copilotProjectId: "p",
+        repo: "example/demo", siteUrl: "https://example.atlassian.net", evidence, omittedLinkedIssues: 4,
+        statuses: Array.from({ length: 40 }, (_, n) => ({ name: `Status ${n}`, category: "indeterminate" })),
+    });
+    const kickoff = kickoffOf(prompt);
+    assert.ok(kickoffBytes(kickoff) <= KICKOFF_BUDGET_BYTES, `kickoff is ${kickoffBytes(kickoff)} bytes`);
+    const context = JSON.parse(kickoff.slice(kickoff.indexOf("<jira-context>\n\n") + 16, kickoff.indexOf("\n\n</jira-context>")).replaceAll("\\u003c", "<").replaceAll("\\u003e", ">"));
+    const kept = context.linkedWork.length;
+    assert.ok(kept > 0 && kept < 300);
+    assert.equal(context.omittedLinkedIssues, 4 + 300 - kept);
+    assert.match(kickoff, new RegExp(`${4 + 300 - kept} linked issue\\(s\\) were omitted from linkedWork because of the size limit`));
+    for (const entry of context.linkedWork) {
+        assert.equal(entry.sessions.length, 3);
+        assert.equal(entry.omittedSessions, 7);
+        assert.equal(entry.omittedPrs, 7);
+    }
+    const [first] = context.linkedWork;
+    assert.deepEqual(first.sessions.map(s => s.name), ["Session 0-7", "Session 0-8", "Session 0-9"], "the most recently linked sessions are kept");
+    assert.deepEqual(first.prs.map(pr => pr.number), [9, 8, 7], "the highest-numbered PRs are kept");
+    assert.match(kickoff, /lists only its 3 most recently linked sessions and its 3 highest-numbered PRs/);
+});
+
+test("Update Jira refuses a kickoff whose workflow statuses alone exceed the budget", () => {
+    const statuses = Array.from({ length: 500 }, (_, n) => ({ name: `${n} ${"s".repeat(195)}`, category: "indeterminate" }));
+    assert.throws(() => jiraSyncPrompt({
+        requestId: "r", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", projectKey: "DEMO", copilotProjectId: "p",
+        repo: "example/demo", siteUrl: "https://example.atlassian.net", evidence: [{ key: "DEMO-1", sessions: [], prs: [] }], statuses,
+    }), /workflow statuses alone exceed the 48 KB Update Jira limit, so no sync was queued/);
 });

@@ -1,4 +1,4 @@
-import { REQUEST_TTL_MS, requestStatus } from "./model.mjs";
+import { REQUEST_TTL_MS, CLAIM_TTL_MS, requestStatus } from "./model.mjs";
 
 export function dependencyWarnings(issue) {
     return (issue.dependencies || []).filter(dependency =>
@@ -124,7 +124,10 @@ export function deriveExecution({ issue, trace = {}, requests = [], mapping = nu
     }));
     const attached = attempts.filter(attempt => attempt.status === "attached");
     for (const { request, index, at, status } of attempts) {
-        if (status === "failed") {
+        if (status === "failed" && request.supersededBy) {
+            // Its launching agent stopped before creating a session because a newer Start replaced it.
+            signal("request_superseded", request.error || "Superseded by a newer launch; no session was created.");
+        } else if (status === "failed") {
             // Only a later attachment resolves a failure; queued requests remain unresolved.
             const superseded = attached.some(success =>
                 Number.isFinite(at) && Number.isFinite(success.at) && at !== success.at
@@ -133,9 +136,19 @@ export function deriveExecution({ issue, trace = {}, requests = [], mapping = nu
             const reason = request.error || "A launch request failed.";
             signal("request_failed", superseded ? `${reason} (superseded by a later attached launch).` : reason);
             if (!superseded) offer(20, { kind: "inspect", label: "Inspect failed request" }, "needs-me");
+        } else if (status === "queued" && request.sendError && !request.claimedAt) {
+            // Copilot did not confirm the prompt, so it may or may not run; clearing it fences the prompt off.
+            signal("request_unknown", `Launch outcome unknown: ${request.sendError}. No retry was sent. Check the project's sessions, or clear the request before starting again.`);
+            offer(20, { kind: "clear_request", label: "Clear stuck request", requestId: request.requestId }, "needs-me");
         } else if (status === "queued") {
-            signal("request_queued", "A launch request is queued; do not start duplicate work.");
+            signal("request_queued", request.claimedAt
+                ? "The launching agent claimed this request and is creating its session; do not start duplicate work."
+                : "A launch request is queued; do not start duplicate work.");
             offer(40, { kind: "inspect", label: "Inspect queued work" }, "running");
+        } else if (status === "unknown") {
+            // The launching agent claimed it and never reported back: a session may still appear, so Start stays blocked.
+            signal("request_unknown", `Launch outcome unknown: the launching agent claimed this request but reported no session within ${CLAIM_TTL_MS / 60_000} minutes. A session may still appear. Check the project's sessions; clearing the request frees Start, and a late receipt still attaches its session.`);
+            offer(20, { kind: "clear_request", label: "Clear stuck request", requestId: request.requestId }, "needs-me");
         } else if (status === "expired") {
             // No longer running or blocking a new launch, but a session may exist that the receipt never reported.
             signal("request_expired", `Launch outcome unknown: no session receipt after ${REQUEST_TTL_MS / 60_000} minutes. Check the project's sessions before starting again.`);

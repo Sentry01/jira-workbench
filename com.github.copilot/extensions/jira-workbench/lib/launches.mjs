@@ -1,15 +1,71 @@
 import { randomUUID } from "node:crypto";
-import { launchPrompt, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue, issueParent, issueIndex } from "./model.mjs";
+import { launchPrompt, launchKickoff, jiraSyncPrompt, descendants, projectStatuses, requestStatus, writableIssue, issueParent, issueIndex, kickoffBytes, KICKOFF_BUDGET_BYTES, CLAIM_TTL_MS, BLOCKING_REQUEST } from "./model.mjs";
 import { createBrief, acknowledgeBrief } from "./brief.mjs";
 import { dependencyWarnings } from "./execution.mjs";
 
 // The loaded working set can miss children when the scope filters items or more pages remain.
 const partialScope = wb => ({ filtered: wb.workingScope.kind !== "project", more: Boolean(wb.page.nextPageToken) });
 
+// session.send has no time limit of its own; past this the launch outcome is reported as unknown.
+const SEND_TIMEOUT_MS = 30_000;
+// Update Jira calls refused before queueing, kept by the panel's client ID for this panel's lifetime.
+const SYNC_REJECTIONS_KEPT = 20;
+
+const clip = (text, limit) => text.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
+
+// Shares a character total across texts: short texts keep their length, the longest give up the most.
+function share(lengths, total) {
+    const limits = [];
+    let left = Math.max(0, total), count = lengths.length;
+    for (const [length, index] of lengths.map((length, index) => [length, index]).sort((a, b) => a[0] - b[0])) {
+        limits[index] = Math.min(length, Math.floor(left / count--));
+        left -= limits[index];
+    }
+    return limits;
+}
+
+// Fits a launch to the kickoff budget before its brief is hashed, so the hash covers exactly what is sent. First the
+// descendants become keys only, then the selected and parent descriptions are shortened with an explicit marker, and a
+// hashed warning says what was left out. Context that still does not fit is refused rather than sent.
+function fitBrief(build, measure, { node, parent, children }) {
+    let brief = build({ children, node, parent, warnings: [] });
+    if (measure(brief) <= KICKOFF_BUDGET_BYTES) return brief;
+    const notes = [], keys = children.map(({ id, key }) => ({ id, key }));
+    if (children.length) notes.push(`the ${children.length} descendant${children.length === 1 ? " is" : "s are"} listed by key only`);
+    const warning = extra => [{
+        id: "context-truncated",
+        message: `To fit the ${KICKOFF_BUDGET_BYTES / 1024} KB launch limit, ${[...notes, ...extra].join(" and ")}. The session can read the full issues in Jira.`,
+    }];
+    brief = build({ children: keys, node, parent, warnings: warning([]) });
+    let over = measure(brief) - KICKOFF_BUDGET_BYTES;
+    const texts = [node, parent].filter(issue => issue?.description);
+    let limits = texts.map(issue => issue.description.length);
+    for (let round = 0; over > 0 && round < 8 && limits.some(Boolean); round++) {
+        limits = share(limits, limits.reduce((sum, limit) => sum + limit, 0) - over);
+        const cut = issue => {
+            const index = texts.indexOf(issue), limit = limits[index], length = issue?.description?.length;
+            if (index < 0 || limit >= length) return issue;
+            return { ...issue, description: `${clip(issue.description, limit)}\n\n[Shortened by Jira Workbench: ${limit} of ${length} characters kept. Read ${issue.key} in Jira for the rest.]` };
+        };
+        const extra = texts.flatMap((issue, index) => limits[index] < issue.description.length
+            ? [`the description of ${issue.key} was shortened to ${limits[index]} of ${issue.description.length} characters`] : []);
+        brief = build({ children: keys, node: cut(node), parent: cut(parent), warnings: warning(extra) });
+        over = measure(brief) - KICKOFF_BUDGET_BYTES;
+    }
+    if (over > 0) throw new Error(`The Jira context for ${node.key} is too large to launch (${Math.ceil((over + KICKOFF_BUDGET_BYTES) / 1024)} KB of ${KICKOFF_BUDGET_BYTES / 1024} KB) even with shortened descriptions. Select a smaller scope or trim the issue's links.`);
+    return brief;
+}
+
 // Launch and request lifecycle: briefs, previews, queued requests and their receipts, failures or clears.
 // Panel state (selection, issues, previews, store, send) stays on the Workbench and is read through it.
 export class Launches {
-    constructor(workbench) { this.workbench = workbench; }
+    constructor(workbench) {
+        this.workbench = workbench;
+        this.sendTimeoutMs = SEND_TIMEOUT_MS;
+        this.syncRejections = new Map();
+        // Unknown send outcomes not yet saved (the state write failed), by request ID, shown until saved or resolved.
+        this.sendErrors = new Map();
+    }
     makeBrief(node, mode, fields, mapping, smartCommitComment = false) {
         const wb = this.workbench;
         const children = descendants(wb.issues, node.id);
@@ -19,11 +75,53 @@ export class Launches {
             id: "partial-context",
             message: `Only ${children.length} loaded descendant${children.length === 1 ? " is" : "s are"} included${more ? "; more scope pages remain in Jira" : ""}${filtered ? "; the working scope filters which items load" : ""}. Other child work may exist.`,
         }] : [];
-        return createBrief({
-            node, parent: issueParent(node, issueIndex(wb.issues)),
-            children, mapping, siteUrl: wb.site.url, mode, fields,
-            dependencyWarnings: [...partial, ...dependencyWarnings(node)], smartCommitComment,
+        const parent = issueParent(node, issueIndex(wb.issues));
+        const build = ({ children: listed, node: selected, parent: context, warnings }) => createBrief({
+            node: selected, parent: context, children: listed, mapping, siteUrl: wb.site.url, mode, fields,
+            dependencyWarnings: [...partial, ...dependencyWarnings(node), ...warnings], smartCommitComment,
+            criteriaText: node.description, hiddenIn: [node, parent, ...children],
         });
+        // Measured as the launch sends it; the partial-children sentence is counted whether or not it is sent.
+        const measure = brief => kickoffBytes(launchKickoff({
+            cloudId: wb.site.id, jiraProjectId: wb.project.id, repo: mapping.repo, siteUrl: wb.site.url,
+            node, mode, brief, smartCommitComment, partialChildren: true,
+        }));
+        return fitBrief(build, measure, { node, parent, children });
+    }
+    // Sends a launcher prompt. A rejection does not prove the host refused it (it can admit the prompt and then lose
+    // the reply), and a send that never settles says nothing either, so both keep the request queued: its receipt
+    // still attaches, the duplicate fence still holds, and nothing is retried.
+    async deliver(requestId, prompt) {
+        const wb = this.workbench;
+        let timer;
+        const sending = Promise.resolve().then(() => wb.send({ prompt }));
+        sending.catch(() => {});
+        const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(Object.assign(
+                new Error(`Copilot did not confirm it received the prompt within ${Math.round(this.sendTimeoutMs / 1000)}s`), { status: 504 })), this.sendTimeoutMs);
+        });
+        try { await Promise.race([sending, timeout]); }
+        catch (error) {
+            const status = error?.status === 504 ? 504 : 502;
+            const cause = status === 504 ? error.message : `Copilot reported an error after the prompt was sent (${String(error?.message || error).slice(0, 300)})`;
+            this.sendErrors.set(requestId, cause);
+            await wb.commit(data => {
+                const request = Object.hasOwn(data.requests, requestId) ? data.requests[requestId] : null;
+                if (request?.status === "queued") request.sendError = cause;
+            }).then(() => this.sendErrors.delete(requestId), () => {});
+            throw Object.assign(new Error(cause), { status, outcome: "unknown", requestId });
+        } finally { clearTimeout(timer); }
+    }
+    // A stored request as the panel should see it: with its unsaved unknown send outcome, until a claim, a receipt,
+    // a failure or a clear resolves it, or a later write saves it.
+    withSendError(request) {
+        const cause = this.sendErrors.get(request?.requestId);
+        if (cause === undefined) return request;
+        if (request.status !== "queued" || request.claimedAt || request.sendError) {
+            this.sendErrors.delete(request.requestId);
+            return request;
+        }
+        return { ...request, sendError: cause };
     }
     async prepare({ nodeId, mode, fields, smartCommitComment = false }) {
         const wb = this.workbench;
@@ -82,31 +180,45 @@ export class Launches {
             contextHash: preview.brief.hash, acknowledgedWarnings: acknowledged,
             brief: { ...structuredClone(preview.brief), children: preview.brief.children.map(child => child.key) },
         };
+        const prompt = launchPrompt({
+            ...preview, requestId, instanceId: wb.instanceId,
+            copilotProjectId: preview.mapping.id, repo: preview.mapping.repo,
+            // Any issue that can have children, including a story's subtasks; the scope was checked unchanged above.
+            partialChildren: preview.node.level >= 0 && Object.values(partialScope(wb)).some(Boolean),
+        });
         await wb.commit(data => {
             if (wb.previews.get(previewId) !== preview || preview.expiresAt < Date.now())
                 throw new Error("The launch preview was invalidated while launching. Review the scope again.");
             if (preview.workingSetKey !== wb.loadKey() || preview.scopeGeneration !== wb.refreshGeneration)
                 throw new Error("Working scope changed while launching. Review the scope again.");
             if (data.mappings[wb.selectedScope()]?.id !== preview.mapping.id) throw new Error("Repository mapping changed after preview.");
-            if (Object.values(data.requests).some(r => r.scope === preview.scope && requestStatus(r) === "queued"))
+            if (Object.values(data.requests).some(r => r.scope === preview.scope && BLOCKING_REQUEST.has(requestStatus(r))))
                 throw new Error("A session request is already queued for this scope. Wait for its receipt; do not create a duplicate.");
             data.requests[requestId] = request;
         });
         wb.previews.delete(previewId);
-        try {
-            await wb.send({ prompt: launchPrompt({
-                ...preview, requestId, instanceId: wb.instanceId,
-                copilotProjectId: preview.mapping.id, repo: preview.mapping.repo,
-                // Any issue that can have children, including a story's subtasks; the scope was checked unchanged above.
-                partialChildren: preview.node.level >= 0 && Object.values(partialScope(wb)).some(Boolean),
-            }) });
-        } catch (error) {
-            await this.failRequest({ requestId, message: `Could not queue launch: ${error.message}` });
-            throw error;
-        }
+        await this.deliver(requestId, prompt);
         return { status: "queued", requestId };
     }
-    async syncJira() {
+    // clientId: an ID the panel chose before calling, stored with the request so the panel can match it after a timeout.
+    async syncJira({ clientId } = {}) {
+        if (clientId !== undefined && (typeof clientId !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(clientId)))
+            throw new Error("The Update Jira client ID must be 1 to 64 letters, digits or hyphens.");
+        let queued;
+        try { queued = await this.queueSync(clientId); }
+        catch (error) {
+            // Refused before any request was stored. The panel may have stopped waiting already, so it settles its
+            // action from this terminal outcome instead of a stored request.
+            if (clientId) {
+                this.syncRejections.set(clientId, { clientId, error: String(error?.message || error).slice(0, 500), at: new Date().toISOString() });
+                for (const key of this.syncRejections.keys()) if (this.syncRejections.size > SYNC_REJECTIONS_KEPT) this.syncRejections.delete(key);
+            }
+            throw error;
+        }
+        await this.deliver(queued.requestId, queued.prompt);
+        return { status: "queued", requestId: queued.requestId };
+    }
+    async queueSync(clientId) {
         const wb = this.workbench;
         // Read everything from the selected project now: an await below can outlast a project switch.
         const site = wb.site, project = wb.project, selection = wb.selections, issues = wb.issues, statuses = wb.statuses;
@@ -116,6 +228,7 @@ export class Launches {
         const scope = wb.selectedScope(), data = await wb.store.read(), mapping = data.mappings[scope];
         if (wb.selections !== selection) throw new Error("Project changed while preparing the sync.");
         if (!mapping) throw new Error("Select the Copilot repository for this Jira project before syncing statuses.");
+        if (!wb.verified.apps) throw new Error("Copilot repository projects are not confirmed yet. Reload connections and try again.");
         if (!wb.appProjects.some(p => p.id === mapping.id)) throw new Error("The mapped Copilot project is no longer available; choose another repository.");
         const prefix = scope.slice(0, scope.lastIndexOf("/") + 1);
         const durable = Object.entries(data.links).filter(([key, link]) => key.startsWith(prefix)
@@ -152,20 +265,16 @@ export class Launches {
             if (wb.selections !== selection || wb.selectedScope() !== scope || wb.site?.id !== site.id || wb.project?.id !== project.id)
                 throw new Error("Project changed while preparing the sync. Confirm Update Jira again for the selected project.");
             if (current.mappings[scope]?.id !== mapping.id) throw new Error("Repository mapping changed while preparing the sync.");
-            if (Object.values(current.requests).some(r => r.scope === scope && requestStatus(r) === "queued"))
+            if (Object.values(current.requests).some(r => r.scope === scope && BLOCKING_REQUEST.has(requestStatus(r))))
                 throw new Error("A session request is already queued for this project. Wait for its receipt; do not create a duplicate.");
             current.requests[requestId] = {
                 requestId, kind: "jira-sync", scope, nodeId: "project", issueKey: project.key,
                 cloudId: site.id, jiraProjectId: project.id, copilotProjectId: mapping.id,
                 mode: "autopilot", status: "queued", at: new Date().toISOString(),
+                ...(clientId ? { clientId } : {}),
             };
         });
-        try { await wb.send({ prompt }); }
-        catch (error) {
-            await this.failRequest({ requestId, message: `Could not queue Jira sync: ${error.message}` });
-            throw error;
-        }
-        return { status: "queued", requestId };
+        return { requestId, prompt };
     }
     async recordSession({ requestId, sessionId }) {
         const wb = this.workbench;
@@ -176,10 +285,39 @@ export class Launches {
             if (request.sessionId !== sessionId) throw new Error("This request already has a different session receipt.");
             return { status: "attached", sessionId };
         }
-        // A late receipt for an expired or cleared request still records the session that was actually created.
-        if (!["queued", "expired", "cancelled"].includes(status)) throw new Error("This request is not awaiting a session receipt.");
+        // A late receipt for an expired, cleared or superseded request still records the session that was actually
+        // created. Requests queued before claims existed carry no claim, so a receipt never requires one.
+        if (!["queued", "unknown", "expired", "cancelled"].includes(status) && !(status === "failed" && request.supersededBy))
+            throw new Error("This request is not awaiting a session receipt.");
         await wb.attach(request.scope, sessionId, request.copilotProjectId, requestId);
         return { status: "attached", sessionId };
+    }
+    // The launching agent's first step: the one prompt that claims a request may create its session. A stale prompt
+    // (its request cleared, already claimed, or replaced by a newer Start for the scope) is told to stop instead.
+    // Returned rather than thrown, so a superseded request is persisted.
+    async claimRequest({ requestId } = {}) {
+        const wb = this.workbench;
+        if (typeof requestId !== "string" || !requestId) throw new Error("A request ID is required.");
+        return wb.commit(data => {
+            const request = Object.hasOwn(data.requests, requestId) ? data.requests[requestId] : null;
+            const refuse = reason => ({ status: "refused", requestId, message: `${reason} Do not create a session.` });
+            if (!request || typeof request !== "object") return refuse("Unknown launch request.");
+            if (request.claimedAt) return refuse("Another launch prompt already claimed this request.");
+            const status = requestStatus(request);
+            if (status === "cancelled") return refuse("The user cleared this request in Jira Workbench.");
+            if (status === "attached") return refuse("This request already has a session.");
+            if (!["queued", "expired"].includes(status)) return refuse("This request is no longer waiting for a session.");
+            const at = Date.parse(request.at);
+            const newer = Object.entries(data.requests).find(([id, other]) => id !== requestId
+                && other?.scope === request.scope && Date.parse(other.at) > at);
+            if (newer) {
+                const message = "Superseded by a newer launch; no session was created.";
+                Object.assign(request, { status: "failed", error: message, supersededBy: newer[0], completedAt: new Date().toISOString() });
+                return { status: "superseded", requestId, message: `${message} Do not create a session.` };
+            }
+            request.claimedAt = new Date().toISOString();
+            return { status: "claimed", requestId };
+        });
     }
     async failRequest({ requestId, message }) {
         const wb = this.workbench;
@@ -187,7 +325,7 @@ export class Launches {
         await wb.store.update(data => {
             const request = data.requests[requestId];
             if (request?.status === "cancelled") throw new Error("This request was cleared in the Workbench; no failure was recorded.");
-            if (!request || !["queued", "expired"].includes(requestStatus(request))) throw new Error("This request is not awaiting a receipt.");
+            if (!request || !["queued", "unknown", "expired"].includes(requestStatus(request))) throw new Error("This request is not awaiting a receipt.");
             Object.assign(request, { status: "failed", error: message.slice(0, 2000) });
         });
         return { status: "failed", requestId };
@@ -201,8 +339,10 @@ export class Launches {
             const request = Object.hasOwn(data.requests, requestId) ? data.requests[requestId] : null;
             if (typeof request?.nodeId !== "string" || !request.nodeId || request.scope !== wb.selectedScope(request.nodeId))
                 throw new Error("That request is not in the selected Jira project.");
-            if (!["queued", "expired"].includes(requestStatus(request)))
+            if (!["queued", "unknown", "expired"].includes(requestStatus(request)))
                 throw new Error("Only a queued or expired request can be cleared.");
+            if (Date.now() - Date.parse(request.claimedAt) <= CLAIM_TTL_MS)
+                throw new Error("The launching agent claimed this request and may be creating its session. Wait for its receipt before clearing it.");
             Object.assign(request, { status: "cancelled", cancelledAt: new Date().toISOString() });
         });
         return { status: "cancelled", requestId };

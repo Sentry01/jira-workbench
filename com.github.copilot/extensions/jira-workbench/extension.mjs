@@ -81,6 +81,7 @@ const session = await joinSession({
             action("refresh_execution", "Reconcile linked session intervention signals and GitHub evidence for this project.", schema({ source: { type: "string", enum: ["all", "sessions", "github"] } }, []), (w, input) => w.refreshExecution(input)),
             action("refresh_trace", "Verify sessions, PRs and checks for a hierarchy item.", schema({ nodeId: string }), (w, input) => w.refreshTrace(input.nodeId)),
             action("link_session", "Link an existing app session to an issue ID or project node after checking repository identity.", schema({ nodeId: string, sessionId: string }), (w, input) => w.linkSession(input)),
+            action("claim_request", "Claim a queued Workbench launch before creating its session; create one only when this returns status claimed.", schema({ requestId: string }), (w, input) => w.claimRequest(input)),
             action("record_session", "Record the actual session returned by create_session for a queued Workbench launch.", schema({ requestId: string, sessionId: string }), (w, input) => w.recordSession(input)),
             action("fail_request", "Record why a queued session launch could not be completed.", schema({ requestId: string, message: string }), (w, input) => w.failRequest(input)),
             action("record_navigation", "Acknowledge the actual native navigation result for a queued fallback request.", schema({ requestId: string, ok: { type: "boolean" }, message: string }), (w, input) => w.hostActions.acknowledge(input)),

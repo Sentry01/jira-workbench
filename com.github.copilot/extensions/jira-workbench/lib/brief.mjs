@@ -42,14 +42,17 @@ export function criteriaFromDescription(description = "") {
 
 const strip = value => typeof value === "string" ? value.replace(HIDDEN, "") : value;
 
-export function createBrief({ node, parent, children = [], mapping, siteUrl, mode, fields = {}, dependencyWarnings = [], smartCommitComment = false }) {
+// criteriaText: the full description when node.description was shortened to fit the kickoff budget, so the default
+// acceptance criteria still come from the whole source. hiddenIn: the unreduced issues, so the hidden-characters warning
+// still reflects text that fitting cut from a description or a descendant summary.
+export function createBrief({ node, parent, children = [], mapping, siteUrl, mode, fields = {}, dependencyWarnings = [], smartCommitComment = false, criteriaText = node.description, hiddenIn = [node, parent, ...children] }) {
     if (!["plan", "autopilot"].includes(mode)) throw new Error("A valid brief intent is required.");
     if (typeof smartCommitComment !== "boolean") throw new Error("The Smart Commit comment choice must be true or false.");
     if (!fields || typeof fields !== "object" || Array.isArray(fields)
         || Object.keys(fields).some(key => !["objective", "acceptanceCriteria", "constraints"].includes(key)))
         throw new Error("Brief fields must contain only objective, acceptance criteria and constraints.");
     const objective = text(strip(fields.objective ?? node.summary), "Objective", 2000, true);
-    const extracted = criteriaFromDescription(node.description);
+    const extracted = criteriaFromDescription(criteriaText);
     const sourceCriteriaLimit = extracted.length > 50 || extracted.join("\n").length > 10000;
     const inputCriteria = fields.acceptanceCriteria ?? (sourceCriteriaLimit ? [] : extracted);
     if (!Array.isArray(inputCriteria) && typeof inputCriteria !== "string") throw new Error("Acceptance criteria must be a list or text.");
@@ -62,7 +65,7 @@ export function createBrief({ node, parent, children = [], mapping, siteUrl, mod
     const constraints = text(strip(fields.constraints ?? ""), "Constraints", 4000);
     const warnings = [];
     // Derived from the Jira source, not the fields: the fields are already stripped, so the re-derivation at launch keeps the hash.
-    if ([node, parent, ...children].some(issue => hasHidden(issue?.summary) || hasHidden(issue?.description)))
+    if ([node, parent, ...children, ...hiddenIn].some(issue => hasHidden(issue?.summary) || hasHidden(issue?.description)))
         warnings.push({ id: "hidden-characters", message: "The Jira text contains hidden characters (Unicode tag or text-direction controls) that can carry instructions you cannot see. They were removed from these fields; check the issue in Jira before implementing." });
     if (!acceptanceCriteria.length) warnings.push({ id: "missing-criteria", message: "No explicit acceptance criteria. Planning is available; acknowledge this gap before implementing." });
     if (sourceCriteriaLimit) warnings.push({ id: "source-criteria-limit", message: "The source criteria exceed this brief's editing limits. Original requirements remain in references; enter a scoped checklist or plan first." });

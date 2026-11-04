@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS } from "../lib/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
-    requestOutcome, receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree,
+    requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption,
 } from "../lib/view-model.mjs";
@@ -164,6 +164,25 @@ test("a launch request card states its outcome, including expired and cleared re
     assert.equal(requestOutcome({ status: "cancelled", at: old }, NOW), "Cleared");
     assert.equal(requestOutcome({ status: "failed", at }, NOW), "Failed");
     assert.equal(requestOutcome({ status: "attached", at }, NOW), "Awaiting linked session evidence");
+    assert.equal(requestOutcome({ status: "queued", at: old, claimedAt: ago(60_000) }, NOW), "Queued (claimed by the launching agent)");
+    assert.equal(requestOutcome({ status: "queued", at, sendError: "Timed out" }, NOW), "Outcome unknown (Copilot did not confirm the prompt; no retry was sent)");
+    assert.equal(requestOutcome({ status: "failed", at, supersededBy: "r2" }, NOW), "Superseded (no session was created)");
+    assert.equal(requestOutcome({ status: "queued", at: old, claimedAt: old }, NOW), "Outcome unknown (claimed, no receipt after 10 minutes; blocks Start until cleared)");
+});
+
+test("an unconfirmed or claimed launch is never shown as done, and an unconfirmed one reads as unknown", () => {
+    const state = requests => launchState({ requests, nodeId: "6", now: NOW });
+    assert.equal(state([{ nodeId: "6", status: "queued", at: ago(60_000), sendError: "Timed out" }]), "uncertain");
+    assert.equal(state([{ nodeId: "6", status: "queued", at: ago(REQUEST_TTL_MS + 1), claimedAt: ago(60_000) }]), "queued", "a claim keeps blocking past the TTL");
+    assert.equal(state([{ nodeId: "6", status: "queued", at: ago(60_000), sendError: "Timed out", claimedAt: ago(1000) }]), "queued", "a claim proves delivery");
+    const update = receipt => launchUpdate({ requestId: "r", at: ago(60_000), ...receipt }, { now: NOW });
+    assert.deepEqual(update({ status: "queued", sendError: "Copilot did not confirm it received the prompt within 30s" }), {
+        status: "uncertain",
+        message: "Launch outcome unknown: Copilot did not confirm it received the prompt within 30s. No retry was sent. Refresh live state and inspect the launch receipt before starting again.",
+    });
+    assert.equal(update({ status: "queued", claimedAt: ago(1000) }).status, "queued");
+    assert.deepEqual(update({ status: "failed", supersededBy: "r2", error: "Superseded by a newer launch; no session was created." }),
+        { status: "failed", message: "Launch superseded by a newer launch; no session was created." });
 });
 
 test("a stored request moves this panel's launch action to its outcome", () => {
@@ -313,4 +332,32 @@ test("the Smart Commit comment option is offered only for a single issue", () =>
     const option = smartCommitOption({ id: "2", key: "DEMO-2" });
     assert.match(option.label, /DEMO-2 #comment/);
     assert.match(option.hint, /does not remove it/);
+});
+
+test("a claimed request past its window reads as unknown and keeps blocking Start", () => {
+    const old = ago(REQUEST_TTL_MS + 1);
+    const request = { requestId: "r", nodeId: "6", status: "queued", at: old, claimedAt: old };
+    const state = launchState({ requests: [request], nodeId: "6", now: NOW });
+    assert.equal(state, "uncertain");
+    assert.ok(launchBlocks(state));
+    const update = launchUpdate(request, { now: NOW });
+    assert.equal(update.status, "uncertain");
+    assert.match(update.message, /A session may still appear\. Start stays blocked until you clear the request; a late receipt still attaches its session\./);
+});
+
+test("a launch action finds its stored request by request ID, preview ID or the panel's client ID", () => {
+    const requests = [{ requestId: "a", previewId: "p" }, { requestId: "b", clientId: "c" }];
+    assert.equal(launchReceipt({ requestId: "a" }, requests).requestId, "a");
+    assert.equal(launchReceipt({ previewId: "p" }, requests).requestId, "a");
+    assert.equal(launchReceipt({ clientId: "c" }, requests).requestId, "b", "an Update Jira that timed out still reconciles");
+    assert.equal(launchReceipt({ clientId: "x" }, requests), null);
+    assert.equal(launchReceipt({}, [{ requestId: "z" }]), null);
+});
+
+test("an Update Jira that timed out settles as failed when the server reports it was rejected before queueing", () => {
+    const rejected = [{ clientId: "c", error: "The repository mapping changed while preparing the sync." }];
+    assert.deepEqual(launchRejection({ clientId: "c" }, rejected), { status: "failed", message: "Update Jira was not queued: The repository mapping changed while preparing the sync." });
+    assert.equal(launchRejection({ clientId: "x" }, rejected), null);
+    assert.equal(launchRejection({}, rejected), null);
+    assert.equal(launchRejection({ clientId: "c" }), null);
 });

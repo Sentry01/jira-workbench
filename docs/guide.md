@@ -195,7 +195,13 @@ in the preview.
 includes durable session and PR links for up to 300 linked issues, reading
 from Jira any that are not loaded in the panel. Linked issues it cannot read,
 or that exceed the limit, are reported as omitted evidence for the sync session
-to verify, not as evidence that no work exists.
+to verify, not as evidence that no work exists. Each issue lists at most its 3
+most recently linked sessions and its 3 highest-numbered pull requests, and the
+kickoff states how many it left out. On projects with many linked issues, issues
+are dropped from the evidence until the session's instructions fit the 48 KB
+launch limit, and the kickoff counts them as omitted. If the project's workflow
+statuses alone are larger than that limit, Update Jira is refused and nothing is
+queued.
 
 ---
 
@@ -336,6 +342,36 @@ dropped or the panel was closed), the item moves to **Needs me** and shows
   few seconds. The first click alone does nothing.
 - If the session reports back later, even after you cleared the request, it is
   still linked to the item.
+
+Each launch ends in one of these states, and the item never shows a launch as done
+before its session reports back:
+
+- **Attached.** The session reported back and is linked to the item.
+- **Launch outcome unknown. No retry was sent.** Copilot did not confirm that it
+  received the launch within 30 seconds, or reported an error after it was sent.
+  The launch may still start, so it keeps blocking a second Start. Check the
+  project's sessions, or press **Clear stuck request** and **Confirm clear** to
+  start again. A cleared launch can no longer start its session.
+- **Refused.** The launch was cleared, or was already started once, so the agent
+  did not create a session.
+- **Superseded.** You pressed Start again after an earlier launch expired. The
+  earlier launch stops without creating a session, so only the newer one starts.
+
+Keep the panel open until the session starts: the agent checks in with the panel
+before it creates the session. Once it has, the launch keeps blocking Start while
+the session is created, and cannot be cleared for 10 minutes. If the session has
+still not reported back after that, the item shows **Launch outcome unknown** and
+Start stays blocked, because the session may still appear. Check the project's
+sessions, then press **Clear stuck request** and **Confirm clear** to start again.
+If the session does appear later, it is still linked to the item.
+
+### Large epics
+
+The agent copies the new session's instructions into one tool call, so they are
+limited to 48 KB. When an epic or its descriptions are larger, the preview lists
+the descendants by key only and shortens long descriptions, marking where each
+was cut, and shows a warning that says what was left out. **Implement** needs
+that warning acknowledged. The session can read the full issues in Jira.
 
 ---
 
@@ -497,6 +533,7 @@ Then find the message you see:
 | Counts look out of date | Jira data is a snapshot. Press **Refresh** |
 | The canvas does not appear | Start a new Copilot session, because plugins load when a session starts. If it is still missing, see [install troubleshooting](install.md#troubleshooting) |
 | "A different build (...) is on disk. Reload to run it." | Press **Reload** in the banner, or ask Copilot to reload extensions. The session started before the files were last updated |
+| "Launch outcome unknown: Copilot did not confirm it received the prompt within 30s. No retry was sent." | The launch may still start. Check the project's sessions first. To start again, press **Clear stuck request** and **Confirm clear**. See [When a launch never reports back](#when-a-launch-never-reports-back) |
 | "Launch outcome unknown: no session receipt after 15 minutes" | Check the project's sessions first, because the launch may have created one. Then start again, or press **Clear stuck request** and **Confirm clear**. See [When a launch never reports back](#when-a-launch-never-reports-back) |
 | "Update failed: Copilot did not answer the plugin update within 120s. Try again." | Press **Update & reload** again. It checks first, so it only reloads if the update finished in the meantime |
 | "The Workbench did not restart. Reload extensions to finish." or "Reload failed: ..." | Press **Reload** in the banner, or ask Copilot to reload extensions |
@@ -512,7 +549,8 @@ Then find the message you see:
 - **No fan-out.** One confirmed launch creates one session.
 - **No auto-merge or auto-approve.** Review actions open the real Copilot surface, and you decide.
 - **No pending action shown as finished.** A pending navigation is labeled as
-  pending, and a launch with no receipt after 15 minutes is marked as unknown.
+  pending, a launch whose prompt Copilot did not confirm is marked as unknown, and
+  a launch with no receipt after 15 minutes is marked as unknown.
 
 ---
 

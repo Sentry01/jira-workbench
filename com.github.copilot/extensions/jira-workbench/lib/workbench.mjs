@@ -21,7 +21,7 @@ function cachedIssues(issues) {
 function trackedIds(data, prefix) {
     const ids = new Set();
     for (const request of Object.values(data.requests))
-        if (request.scope?.startsWith(prefix) && /^\d+$/.test(request.nodeId) && ["queued", "expired", "failed"].includes(requestStatus(request)))
+        if (request.scope?.startsWith(prefix) && /^\d+$/.test(request.nodeId) && ["queued", "unknown", "expired", "failed"].includes(requestStatus(request)))
             ids.add(request.nodeId);
     for (const [key, link] of Object.entries(data.links)) {
         const id = key.startsWith(prefix) ? key.slice(prefix.length) : "";
@@ -372,7 +372,7 @@ export class Workbench {
         const prefix = this.site && this.project ? `${[this.site.id, this.project.id].map(encodeURIComponent).join("/")}/` : null;
         const links = prefix ? Object.fromEntries(Object.entries(data.links).filter(([key]) => key.startsWith(prefix))
             .map(([key, link]) => [key, withStamps(link, this.trace.stamps.get(key))])) : {};
-        const requests = prefix ? Object.values(data.requests).filter(r => r.scope.startsWith(prefix)) : [];
+        const requests = prefix ? Object.values(data.requests).filter(r => r.scope.startsWith(prefix)).map(r => this.launches.withSendError(r)) : [];
         const mapping = this.site && this.project ? data.mappings[this.selectedScope()] || null : null;
         const executionNodes = this.issues.filter(issue => !issue.contextOnly);
         if (this.site && this.project && (links[this.selectedScope()]?.sessions.length || requests.some(r => r.nodeId === "project")))
@@ -401,6 +401,7 @@ export class Workbench {
             mapping, links, requests, executions,
             preferences: this.site && this.project ? data.preferences?.[this.selectedScope()] || {} : {},
             navigationReceipts: this.hostActions?.snapshot?.() || [],
+            syncRejections: [...this.launches.syncRejections.values()],
             fetchedAt: this.fetchedAt || null, stale: Boolean(this.error), error: this.error,
             cached: this.cached, warming: this.warming, backgroundError: this.backgroundError,
             refreshing: this.pending.size > 0 || this.executionRefreshes.size > 0,
@@ -642,9 +643,10 @@ export class Workbench {
     // Delegates: F-owned; C must not edit; L may append clearRequest
     prepare(input) { return this.inSession(() => this.launches.prepare(input)); }
     launch(input) { return this.inSession(() => this.launches.launch(input)); }
-    syncJira() { return this.inSession(() => this.launches.syncJira()); }
+    syncJira(input) { return this.inSession(() => this.launches.syncJira(input)); }
     recordSession(input) { return this.launches.recordSession(input); }
     failRequest(input) { return this.launches.failRequest(input); }
+    claimRequest(input) { return this.launches.claimRequest(input); }
     refreshExecution(options, internal) { return this.inSession(() => this.trace.refreshExecution(options, internal)); }
     refreshTrace(nodeId) { return this.inSession(() => this.trace.refreshTrace(nodeId)); }
     attach(scope, sessionId, projectId, requestId) { return this.trace.attach(scope, sessionId, projectId, requestId); }

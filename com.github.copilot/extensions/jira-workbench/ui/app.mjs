@@ -1,7 +1,7 @@
 import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } from "/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
-    receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
+    receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
 } from "/view-model.mjs";
 
@@ -87,17 +87,23 @@ function getItem(id) {
         description: "Project coordination scope. Child issues keep their own Jira statuses, sessions and pull requests.",
     };
 }
+// The server bounds its prompt send at 30s; this bounds the whole launch or Update Jira call, so a hung request
+// cannot keep the panel waiting (and polling paused) forever.
+const LAUNCH_TIMEOUT_MS = 45_000;
 async function api(path, input, signal) {
     const response = await fetch(`/api/${path}`, {
         method: input === undefined ? "GET" : "POST",
         headers: { "x-workbench-token": token, "Content-Type": "application/json" },
         ...(input === undefined ? {} : { body: JSON.stringify(input) }),
         ...(signal ? { signal } : {}),
+    }).catch(error => {
+        throw error?.name === "TimeoutError" ? new Error(`Jira Workbench did not answer within ${Math.round(LAUNCH_TIMEOUT_MS / 1000)}s`) : error;
     });
     const result = await response.json();
     if (!response.ok) {
         const error = new Error(result.error || `Request failed (${response.status})`);
         error.httpStatus = response.status;
+        if (typeof result.requestId === "string") error.requestId = result.requestId;
         throw error;
     }
     return result;
@@ -286,13 +292,13 @@ function actionButton(text, kind, target, nodeId, work, options = {}) {
     b.dataset.focusKey = `action:${kind}:${target}`;
     return configureActionControl(b, kind, target, options.disabled);
 }
-async function perform({ kind, target, nodeId, label, work, success, refresh = false, global = false, previewId }) {
+async function perform({ kind, target, nodeId, label, work, success, refresh = false, global = false, previewId, clientId }) {
     const scope = global ? null : state.scope, epoch = scopeEpoch;
     const key = actionKey(kind, target, scope), previous = actions.get(key);
     if (previous && ["pending", "queued", "uncertain"].includes(previous.status)) return;
     if ((selecting || !scopeConfirmed || standaloneHost(state)) && !global) return;
     if (kind === "prepare" && nodePending(nodeId)) return;
-    const record = { kind, scope, nodeId, previewId, status: "pending", message: `${label}...`, dismissed: false };
+    const record = { kind, scope, nodeId, previewId, clientId, status: "pending", message: `${label}...`, dismissed: false };
     const restorePagingFocus = kind === "load-more" && document.activeElement?.dataset.actionKey === key;
     actions.set(key, record);
     paintFeedback();
@@ -319,6 +325,7 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         }
     } catch (error) {
         const uncertain = kind === "launch" && (!error.httpStatus || error.httpStatus >= 500);
+        if (error.requestId) record.requestId = error.requestId;
         record.status = uncertain ? "uncertain" : "failed";
         record.message = uncertain
             ? `Launch outcome unknown: ${error.message}. No retry was sent. Refresh live state and inspect the launch receipt before starting again.`
@@ -349,8 +356,12 @@ function reconcileReceipts() {
         // An expired launch stays open to a late receipt, which still attaches its session.
         if (record.scope !== state.scope || !["pending", "queued", "uncertain", "expired"].includes(record.status)) continue;
         if (record.kind === "launch") {
-            const receipt = state.requests.find(r => (record.requestId && r.requestId === record.requestId) || (record.previewId && r.previewId === record.previewId));
-            if (!receipt) continue;
+            const receipt = launchReceipt(record, state.requests);
+            if (!receipt) {
+                const rejected = launchRejection(record, state.syncRejections);
+                if (rejected) Object.assign(record, rejected);
+                continue;
+            }
             record.requestId = receipt.requestId;
             const update = launchUpdate(receipt, { linkedSessionIds: nodeLinks(record.nodeId).sessions.map(session => session.id) });
             if (update) Object.assign(record, update);
@@ -631,14 +642,14 @@ function clearRequestButton(label, nodeId, requestId) {
         void clearRequest(nodeId, requestId, label, $("tree").contains(control) ? $("tree") : $("inspector-content"));
     }, `row-action${armed ? " confirming" : ""}`);
     control.dataset.clearLabel = label;
-    control.title = "Check the project's sessions first: the launch may have created one without a receipt. Clearing frees Start; a late receipt still attaches its session.";
+    control.title = "Check the project's sessions first: the launch may have created one, or may still create one, without a receipt. Clearing frees Start; a late receipt still attaches its session.";
     return configureActionControl(control, "clear-request", requestId, !requestId);
 }
 async function clearRequest(nodeId, requestId, label, origin) {
     await perform({
         kind: "clear-request", target: requestId, nodeId, label, refresh: true,
         work: async () => { await api("clear-request", { requestId }); },
-        success: "Stuck request cleared. Start is available again; a late receipt still attaches its session.",
+        success: "Stuck request cleared. Start is available again. A session may still appear; its late receipt still attaches.",
     });
     if (actions.get(actionKey("clear-request", requestId))?.status !== "success") return;
     // The cleared item's actions change: re-render now rather than after focus leaves. The pending button lost
@@ -1232,7 +1243,7 @@ async function confirmLaunch() {
     await perform({
         kind: "launch", target: reviewed.node.id, nodeId: reviewed.node.id, previewId: reviewed.id, label: `Start session for ${reviewed.node.key}`, refresh: true,
         work: async () => {
-            const receipt = await api("launch", { previewId: reviewed.id, contextHash: reviewed.brief.hash, acknowledgedWarnings });
+            const receipt = await api("launch", { previewId: reviewed.id, contextHash: reviewed.brief.hash, acknowledgedWarnings }, AbortSignal.timeout(LAUNCH_TIMEOUT_MS));
             if (!receipt.requestId || receipt.status !== "queued") throw new Error("Launch did not return a queued receipt; inspect live state before trying again.");
             if (preview?.id === reviewed.id && previewScope === scope) closePreview();
             return receipt;
@@ -1371,9 +1382,11 @@ $("sync-jira").addEventListener("click", () => {
 $("cancel-sync").addEventListener("click", () => $("sync-dialog").close());
 $("confirm-sync").addEventListener("click", () => {
     $("sync-dialog").close();
+    // Known before the call, so a timeout or an error response can still be matched to the stored request.
+    const clientId = crypto.randomUUID();
     void perform({
-        kind: "launch", target: "project", nodeId: "project", label: "Update Jira", refresh: true,
-        work: () => api("sync-jira", {}),
+        kind: "launch", target: "project", nodeId: "project", label: "Update Jira", refresh: true, clientId,
+        work: () => api("sync-jira", { clientId }, AbortSignal.timeout(LAUNCH_TIMEOUT_MS)),
     });
 });
 $("refresh").addEventListener("click", () => void perform({
