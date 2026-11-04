@@ -85,6 +85,39 @@ release; otherwise two pull requests could both raise the version to the same
 number and the second would merge unreleased. Pull requests are squash-merged,
 and the branch is deleted after the merge.
 
+### Stacked pull requests
+
+A stack merges whole or not at all. GitHub already blocks merging a pull request
+while one below it is not ready, but on its own it would let a lower part of a
+stack merge and leave the rest behind. The `stack gate` workflow closes that gap
+with a commit status named **Stack gate** on the head commit of every open pull
+request in the stack:
+
+- It is success only when every open member of the stack is ready: not a draft,
+  every check `main` requires passing, no reviewer whose latest review
+  requests changes, and no unresolved review thread (`main` requires
+  conversation resolution). Otherwise it fails on every member, and its
+  description names the pull requests that are not ready and why, for example
+  `#19 (2 unresolved threads)`.
+- A pull request outside a stack always gets success.
+- It reads the required checks from the protection and rulesets of the stack's
+  base branch, and ignores **Stack gate** itself when it judges the members.
+- Any change in the stack re-evaluates all of it: a member is opened, pushed,
+  edited, closed, marked draft or ready, reviewed or commented on, or a run of
+  the `tests` workflow finishes.
+- A schedule also sweeps every open pull request every 5 minutes (GitHub can
+  delay scheduled runs). It picks up resolved and reopened review threads,
+  which trigger no workflow, and review events on stacked pull requests, which
+  run the workflow file from the pull request's merge ref and so miss it until
+  the base branch contains it. A status is posted only when it changes.
+- To re-evaluate by hand, run the workflow from the Actions tab with a pull
+  request number, or with no number to sweep every open pull request.
+
+Required on `main`, the status blocks merging any part of a stack until the
+whole stack could merge. The workflow runs with a write token, so it never
+checks out or runs pull request code: it runs `.github/scripts/stack-gate.mjs`
+from the default branch and reads everything else through the API.
+
 ## Review rules
 
 Reviewers check these first. A change that breaks one will not be merged.
@@ -218,8 +251,8 @@ assets/preview.png           The plugin listing image; docs/screenshots.mjs rege
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version
-.github/scripts/             Release checks: the two manifests name one release, and a shipped change raises it
-.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks) and the release workflow
+.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it) and the stack gate
+.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack gate and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
