@@ -216,6 +216,12 @@ test("project selection returns after Jira while execution evidence loads in the
 test("execution refresh verifies linked work concurrently and persists once", async t => {
     const path = await directory(t);
     const { gateway } = services();
+    // Distinct PRs: one refresh reads a PR shared by several sessions only once.
+    const call = gateway.call;
+    gateway.call = async (name, args) => {
+        const result = await call(name, args);
+        return name === "get_session" ? { ...result, created_pr_number: Number(args.project_session_id.split("-")[1]) + 10 } : result;
+    };
     let active = 0, peak = 0;
     const slow = async (...args) => {
         active++; peak = Math.max(peak, active);

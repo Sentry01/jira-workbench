@@ -502,3 +502,42 @@ for (const kind of ["auth", "transient"]) {
         connection.stop();
     });
 }
+
+// Copilot review C4: closing a panel settles a page still loading and caches it at once.
+test("a page that finishes loading after the panel closed is cached before close settles", async () => {
+    const { wb, gateway } = fixture();
+    await wb.refresh();
+    const saved = [];
+    wb.cache = { update: async change => { const data = { issues: {} }; change(data); saved.push(data); } };
+    wb.cacheDebounceMs = wb.cacheMaxWaitMs = 60_000;
+    const reading = deferred(), release = deferred();
+    const first = gateway.issues;
+    gateway.issues = async (site, project, options) => {
+        if (!options.cursor) return first(site, project, options);
+        reading.resolve();
+        await release.promise;
+        return { issues: [row("2")], nextPageToken: null, fetchedAt: "two" };
+    };
+    const more = wb.loadMore();
+    await reading.promise;
+    let settled = false;
+    const closed = wb.close().then(() => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(settled, false, "close waits for the page in flight");
+    release.resolve();
+    await closed;
+    assert.equal((await more).pageResult.status, "loaded");
+    assert.ok(saved.some(data => Object.values(data.issues).some(entry => entry.issues.some(issue => issue.id === "2"))), "the late page was cached");
+});
+
+test("a deferred save after close is written at once, without a timer", async () => {
+    const { wb } = fixture();
+    await wb.refresh();
+    let writes = 0;
+    wb.cache = { update: async () => { writes++; } };
+    wb.cacheDebounceMs = wb.cacheMaxWaitMs = 60_000;
+    await wb.close();
+    await wb.saveWorkingSet({ defer: true });
+    assert.equal(writes, 1);
+    assert.equal(wb.cacheTimer, null);
+});

@@ -71,6 +71,8 @@ export class Workbench {
         this.cacheTimer = null;
         this.cacheSince = null;
         this.cacheWrite = Promise.resolve();
+        // Jira reads that end in a cache save (refresh, Apply, Load more); closing the panel waits for them.
+        this.workingSetOps = new Set();
         this.cacheDebounceMs ??= CACHE_DEBOUNCE_MS;
         this.cacheMaxWaitMs ??= CACHE_MAX_WAIT_MS;
         this.launches = new Launches(this);
@@ -164,11 +166,21 @@ export class Workbench {
     // panel's failed observations out of the store that panels in real sessions share.
     standalone() { return this.connection?.current?.state === "standalone"; }
     inSession(run) { return this.standalone() ? Promise.reject(standaloneError()) : run(); }
-    // Returns once the deferred cache save, if any, is written.
-    close() {
+    // Returns once working-set reads still in flight have finished and every cache save, theirs included, is
+    // written. Saves made after close are written at once.
+    async close() {
         this.closed = true;
         this.queued = false;
-        return this.flushCache();
+        await this.flushCache();
+        while (this.workingSetOps.size) await Promise.allSettled([...this.workingSetOps]);
+        await this.flushCache();
+    }
+    inFlight(run) {
+        const op = run();
+        this.workingSetOps.add(op);
+        const done = () => this.workingSetOps.delete(op);
+        op.then(done, done);
+        return op;
     }
     async idle() {
         while (this.pending.size) await Promise.allSettled([...this.pending]);
@@ -394,7 +406,8 @@ export class Workbench {
             refreshing: this.pending.size > 0 || this.executionRefreshes.size > 0,
         };
     }
-    async applyScope(input) {
+    applyScope(input) { return this.inFlight(() => this.applyWorkingScope(input)); }
+    async applyWorkingScope(input) {
         const definition = validateScope(input), scope = this.selectedScope();
         scopeJql(this.project.id, definition);
         const cloudId = this.site.id, projectId = this.project.id;
@@ -441,7 +454,7 @@ export class Workbench {
             page: this.page, ancestorWarnings: this.ancestorWarnings, linkedWarnings: this.linkedWarnings,
         });
         this.cacheScope = { cloudId: this.site.id, jiraProjectId: this.project.id };
-        if (!defer) return this.flushCache();
+        if (!defer || this.closed) return this.flushCache();
         this.cacheSince ??= Date.now();
         clearTimeout(this.cacheTimer);
         this.cacheTimer = setTimeout(() => void this.flushCache(), Math.max(0, Math.min(this.cacheDebounceMs, this.cacheSince + this.cacheMaxWaitMs - Date.now())));
@@ -554,7 +567,8 @@ export class Workbench {
         });
         return { status: "saved", scope };
     }
-    async refresh({ fresh = false } = {}) {
+    refresh(options) { return this.inFlight(() => this.reload(options)); }
+    async reload({ fresh = false } = {}) {
         if (!this.site || !this.project) return this.snapshot();
         const scope = this.loadKey();
         const generation = await this.afterScopeCommit(() => {
@@ -588,7 +602,7 @@ export class Workbench {
         const definition = this.workingScope, before = this.page, existing = this.issues, attemptedParents = this.attemptedParents;
         const cursor = before.nextPageToken;
         const current = () => generation === this.refreshGeneration && this.currentScope() && key === this.loadKey();
-        const pending = (async () => {
+        const pending = this.inFlight(async () => {
             let outcome = { target, status: "superseded", error: null };
             try {
                 const read = await this.jira(options => this.gateway.issues(cloudId, projectId, { ...options, scope: definition, cursor }), true);
@@ -620,7 +634,7 @@ export class Workbench {
                 }
             }
             return { ...await this.snapshot(), pageResult: outcome };
-        })();
+        });
         this.pageLoads.set(generation, pending);
         try { return await pending; }
         finally { this.pageLoads.delete(generation); }

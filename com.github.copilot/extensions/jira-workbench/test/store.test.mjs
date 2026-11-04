@@ -164,11 +164,11 @@ test("leaves masked records unchanged when an attached receipt matches both, reg
 
 // A writer in another process that holds write.lock with a blocked event loop: what a suspended or stalled owner
 // looks like to every other writer. It prints how its own update ended.
-function lockHolder(path, holdMs) {
+function lockHolder(path, holdMs, heartbeatMs = 5_000) {
     const code = `
         const { Store } = await import(${JSON.stringify(new URL("../lib/store.mjs", import.meta.url).href)});
         try {
-            await new Store(process.argv[1]).update(data => {
+            await new Store(process.argv[1], { heartbeatMs: ${heartbeatMs} }).update(data => {
                 const until = Date.now() + ${holdMs};
                 while (Date.now() < until) {}
                 data.mappings.owner = { id: "owner" };
@@ -195,7 +195,8 @@ test("a writer that lost its lock fails loudly and never removes the new owner's
     const owner = lockHolder(path, 1500);
     await ageLockOf(path, owner.pid);
     let lockWhileHeld = null;
-    await new Store(path).update(async data => {
+    // The stealer waits three of its own heartbeats for the owner to refresh the lock; this owner never does.
+    await new Store(path, { heartbeatMs: 20 }).update(async data => {
         // Stay inside the update until the original owner has finished, so it would be able to unlink this lock.
         const result = await owner.done;
         lockWhileHeld = await readFile(join(path, "write.lock"), "utf8").catch(() => null);
@@ -300,3 +301,17 @@ for (const [name, corrupt] of Object.entries(malformed)) {
         assert.ok(Object.values(raw.mappings).every(m => m && typeof m === "object"));
     });
 }
+
+// Copilot review C1: a live owner that was only paused (its lock looked stale) refreshes the lock as soon as it
+// resumes, and a writer that saw the stale lock waits for that instead of taking it over.
+test("a paused owner that resumes keeps its lock and both updates are saved", async t => {
+    const path = await directory(t);
+    await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
+    const owner = lockHolder(path, 400, 50);
+    await ageLockOf(path, owner.pid);
+    await new Store(path, { heartbeatMs: 400 }).update(data => { data.mappings.waiter = { id: "waiter" }; });
+    const { code, output } = await owner.done;
+    assert.equal(code, 0, output);
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.owner && saved.mappings.waiter, JSON.stringify(Object.keys(saved.mappings)));
+});

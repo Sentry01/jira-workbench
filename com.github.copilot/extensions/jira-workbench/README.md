@@ -465,10 +465,16 @@ list, when its stored record has no name, branch or PR yet, during a full
 refresh, or once a minute. A session the host reports as deleted is no longer read
 by polls once it is confirmed missing. A poll that observes nothing new does not write
 `state.json`: the time of the check is kept in memory and shown in the panel,
-and is written at most once a minute.
+and is written at most once a minute. That time is shown only on the content it
+checked. A poll always writes when another panel or process has stored that
+project's traces since this panel last did, or when another check runs in the
+same panel. The one remaining case: another process's observation that started
+before a skipped poll and is saved after it replaces the newer result, shown with
+its own older time, until this panel's next poll writes the newer result back.
 
 GitHub reads are shared by every panel in the extension process. Each PR is read
-with one `gh pr view` per refresh, and at most 4 `gh` processes run at once. The
+with one `gh pr view` per refresh, however many issues and sessions refer to it,
+and at most 4 `gh` processes run at once. The
 background refresh after you open or pick a project reuses a PR read from the last
 60 seconds; **Refresh**, **Refresh live state**, **Refresh GitHub** and **Refresh
 trace** always read GitHub again. Only the check fields the panel shows (name or
@@ -603,11 +609,16 @@ and stable issue ID, not canvas panel IDs. Atomic writes and a short-lived file
 lock protect `state.json` updates from multiple extension processes. Writers in
 one process queue in memory instead of contending for the lock. The lock holds a
 random token, and its owner refreshes the lock's timestamp every 5 seconds, so a
-slow but live writer is never treated as crashed. Before replacing `state.json`
-and before removing the lock, a writer checks that the lock is still its own. A
-writer that lost its lock during a long pause (for example, laptop sleep) fails
-with "The state lock was taken over" and saves nothing, rather than overwrite a
-newer change.
+slow but live writer is never treated as crashed. If the lock's owner is still
+running, another writer takes the lock over only when it has gone 30 seconds
+without a refresh and then stays unrefreshed for 15 more seconds, so an owner that
+was only paused (for example, laptop sleep) refreshes it on waking and keeps it.
+Just before replacing `state.json`, just after it, and before removing the lock, a
+writer checks that the lock is still its own. A writer that lost its lock fails
+with "The state lock was taken over" and saves nothing, or, if the takeover
+happened during the save itself, reports that one of the two changes may be lost.
+Node has no advisory file locks, so that last window is narrowed and reported,
+not closed.
 
 `state.json` is written as compact JSON. Every write also compacts it, because the
 panel re-reads it every few seconds and rewrites it on each preference change:
@@ -634,7 +645,8 @@ the `artifacts/` directory.** It is git-ignored; `.local/` is also hidden from t
 canvas-extension sharing mechanism.
 
 A `write.lock` left by a crashed writer is recovered automatically once its owning
-process has exited or the lock has not been refreshed for 30 seconds. Corrupt or
+process has exited, or when it has not been refreshed for 30 seconds (45 seconds if
+its owner is still running). Corrupt or
 unsupported state is reported rather than silently reset; a corrupt cache is simply
 ignored. A single malformed entry in an otherwise valid `state.json` (for example,
 a link whose `sessions` is not a list) is ignored instead: the panel lists it once

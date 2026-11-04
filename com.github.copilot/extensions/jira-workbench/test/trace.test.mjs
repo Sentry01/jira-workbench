@@ -446,13 +446,13 @@ test("a poll that skipped a missing session and finishes last keeps a refresh's 
 
 // 100 linked issues with 3 sessions each, every session already observed in full (name, branch and PR), as a
 // project looks after its first poll.
-async function linkedProject(t, { sharedPr = false, github } = {}) {
+async function linkedProject(t, { sharedPr = false, onePr = false, github } = {}) {
     const directory = await mkdtemp(join(tmpdir(), "jira-workbench-fanout-"));
     t.after(() => rm(directory, { recursive: true }));
     const store = new Store(directory);
     const issues = Array.from({ length: 100 }, (_, i) => ({ ...rows[1], id: String(100 + i), key: `DEMO-${100 + i}`, parentKey: null }));
     const sessionIds = new Map(issues.map(issue => [issue.id, [0, 1, 2].map(n => `s-${issue.id}-${n}`)]));
-    const prOf = (issueId, n) => sharedPr ? Number(issueId) : Number(issueId) * 10 + n;
+    const prOf = (issueId, n) => onePr ? 7 : sharedPr ? Number(issueId) : Number(issueId) * 10 + n;
     const detail = id => {
         const [, issueId, n] = id.split("-");
         return { id, project_id: copilot.id, name: `Session ${id}`, branch: `branch-${id}`, created_pr_number: prOf(issueId, Number(n)), created_pr_repo: "example/demo" };
@@ -556,4 +556,66 @@ test("a full refresh makes one gh call per distinct PR, at most 4 at a time, and
     calls = 0;
     await workbench.refreshTrace("100");
     assert.equal(calls, 2, "an explicit Refresh trace reads its own PRs again");
+});
+
+// Copilot review C2: within one explicit refresh, a PR referenced from many issues is read once, even when later
+// batches of issues reach it after the first read finished.
+test("an explicit refresh reads a PR shared by every issue once, across batches and both read paths", async t => {
+    const reads = [];
+    const run = async (exe, args) => {
+        reads.push(`${args[4]}#${args[2]}`);
+        await new Promise(resolve => setTimeout(resolve, 2));
+        return { stdout: JSON.stringify({ number: Number(args[2]), url: `https://github.com/${args[4]}/pull/${args[2]}`, state: "OPEN", statusCheckRollup: [] }) };
+    };
+    const { workbench, store } = await linkedProject(t, { onePr: true, github: new PrReader({ run }).read });
+    await store.update(data => {
+        for (const link of Object.values(data.links))
+            link.prs.push({ number: 8, repo: "example/demo", url: "https://github.com/example/demo/pull/8", sessionIds: [] });
+    });
+    reads.length = 0;
+    await workbench.refreshExecution({ source: "github" });
+    assert.deepEqual(reads.sort(), ["example/demo#7", "example/demo#8"]);
+});
+
+// Copilot review C3: a skipped write never hides or misdates another panel's observation.
+test("a poll never stamps another panel's content as freshly checked, and rewrites what it observed", async t => {
+    const { workbench, store, writes } = await linkedProject(t);
+    await workbench.refreshExecution({ source: "sessions" });
+    const scope = "cloud-demo/42/100";
+    const before = writes();
+    // Another panel commits a different, older observation while this poll is reading the host.
+    const original = workbench.gateway.call;
+    workbench.gateway.call = async (name, args) => {
+        if (name === "get_sessions_status") {
+            const old = new Date(Date.now() - 1_000).toISOString();
+            await store.update(data => {
+                const link = data.links[scope];
+                link.sessions[1].activity = "running";
+                link.sourceStatus.sessions = { state: "fresh", fetchedAt: old, error: null };
+            });
+        }
+        return original(name, args);
+    };
+    await workbench.refreshExecution({ source: "sessions" });
+    workbench.gateway.call = original;
+    assert.equal((await store.read()).links[scope].sessions[1].activity, "idle", "this poll's newer observation is written");
+    assert.ok(writes() - before >= 2);
+
+    // After a skipped poll, another panel writes an older observation: the kept time is not shown on it, and the next
+    // poll writes the newer content back.
+    await workbench.refreshExecution({ source: "sessions" });
+    const skipped = writes();
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(writes(), skipped, "an unchanged poll by the only observer still skips its write");
+    const kept = (await workbench.snapshot()).links[scope].sourceStatus.sessions.fetchedAt;
+    const older = new Date(Date.parse(kept) - 500).toISOString();
+    await store.update(data => {
+        data.links[scope].sessions[1].activity = "running";
+        data.links[scope].sourceStatus.sessions = { state: "fresh", fetchedAt: older, error: null };
+    });
+    const shown = (await workbench.snapshot()).links[scope];
+    assert.equal(shown.sessions[1].activity, "running");
+    assert.equal(shown.sourceStatus.sessions.fetchedAt, older, "the other panel's content keeps its own time");
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal((await store.read()).links[scope].sessions[1].activity, "idle");
 });

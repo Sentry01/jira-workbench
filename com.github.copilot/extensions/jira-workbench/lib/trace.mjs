@@ -96,9 +96,13 @@ function changes(stored, trace) {
     return content(preview) !== content(stored);
 }
 
-// The stored trace with the newer observation times this process kept in memory instead of writing.
+// The observation times a trace was stored with: they change with every write of its sources.
+const stampsOf = link => JSON.stringify([link?.sourceStatus?.sessions?.fetchedAt, link?.sourceStatus?.github?.fetchedAt, link?.verifiedAt]);
+
+// The stored trace with the newer observation times this process kept in memory instead of writing. They apply only
+// to the content they verified: once anyone stores something else, that content keeps its own times.
 export function withStamps(link, stamps) {
-    if (!stamps || !link) return link;
+    if (!stamps || !link || content(link) !== stamps.content) return link;
     const later = (a, b) => a && (!b || Date.parse(a) > Date.parse(b)) ? a : b;
     const sourceStatus = { ...link.sourceStatus };
     for (const name of ["sessions", "github"])
@@ -130,6 +134,9 @@ export class Trace {
         // read in full. The first unchanged minute after startup is not written either.
         this.stamps = new Map();
         this.persistedAt = Date.now();
+        // The observation times this panel last stored for each trace, and how many observations are in progress.
+        this.written = new Map();
+        this.collecting = 0;
         this.detailAt = new Map();
     }
     async attach(scope, sessionId, projectId, requestId = null) {
@@ -203,28 +210,49 @@ export class Trace {
                 try { statuses = objects(await wb.gateway.call("get_sessions_status", {})); }
                 catch (error) { statusError = error.message; }
             }
-            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, fresh: !reuseRecent }));
-            if (traces.length) await this.persist(traces, data);
+            const github = this.reader(!reuseRecent);
+            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, github }));
+            if (traces.length) await this.persist(traces);
             return wb.snapshot();
         })();
         wb.executionRefreshes.set(key, pending);
         try { return await pending; }
         finally { wb.executionRefreshes.delete(key); }
     }
-    // Writes the traces only when one says something new, or when the kept observation times are a minute old;
-    // otherwise keeps those times in memory so the panel still shows when each source was last checked.
-    async persist(traces, data) {
-        const now = Date.now();
-        if (!traces.some(trace => changes(data.links[trace.scope], trace)) && now - this.persistedAt < STAMP_PERSIST_MS) {
-            for (const trace of traces) this.keep(trace);
-            return;
-        }
-        await this.workbench.store.update(current => { for (const trace of traces) mergeTrace(current, trace); });
-        this.persistedAt = now;
-        for (const trace of traces) this.stamps.delete(trace.scope);
+    // One GitHub read per PR for a whole refresh: the first lookup of a PR may bypass the recent-read cache, and every
+    // later lookup of it in the same refresh, from any issue or read path, shares that result.
+    reader(fresh) {
+        const reads = new Map();
+        return (repo, number) => {
+            const key = `${String(repo).toLowerCase()}#${number}`;
+            if (!reads.has(key)) reads.set(key, this.workbench.github(repo, number, { fresh }));
+            return reads.get(key);
+        };
     }
-    keep({ scope, next, source }) {
-        const stamps = { ...this.stamps.get(scope) };
+    // Writes the traces unless the write would change nothing but observation times. Skipping is safe only when no
+    // other observation can be ordered against these times: the stored traces must be exactly what this panel last
+    // wrote (no other panel or process has written them since) and no other observation is running in this panel.
+    // Otherwise the times are written, so mergeTrace can keep an older observation from replacing this newer one.
+    // Times kept in memory are written at least once a minute.
+    async persist(traces) {
+        const now = Date.now(), store = this.workbench.store;
+        if (!this.collecting && now - this.persistedAt < STAMP_PERSIST_MS) {
+            const current = await store.read();
+            if (traces.every(trace => this.written.get(trace.scope) === stampsOf(current.links[trace.scope]) && !changes(current.links[trace.scope], trace))) {
+                for (const trace of traces) this.keep(trace, current.links[trace.scope]);
+                return;
+            }
+        }
+        const links = await store.update(current => traces.map(trace => mergeTrace(current, trace)));
+        this.persistedAt = now;
+        traces.forEach((trace, index) => this.wrote(trace.scope, links[index]));
+    }
+    wrote(scope, link) {
+        this.stamps.delete(scope);
+        this.written.set(scope, stampsOf(link));
+    }
+    keep({ scope, next, source }, stored) {
+        const stamps = { ...this.stamps.get(scope), content: content(stored) };
         for (const name of ["sessions", "github"]) if (source !== (name === "sessions" ? "github" : "sessions")) stamps[name] = next.sourceStatus[name]?.fetchedAt;
         if (source === "all") stamps.verifiedAt = next.verifiedAt;
         this.stamps.set(scope, stamps);
@@ -234,15 +262,21 @@ export class Trace {
         wb.traceNode(nodeId);
         const scope = wb.selectedScope(nodeId);
         const data = await wb.store.read();
-        const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] }, fresh: true });
+        const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] }, github: this.reader(true) });
         const link = await wb.store.update(current => mergeTrace(current, trace));
-        this.stamps.delete(scope);
+        this.wrote(scope, link);
         return link;
+    }
+    async collectTrace(options) {
+        this.collecting++;
+        try { return await this.observe(options); }
+        finally { this.collecting--; }
     }
     // Observes every source for one scope concurrently, then folds results in stored order so
     // evidence and error attribution stay deterministic.
-    // `fresh`: an explicit refresh, which reads its PRs from GitHub again rather than reuse a read from the last minute.
-    async collectTrace({ scope, previous, source = "all", poll = false, statuses, statusError = null, fresh = false }) {
+    // `github`: the refresh's PR reader; an explicit refresh reads its PRs from GitHub again rather than reuse a read
+    // from the last minute.
+    async observe({ scope, previous, source = "all", poll = false, statuses, statusError = null, github = this.reader(false) }) {
         const wb = this.workbench;
         const stamp = new Date().toISOString();
         const next = {
@@ -285,7 +319,7 @@ export class Trace {
             }
             // A deleted session's recorded PR still needs verifying; a failed lookup is GitHub's, not the session's.
             if (source !== "sessions" && result.record.prNumber && result.record.prRepo) {
-                try { result.pr = await wb.github(result.record.prRepo, result.record.prNumber, { fresh }); }
+                try { result.pr = await github(result.record.prRepo, result.record.prNumber); }
                 catch (error) { result.error = error; }
             }
             return result;
@@ -312,7 +346,7 @@ export class Trace {
         const earlier = [];
         for (const old of source === "sessions" ? [] : previous.prs)
             if (!next.prs.some(pr => pr.url === old.url) && !earlier.some(pr => pr.url === old.url)) earlier.push(old);
-        const verified = await mapLimit(earlier, 4, old => settle(wb.github(old.repo, old.number, { fresh })));
+        const verified = await mapLimit(earlier, 4, old => settle(github(old.repo, old.number)));
         earlier.forEach((old, index) => {
             const { value, error } = verified[index];
             if (!error) { next.prs.push({ ...old, ...value, stale: false }); return; }

@@ -15,8 +15,10 @@ function alive(pid) {
     catch (error) { return error.code === "EPERM"; }
 }
 
-// A writer that crashed between creating and removing the lock must not block every later write.
-async function breakStaleLock(lockPath) {
+// A writer that crashed between creating and removing the lock must not block every later write. A live owner
+// refreshes its lock every heartbeat; one that was only paused (a debugger, laptop sleep) refreshes it as soon as it
+// resumes. So a lock whose owner is alive is taken over only if it stays unrefreshed for `confirmMs` more.
+async function breakStaleLock(lockPath, confirmMs) {
     let info, owner;
     try {
         info = await stat(lockPath);
@@ -26,13 +28,24 @@ async function breakStaleLock(lockPath) {
         throw error;
     }
     const age = Date.now() - info.mtimeMs;
-    if (age < STALE_LOCK_MS && (!Number.isSafeInteger(owner) || alive(owner))) return false;
+    const live = Number.isSafeInteger(owner) && alive(owner);
+    if (age < STALE_LOCK_MS && (!Number.isSafeInteger(owner) || live)) return false;
+    if (live) {
+        await delay(confirmMs);
+        try {
+            const again = await stat(lockPath);
+            if (again.ino !== info.ino || again.mtimeMs !== info.mtimeMs) return false;
+        } catch (error) {
+            if (error.code === "ENOENT") return true;
+            throw error;
+        }
+    }
     const aside = `${lockPath}.stale-${randomUUID()}`;
     try { await rename(lockPath, aside); }
     catch (error) { if (error.code === "ENOENT") return true; throw error; }
     const moved = await stat(aside);
-    if (moved.ino !== info.ino) {
-        // Another writer replaced the stale lock between our checks; hand its lock back.
+    if (moved.ino !== info.ino || moved.mtimeMs !== info.mtimeMs) {
+        // Another writer replaced the stale lock, or its owner refreshed it, between our checks; hand it back.
         await rename(aside, lockPath);
         return false;
     }
@@ -150,7 +163,7 @@ export class Store {
             try { lock = await open(lockPath, "wx", 0o600); break; }
             catch (error) {
                 if (error.code !== "EEXIST") throw error;
-                if (await breakStaleLock(lockPath)) continue;
+                if (await breakStaleLock(lockPath, this.heartbeatMs * 3)) continue;
                 await delay(50);
             }
         }
@@ -177,8 +190,11 @@ export class Store {
             const file = await open(temp, "wx", 0o600);
             try { await file.writeFile(JSON.stringify(data)); await file.sync(); }
             finally { await file.close(); }
+            // Node has no advisory file locks, so ownership is checked as close to the rename as possible, and again
+            // after it so that a takeover inside that window is reported rather than passed off as a clean save.
             if (!await mine()) throw new Error(`The state lock was taken over by another writer after a long pause; this change was not saved. Try again. (${lockPath})`);
             await rename(temp, join(this.path, "state.json"));
+            if (!await mine()) throw new Error(`The state lock was taken over by another writer while this change was being saved, so one of the two changes may be lost. Refresh and check it. (${lockPath})`);
             return result;
         } finally {
             clearInterval(heartbeat);
