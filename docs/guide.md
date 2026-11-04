@@ -529,10 +529,15 @@ To keep `state.json` small, only the 20 most recent finished launch requests per
 work item (or project) are kept. Launches still waiting for a receipt are always
 kept.
 
+If you edit `state.json` by hand and one entry ends up malformed, the panel
+ignores that entry, names the file in its messages, and removes the entry on its
+next write. The rest of your links and launches keep working.
+
 A warm-start cache of your Jira catalog and recently loaded hierarchies sits next
 to it in `cache.json`, so each new session opens on your last project straight
 away and refreshes in the background. You can delete it at any time; it is
-rebuilt on the next load.
+rebuilt on the next load. Long descriptions are shortened in the cache and shown
+in full again once Jira is re-read.
 
 Both files describe your private work. They are git-ignored and excluded from
 `share_extension`; never commit or publish them.

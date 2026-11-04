@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, open, readFile, rm, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { mkdtemp, open, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Store } from "../lib/store.mjs";
+import { Workbench } from "../lib/workbench.mjs";
 
 async function directory(t) {
     const path = await mkdtemp(join(tmpdir(), "jira-workbench-warm-"));
@@ -157,4 +160,190 @@ test("leaves masked records unchanged when an attached receipt matches both, reg
             assert.deepEqual(saved.links[scope].sessions, JSON.parse(JSON.stringify(records)));
         }
     }
+});
+
+// A writer in another process that holds write.lock with a blocked event loop: what a suspended or stalled owner
+// looks like to every other writer. It prints how its own update ended.
+function lockHolder(path, holdMs, heartbeatMs = 5_000) {
+    const code = `
+        const { Store } = await import(${JSON.stringify(new URL("../lib/store.mjs", import.meta.url).href)});
+        try {
+            await new Store(process.argv[1], { heartbeatMs: ${heartbeatMs} }).update(data => {
+                const until = Date.now() + ${holdMs};
+                while (Date.now() < until) {}
+                data.mappings.owner = { id: "owner" };
+            });
+            console.log("saved");
+        } catch (error) { console.log("failed: " + error.message); process.exitCode = 3; }`;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code, path], { stdio: ["ignore", "pipe", "inherit"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.done = new Promise(resolve => child.on("exit", code => resolve({ code, output: output.trim() })));
+    return child;
+}
+
+// Waits for the child's lock, then makes it look `ageMs` old and, with `host`, written on another machine. Rewriting
+// the content keeps the lock's inode, which is what its owner checks.
+async function ageLockOf(path, pid, { ageMs = 31_000, host = null } = {}) {
+    const lock = join(path, "write.lock");
+    let text = "";
+    for (let i = 0; i < 200 && !(text = await readFile(lock, "utf8").catch(() => "")).startsWith(`${pid} `); i++) await sleep(10);
+    if (host) await writeFile(lock, [...text.trim().split(" ").slice(0, 3), host].join(" "));
+    const old = new Date(Date.now() - ageMs);
+    await utimes(lock, old, old);
+}
+
+// The only takeover of a running writer: a lock from another machine sharing the directory, unrefreshed for 2 minutes.
+test("a writer whose lock was taken over fails loudly and never removes the new owner's lock", async t => {
+    const path = await directory(t);
+    await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
+    const owner = lockHolder(path, 1500);
+    await ageLockOf(path, owner.pid, { ageMs: 121_000, host: "other-machine" });
+    let lockWhileHeld = null;
+    await new Store(path).update(async data => {
+        // Stay inside the update until the original owner has finished, so it would be able to unlink this lock.
+        const result = await owner.done;
+        lockWhileHeld = await readFile(join(path, "write.lock"), "utf8").catch(() => null);
+        data.mappings.stealer = { id: "stealer", owner: result };
+    });
+    const { code, output } = await owner.done;
+    assert.equal(code, 3, `the slow owner must fail, not report success: ${output}`);
+    assert.match(output, /lock was taken over/);
+    assert.ok(lockWhileHeld?.startsWith(`${process.pid} `), "the losing owner left the new owner's lock in place");
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.stealer, "the new owner's update is kept");
+    assert.equal(saved.mappings.owner, undefined, "the losing owner's update did not overwrite it");
+    await assert.rejects(readFile(join(path, "write.lock")), { code: "ENOENT" });
+});
+
+test("a live slow writer keeps its lock fresh so others wait instead of stealing it", async t => {
+    const path = await directory(t);
+    const slow = new Store(path, { heartbeatMs: 20 }), other = new Store(path);
+    let entered;
+    const inside = new Promise(resolve => { entered = resolve; });
+    const first = slow.update(async data => {
+        const old = new Date(Date.now() - 31_000);
+        await utimes(join(path, "write.lock"), old, old);
+        entered();
+        await sleep(200);
+        data.mappings.slow = { id: "slow" };
+    });
+    await inside;
+    await sleep(80);
+    assert.ok(Date.now() - (await stat(join(path, "write.lock"))).mtimeMs < 5_000, "the heartbeat refreshed the lock");
+    await other.update(data => { data.mappings.other = { id: "other" }; });
+    await first;
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.slow && saved.mappings.other, "neither update is lost");
+});
+
+test("updates from one Store run in order without contending through the lock file", async t => {
+    const path = await directory(t);
+    const store = new Store(path);
+    const order = [];
+    await Promise.all(Array.from({ length: 16 }, (_, i) => store.update(async data => {
+        order.push(i);
+        await sleep(1);
+        data.mappings[`m${i}`] = { id: String(i) };
+    })));
+    assert.deepEqual(order, Array.from({ length: 16 }, (_, i) => i));
+    assert.equal(Object.keys((await store.read()).mappings).length, 16);
+});
+
+test("state is written as compact JSON", async t => {
+    const path = await directory(t);
+    await new Store(path).update(data => { data.mappings.a = { id: "a" }; });
+    assert.ok(!(await readFile(join(path, "state.json"), "utf8")).includes("\n"));
+});
+
+const site = { id: "cloud-demo", name: "Demo", url: "https://demo.atlassian.net" };
+const project = { id: "42", key: "DEMO", name: "Demo project" };
+const issue = { id: "2", key: "DEMO-2", type: "Story", level: 0, summary: "Story", projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [], description: "" };
+const prefix = "cloud-demo/42/";
+const malformed = {
+    "a request stored as null": data => { data.requests.bad = null; },
+    "a request without a scope": data => { data.requests.bad = { nodeId: "2", status: "queued" }; },
+    "the project link without a sessions array": data => { data.links[`${prefix}project`] = { prs: [] }; },
+    "an issue link without a sessions array": data => { data.links[`${prefix}2`] = { sessions: "none", prs: [] }; },
+    "a link stored as null": data => { data.links[`${prefix}2`] = null; },
+    "a session record that is not an object": data => { data.links[`${prefix}2`] = { sessions: [null, 7], prs: [] }; },
+    "a mapping stored as a string": data => { data.mappings[`${prefix}project`] = "copilot"; },
+};
+
+for (const [name, corrupt] of Object.entries(malformed)) {
+    test(`a malformed state entry (${name}) is reported with its file and does not break the panel`, async t => {
+        const path = await directory(t);
+        const store = new Store(path);
+        const gateway = {
+            sites: async () => [site], projects: async () => [project],
+            issues: async () => ({ issues: [issue], fetchedAt: new Date().toISOString() }),
+            call: async name => {
+                if (name === "list_repositories") return [];
+                if (name === "get_sessions_status") return { sessions: [] };
+                throw new Error(`Unexpected call ${name}`);
+            },
+        };
+        const wb = new Workbench({ gateway, store, github: async () => null, send: async () => {}, instanceId: "malformed" });
+        await wb.catalog();
+        await wb.select({ cloudId: site.id, jiraProjectId: project.id });
+        await wb.idle();
+        const data = { version: 1, mappings: {}, links: { [`${prefix}project`]: { sessions: [{ id: "6f816e38-0000-4000-8000-000000000001" }], prs: [] } }, requests: {} };
+        corrupt(data);
+        await writeFile(join(path, "state.json"), JSON.stringify(data));
+        const snapshot = await wb.snapshot();
+        const notice = snapshot.ancestorWarnings.find(message => message.includes(join(path, "state.json")));
+        assert.ok(notice, `the notice names the file: ${JSON.stringify(snapshot.ancestorWarnings)}`);
+        await wb.refreshExecution({ source: "sessions" });
+        await wb.refresh();
+        assert.equal(wb.error, null);
+        const again = await wb.snapshot();
+        assert.equal(again.ancestorWarnings.filter(message => message === notice).length, 1, "reported once");
+        await store.update(() => {});
+        const raw = JSON.parse(await readFile(join(path, "state.json"), "utf8"));
+        assert.ok(Object.values(raw.requests).every(r => r && typeof r.scope === "string"));
+        assert.ok(Object.values(raw.links).every(l => l && Array.isArray(l.sessions) && Array.isArray(l.prs) && l.sessions.every(s => s && typeof s === "object")));
+        assert.ok(Object.values(raw.mappings).every(m => m && typeof m === "object"));
+    });
+}
+
+// Copilot review C1: a live owner on this machine is never taken over, however long it pauses.
+test("a paused live owner is never taken over, however old its lock looks", async t => {
+    const path = await directory(t);
+    await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
+    const owner = lockHolder(path, 1000);
+    await ageLockOf(path, owner.pid, { ageMs: 3_600_000 });
+    await new Store(path).update(data => { data.mappings.waiter = { id: "waiter" }; });
+    const { code, output } = await owner.done;
+    assert.equal(code, 0, output);
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.owner && saved.mappings.waiter, JSON.stringify(Object.keys(saved.mappings)));
+});
+
+test("a write that outwaits a live owner fails with an error naming the holder and saves nothing", async t => {
+    const path = await directory(t);
+    await writeFile(join(path, "state.json"), JSON.stringify({ version: 1, mappings: {}, links: {}, requests: {} }));
+    const owner = lockHolder(path, 1500);
+    await ageLockOf(path, owner.pid, { ageMs: 3_600_000 });
+    await assert.rejects(new Store(path, { lockWaitMs: 200 }).update(data => { data.mappings.waiter = { id: "waiter" }; }),
+        new RegExp(`locked by process ${owner.pid} on ${hostname().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; nothing was saved`));
+    const { code, output } = await owner.done;
+    assert.equal(code, 0, output);
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.owner && !saved.mappings.waiter);
+});
+
+test("a dead owner's lock is recovered at once; another machine's lock only after two minutes without a heartbeat", async t => {
+    const path = await directory(t);
+    const lock = join(path, "write.lock");
+    await writeFile(lock, `2147483646 ${Date.now()} token ${encodeURIComponent(hostname())}`);
+    const started = Date.now();
+    await new Store(path).update(data => { data.mappings.recovered = { id: "recovered" }; });
+    assert.ok(Date.now() - started < 1000);
+    await writeFile(lock, `${process.pid} ${Date.now()} token other-machine`);
+    await assert.rejects(new Store(path, { lockWaitMs: 100 }).update(() => {}), /locked by process \d+ on other-machine/);
+    const old = new Date(Date.now() - 121_000);
+    await utimes(lock, old, old);
+    await new Store(path).update(data => { data.mappings.remote = { id: "remote" }; });
+    const saved = await new Store(path).read();
+    assert.ok(saved.mappings.recovered && saved.mappings.remote);
 });

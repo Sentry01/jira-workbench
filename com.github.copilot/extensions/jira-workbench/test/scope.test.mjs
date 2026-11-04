@@ -353,7 +353,7 @@ test("execution evidence reads every linked trace of the project's own issues, n
     });
     const read = [];
     wb.trace.collectTrace = async ({ scope }) => { read.push(scope); return {}; };
-    store.update = async () => { throw new Error("collection complete"); };
+    wb.trace.persist = async () => { throw new Error("collection complete"); };
     await assert.rejects(wb.refreshExecution(), /collection complete/);
     assert.deepEqual(read.sort(), ["project", "1", "2"].map(id => wb.selectedScope(id)).sort());
 });
@@ -405,13 +405,15 @@ test("a page installed before a later refresh still reports that it loaded", asy
     gateway.issues = async (site, project, options) => options.cursor
         ? { issues: [row("2")], nextPageToken: null, fetchedAt: "two" }
         : (() => { throw new Error("Refresh outage"); })();
-    const more = wb.loadMore();
+    // Paging defers its cache save; an explicit flush writes it, and a refresh starts while that write is pending.
+    const page = await wb.loadMore();
+    const flushed = wb.flushCache();
     await saving.promise;
     const refresh = wb.refresh();
     release.resolve();
-    const [page] = await Promise.all([more, refresh]);
+    await Promise.all([flushed, refresh]);
     assert.equal(page.pageResult.status, "loaded");
-    assert.ok(page.issues.some(issue => issue.id === "2"), "the failed refresh kept the appended page");
+    assert.ok((await wb.snapshot()).issues.some(issue => issue.id === "2"), "the failed refresh kept the appended page");
 });
 
 test("a failed Apply keeps its error after a later page loads", async () => {
@@ -500,3 +502,42 @@ for (const kind of ["auth", "transient"]) {
         connection.stop();
     });
 }
+
+// Copilot review C4: closing a panel settles a page still loading and caches it at once.
+test("a page that finishes loading after the panel closed is cached before close settles", async () => {
+    const { wb, gateway } = fixture();
+    await wb.refresh();
+    const saved = [];
+    wb.cache = { update: async change => { const data = { issues: {} }; change(data); saved.push(data); } };
+    wb.cacheDebounceMs = wb.cacheMaxWaitMs = 60_000;
+    const reading = deferred(), release = deferred();
+    const first = gateway.issues;
+    gateway.issues = async (site, project, options) => {
+        if (!options.cursor) return first(site, project, options);
+        reading.resolve();
+        await release.promise;
+        return { issues: [row("2")], nextPageToken: null, fetchedAt: "two" };
+    };
+    const more = wb.loadMore();
+    await reading.promise;
+    let settled = false;
+    const closed = wb.close().then(() => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(settled, false, "close waits for the page in flight");
+    release.resolve();
+    await closed;
+    assert.equal((await more).pageResult.status, "loaded");
+    assert.ok(saved.some(data => Object.values(data.issues).some(entry => entry.issues.some(issue => issue.id === "2"))), "the late page was cached");
+});
+
+test("a deferred save after close is written at once, without a timer", async () => {
+    const { wb } = fixture();
+    await wb.refresh();
+    let writes = 0;
+    wb.cache = { update: async () => { writes++; } };
+    wb.cacheDebounceMs = wb.cacheMaxWaitMs = 60_000;
+    await wb.close();
+    await wb.saveWorkingSet({ defer: true });
+    assert.equal(writes, 1);
+    assert.equal(wb.cacheTimer, null);
+});

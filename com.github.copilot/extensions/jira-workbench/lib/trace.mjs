@@ -1,6 +1,16 @@
 import { objects, settle } from "./runtime.mjs";
 import { assertSessionId } from "./validate.mjs";
 
+// Unchanged polls keep their freshness stamps in memory and persist them at most this often; a session already known
+// in full is read by background polls with get_session at most this often (get_sessions_status carries its live
+// state every poll); an explicit refresh reads every session in full.
+const STAMP_PERSIST_MS = 60_000;
+const DETAIL_EVERY_MS = 60_000;
+
+// Refreshes from the start of their observation until their store write has committed, per store: every panel in a
+// process shares one store, so this counts the whole process.
+const observing = new WeakMap();
+
 async function mapLimit(items, limit, work) {
     const results = new Array(items.length);
     let next = 0;
@@ -17,7 +27,8 @@ async function mapLimit(items, limit, work) {
 // says nothing about where its PR was opened.
 // The ID is always the one asked for: observed live (Oct 2026), the host can return `id` masked as "******", and
 // storing that echo lost the session from the trace for good.
-function sessionRecord(detail, id, status = detail) {
+// `readAt`: when the host reported this detail; a read shared across traces keeps the time it was taken.
+function sessionRecord(detail, id, status = detail, readAt = new Date().toISOString()) {
     const input = status.awaiting_input;
     const pr = detail.created_pr_number && detail.created_pr_repo;
     return {
@@ -33,7 +44,7 @@ function sessionRecord(detail, id, status = detail) {
         error: typeof status.error === "string" ? status.error : null,
         prNumber: pr ? detail.created_pr_number : null,
         prRepo: pr ? detail.created_pr_repo : null,
-        verifiedAt: new Date().toISOString(),
+        verifiedAt: readAt,
     };
 }
 
@@ -62,9 +73,11 @@ function mergeTrace(current, { scope, previous, next, stamp, source, observed = 
         sourceStatus.github = next.sourceStatus.github;
     // A newer sessions source can come from a poll that skipped a session confirmed missing. It did not observe that
     // session, so this trace's own observation of it still applies unless the session was read after this trace began.
+    // A session read after this trace's own read of it (a shared read reused late, or a concurrent refresh) is kept.
     const sessions = applySessions ? next.sessions.map(record => {
         const live = link.sessions.find(s => s.id === record.id);
-        return skipped.includes(record.id) && live ? live : mergeSession(live, record);
+        if (live && (skipped.includes(record.id) || Date.parse(live.verifiedAt || "") > Date.parse(record.verifiedAt || ""))) return live;
+        return mergeSession(live, record);
     })
         : source === "github" ? link.sessions : link.sessions.map(live => {
             const record = observed.includes(live.id) && next.sessions.find(s => s.id === live.id);
@@ -82,10 +95,60 @@ function mergeTrace(current, { scope, previous, next, stamp, source, observed = 
     return current.links[scope];
 }
 
+// A trace's content without its observation times: two observations that differ only in these say the same thing.
+const content = link => JSON.stringify(link ?? null, (key, value) => key === "verifiedAt" || key === "fetchedAt" ? undefined : value);
+
+// Whether persisting this trace would change anything but observation times.
+function changes(stored, trace) {
+    const preview = mergeTrace({ links: { [trace.scope]: structuredClone(stored ?? trace.previous) } }, trace);
+    return content(preview) !== content(stored);
+}
+
+// The observation times a trace was stored with: they change with every write of its sources.
+const stampsOf = link => JSON.stringify([link?.sourceStatus?.sessions?.fetchedAt, link?.sourceStatus?.github?.fetchedAt, link?.verifiedAt]);
+
+// The stored trace with the newer observation times this process kept in memory instead of writing. They apply only
+// to the content they verified: once anyone stores something else, that content keeps its own times.
+export function withStamps(link, stamps) {
+    if (!stamps || !link || content(link) !== stamps.content) return link;
+    const later = (a, b) => a && (!b || Date.parse(a) > Date.parse(b)) ? a : b;
+    const sourceStatus = { ...link.sourceStatus };
+    for (const name of ["sessions", "github"])
+        if (sourceStatus[name] && stamps[name]) sourceStatus[name] = { ...sourceStatus[name], fetchedAt: later(stamps[name], sourceStatus[name].fetchedAt) };
+    return { ...link, sourceStatus, verifiedAt: later(stamps.verifiedAt, link.verifiedAt || null) || null };
+}
+
+// A session record that names its branch and PR needs no get_session: its live state comes from get_sessions_status,
+// provided the listing reports an activity; without one, only get_session can say what the session is doing.
+function complete(stored, status) {
+    if (typeof status.activity?.status !== "string" || !status.activity.status) return false;
+    const named = status.name || (stored.name && stored.name !== stored.id);
+    const pr = (status.created_pr_number && status.created_pr_repo) || (stored.prNumber && stored.prRepo);
+    return Boolean(named && (status.branch || stored.branch) && pr);
+}
+
+// The host fields of a session as last observed, updated by what get_sessions_status reports now.
+function knownDetail(stored, status) {
+    const pr = status.created_pr_number && status.created_pr_repo
+        ? { created_pr_number: status.created_pr_number, created_pr_repo: status.created_pr_repo }
+        : { created_pr_number: stored.prNumber, created_pr_repo: stored.prRepo };
+    return { id: stored.id, name: status.name || stored.name, branch: status.branch || stored.branch, project_id: status.project_id ?? stored.projectId, ...pr };
+}
+
 // Observation of linked sessions and PRs: linking, trace and execution refresh, and native navigation.
 // Panel state (selection, issues, store, gateway, github, hostActions) stays on the Workbench and is read through it.
 export class Trace {
-    constructor(workbench) { this.workbench = workbench; }
+    constructor(workbench) {
+        this.workbench = workbench;
+        // Observation times not yet written (by scope), when they were last written, and when each session was last
+        // read in full. The first unchanged minute after startup is not written either.
+        this.stamps = new Map();
+        this.persistedAt = Date.now();
+        // The observation times this panel last stored for each trace, and how many observations are in progress.
+        this.written = new Map();
+
+        this.detailAt = new Map();
+    }
     async attach(scope, sessionId, projectId, requestId = null) {
         const wb = this.workbench;
         assertSessionId(sessionId);
@@ -132,14 +195,16 @@ export class Trace {
     }
     // poll: the panel's background session poll, which stops asking about sessions confirmed missing. Any other
     // refresh, such as Refresh Sessions, is the user's request and checks them again.
-    async refreshExecution({ source = "all", poll = false } = {}) {
+    // `reuseRecent`: a background pass (after a pick or revalidation) may use a PR read from the last minute. Requests
+    // from the panel always read GitHub, deduplicated within the refresh.
+    async refreshExecution({ source = "all", poll = false } = {}, { reuseRecent = false } = {}) {
         const wb = this.workbench;
         if (!["all", "sessions", "github"].includes(source)) throw new Error("Choose a supported execution source.");
         poll = poll === true;
         const scope = wb.selectedScope(), generation = wb.refreshGeneration;
-        const key = `${wb.loadKey()}/${generation}/${source}${poll ? "/poll" : ""}`;
+        const key = `${wb.loadKey()}/${generation}/${source}${poll ? "/poll" : ""}${reuseRecent ? "/recent" : ""}`;
         if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key);
-        const pending = (async () => {
+        const pending = this.overlapping(async () => {
             const data = await wb.store.read();
             if (generation !== wb.refreshGeneration || scope !== wb.currentScope()) return wb.snapshot();
             // Only this project's own issues: cross-project context has no trace under this project's mapping.
@@ -155,25 +220,89 @@ export class Trace {
                 try { statuses = objects(await wb.gateway.call("get_sessions_status", {})); }
                 catch (error) { statusError = error.message; }
             }
-            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError }));
-            if (traces.length) await wb.store.update(current => { for (const trace of traces) mergeTrace(current, trace); });
+            const github = this.reader(!reuseRecent);
+            const details = new Map();
+            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, github, details }));
+            if (traces.length) await this.persist(traces);
             return wb.snapshot();
-        })();
+        });
         wb.executionRefreshes.set(key, pending);
         try { return await pending; }
         finally { wb.executionRefreshes.delete(key); }
+    }
+    // One GitHub read per PR for a whole refresh: the first lookup of a PR may bypass the recent-read cache, and every
+    // later lookup of it in the same refresh, from any issue or read path, shares that result.
+    reader(fresh) {
+        const reads = new Map();
+        return (repo, number) => {
+            const key = `${String(repo).toLowerCase()}#${number}`;
+            if (!reads.has(key)) reads.set(key, this.workbench.github(repo, number, { fresh }));
+            return reads.get(key);
+        };
+    }
+    // Writes the traces unless the write would change nothing but observation times. Skipping is safe only when no
+    // other observation can be ordered against these times: the stored traces must be exactly what this panel last
+    // wrote (no other panel or process has written them since) and no other refresh in this process has started and not yet saved its result.
+    // Otherwise the times are written, so mergeTrace can keep an older observation from replacing this newer one.
+    // Times kept in memory are written at least once a minute.
+    async persist(traces) {
+        const now = Date.now(), store = this.workbench.store;
+        if (observing.get(store) === 1 && now - this.persistedAt < STAMP_PERSIST_MS) {
+            const current = await store.read();
+            if (traces.every(trace => this.written.get(trace.scope) === stampsOf(current.links[trace.scope]) && !changes(current.links[trace.scope], trace))) {
+                for (const trace of traces) this.keep(trace, current.links[trace.scope]);
+                return;
+            }
+        }
+        const written = await store.update(current => traces.map(trace => this.merge(current, trace)));
+        this.persistedAt = now;
+        traces.forEach((trace, index) => this.wrote(trace.scope, written[index]));
+    }
+    // Merges a trace and, while the stored content is still what they checked, the times kept in memory for it, so
+    // a write by one source also saves the newer times of sources it did not observe.
+    merge(current, trace) {
+        const kept = this.stamps.get(trace.scope);
+        if (kept && current.links[trace.scope]) current.links[trace.scope] = withStamps(current.links[trace.scope], kept);
+        return { link: mergeTrace(current, trace), kept };
+    }
+    // Forgets the kept times just written, unless another check kept newer ones meanwhile.
+    wrote(scope, { link, kept }) {
+        if (this.stamps.get(scope) === kept) this.stamps.delete(scope);
+        this.written.set(scope, stampsOf(link));
+    }
+    keep({ scope, next, source }, stored) {
+        const stamps = { ...this.stamps.get(scope), content: content(stored) };
+        for (const name of ["sessions", "github"]) if (source !== (name === "sessions" ? "github" : "sessions")) stamps[name] = next.sourceStatus[name]?.fetchedAt;
+        if (source === "all") stamps.verifiedAt = next.verifiedAt;
+        this.stamps.set(scope, stamps);
     }
     async refreshTrace(nodeId) {
         const wb = this.workbench;
         wb.traceNode(nodeId);
         const scope = wb.selectedScope(nodeId);
-        const data = await wb.store.read();
-        const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] } });
-        return wb.store.update(current => mergeTrace(current, trace));
+        return this.overlapping(async () => {
+            const data = await wb.store.read();
+            const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] }, github: this.reader(true) });
+            const written = await wb.store.update(current => this.merge(current, trace));
+            this.wrote(scope, written);
+            return written.link;
+        });
     }
+    // Counts a refresh until its write has committed: while any other one is counted, a poll never skips its write,
+    // so mergeTrace can order the two observations by their stored times.
+    async overlapping(run) {
+        const store = this.workbench.store;
+        observing.set(store, (observing.get(store) || 0) + 1);
+        try { return await run(); }
+        finally { observing.set(store, observing.get(store) - 1); }
+    }
+    collectTrace(options) { return this.observe(options); }
     // Observes every source for one scope concurrently, then folds results in stored order so
     // evidence and error attribution stay deterministic.
-    async collectTrace({ scope, previous, source = "all", poll = false, statuses, statusError = null }) {
+    // `github`: the refresh's PR reader; an explicit refresh reads its PRs from GitHub again rather than reuse a read
+    // from the last minute.
+    // `details`: the session reads of this refresh, by session ID, shared by every trace in it.
+    async observe({ scope, previous, source = "all", poll = false, statuses, statusError = null, github = this.reader(false), details = new Map() }) {
         const wb = this.workbench;
         const stamp = new Date().toISOString();
         const next = {
@@ -196,9 +325,22 @@ export class Trace {
             }
             if (source !== "github") {
                 try {
-                    const detail = await wb.gateway.call("get_session", { project_session_id: stored.id });
-                    const status = statuses.find(s => s.id === stored.id || s.id === detail.id);
-                    result.record = { ...stored, ...sessionRecord(detail, stored.id, status || detail), stale: Boolean(statusError) };
+                    const listed = statuses.find(s => s.id === stored.id);
+                    // Each trace keeps its own copy of the session, so each copy has its own slow cadence; a session
+                    // read in full once in this refresh is used by every trace that links it.
+                    const cadence = `${scope} ${stored.id}`;
+                    const due = Date.now() - (this.detailAt.get(cadence) ?? -Infinity) >= DETAIL_EVERY_MS;
+                    let detail, readAt, status = listed;
+                    if (!poll || !listed || source === "all" || due || !complete(stored, listed) || details.has(stored.id)) {
+                        if (!details.has(stored.id)) {
+                            const at = new Date().toISOString();
+                            details.set(stored.id, wb.gateway.call("get_session", { project_session_id: stored.id }).then(detail => ({ detail, at })));
+                        }
+                        ({ detail, at: readAt } = await details.get(stored.id));
+                        this.detailAt.set(cadence, Date.now());
+                        status ||= statuses.find(s => s.id === detail.id);
+                    } else detail = knownDetail(stored, listed);
+                    result.record = { ...stored, ...sessionRecord(detail, stored.id, status || detail, readAt), stale: Boolean(statusError) };
                 } catch (error) {
                     // The host's own answer that the session is gone (deleted): a fact about the session, not a failed read.
                     if (!error.notFound) { result.error = error; return result; }
@@ -210,7 +352,7 @@ export class Trace {
             }
             // A deleted session's recorded PR still needs verifying; a failed lookup is GitHub's, not the session's.
             if (source !== "sessions" && result.record.prNumber && result.record.prRepo) {
-                try { result.pr = await wb.github(result.record.prRepo, result.record.prNumber); }
+                try { result.pr = await github(result.record.prRepo, result.record.prNumber); }
                 catch (error) { result.error = error; }
             }
             return result;
@@ -237,7 +379,7 @@ export class Trace {
         const earlier = [];
         for (const old of source === "sessions" ? [] : previous.prs)
             if (!next.prs.some(pr => pr.url === old.url) && !earlier.some(pr => pr.url === old.url)) earlier.push(old);
-        const verified = await mapLimit(earlier, 4, old => settle(wb.github(old.repo, old.number)));
+        const verified = await mapLimit(earlier, 4, old => settle(github(old.repo, old.number)));
         earlier.forEach((old, index) => {
             const { value, error } = verified[index];
             if (!error) { next.prs.push({ ...old, ...value, stale: false }); return; }

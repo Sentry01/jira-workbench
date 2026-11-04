@@ -63,6 +63,31 @@ test("snapshots of explicitly loaded large working sets stay fast and scale line
     assert.ok(timings[8000] / Math.max(timings[2000], 1) < 9, `scaling ${JSON.stringify(timings)}`);
 });
 
+test("paging to 10,000 issues coalesces cache saves instead of rewriting the cache per page", async t => {
+    const runtime = fakeRuntime({ issueCount: 10000 });
+    const { workbench, make } = await setup(t, runtime);
+    await workbench.select(requested);
+    await workbench.idle();
+    const update = workbench.cache.update.bind(workbench.cache);
+    let updates = 0;
+    workbench.cache.update = change => { updates++; return update(change); };
+    let last = 0;
+    while (workbench.page.nextPageToken) {
+        const started = performance.now();
+        await workbench.loadMore();
+        last = performance.now() - started;
+    }
+    assert.equal(workbench.issues.length, 10000);
+    workbench.close();
+    await workbench.idle();
+    assert.ok(updates <= 10, `Cache.update ran ${updates} times`);
+    assert.ok(last < 400, `the last page took ${last.toFixed(0)}ms`);
+    const reopened = make("reopened");
+    assert.equal(await reopened.hydrate(), true);
+    assert.equal(reopened.issues.length, 10000, "closing the panel flushed the last pages to the cache");
+    reopened.close();
+});
+
 test("reopening paints only the loaded page and its continuation from cache without contacting Jira", async t => {
     const runtime = fakeRuntime({ issueCount: 5000 });
     const { workbench, make } = await setup(t, runtime);
