@@ -1,0 +1,8 @@
+{
+  "name": "jira-workbench-verification",
+  "private": true,
+  "description": "Browser driver for the verification harnesses and docs/screenshots.mjs. Not shipped with the extension.",
+  "devDependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

@@ -6,3 +6,10 @@ updates:
     schedule:
       interval: monthly
     labels: ["dependencies"]
+
+  # The browser driver for the verification harnesses (not shipped with the extension).
+  - package-ecosystem: npm
+    directory: /verification
+    schedule:
+      interval: monthly
+    labels: ["dependencies"]
