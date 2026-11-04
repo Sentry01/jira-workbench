@@ -380,7 +380,9 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
     if (previous && ["pending", "queued", "uncertain"].includes(previous.status)) return;
     if ((selecting || !scopeConfirmed || standaloneHost(state)) && !global) return;
     if (kind === "prepare" && nodePending(nodeId)) return;
-    const record = { kind, scope, nodeId, previewId, clientId, status: "pending", message: `${label}...`, dismissed: false };
+    // The list row the control sits in, if any: action keys repeat across rows, so focus is put back within that row.
+    const originRowId = $("tree").contains(document.activeElement) ? document.activeElement.closest("[data-node-id]")?.dataset.nodeId : undefined;
+    const record = { kind, scope, nodeId, previewId, clientId, originRowId, status: "pending", message: `${label}...`, dismissed: false };
     const restoreControlFocus = document.activeElement?.dataset.actionKey === key;
     actions.set(key, record);
     paintFeedback();
@@ -428,11 +430,18 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         if (restoreControlFocus && (global || scope === state.scope) && epoch === scopeEpoch && !selecting
             && (document.activeElement === document.body || document.activeElement?.disabled)) {
             if (kind === "load-more") renderTree();
-            const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && !element.hidden);
+            const control = actionControl(key, originRowId, element => !element.disabled && !element.hidden);
             if (control) control.focus({ preventScroll: true });
-            else if (!focusRow(nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
+            else if (!focusRow(originRowId ?? nodeId) && !focusRow(focusedNode)) $("search").focus({ preventScroll: true });
         }
     }
+}
+// The control that runs an action: inside the list row it was started from when there is one (keys repeat across
+// rows), otherwise the first one in the page.
+function actionControl(key, rowId, usable) {
+    const scope = rowId === undefined ? document : visibleRows.get(rowId);
+    if (!scope?.isConnected) return null;
+    return [...scope.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && usable(element)) || null;
 }
 function reconcileReceipts() {
     for (const record of actions.values()) {
@@ -506,7 +515,7 @@ function dismissNotice(key) {
     // Dismiss removes its own button: move focus to the next notice, else to the control that ran the action. Only
     // rendered elements count: the narrow details view hides the list (and search) behind a display: none ancestor.
     const rendered = element => element && element.getClientRects().length > 0;
-    const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && rendered(element));
+    const control = actionControl(key, record.originRowId, element => !element.disabled && rendered(element));
     const target = [noticeRows.get(next)?.lastElementChild, control, $("search"), $("back-to-work")].find(rendered);
     if (target) focusInView(target);
 }
