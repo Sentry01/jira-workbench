@@ -234,7 +234,9 @@ async function focusKept(page) {
         assert.equal(result.during, result.key, `${selector} keeps focus while pending`);
         assert.equal(result.after, result.key, `${selector} has focus when it finishes`);
     }
-    // Notices: the next action adds one row and leaves the rows already announced in place.
+    // Notices: role=status is atomic by default, so the region must opt out to announce only the changed row.
+    assert.equal(await page.locator("#notice").getAttribute("aria-atomic"), "false");
+    // The next action adds one row and leaves the rows already announced in place.
     const before = await page.$$eval("#notice > .action-notice", rows => rows.length);
     await page.evaluate(() => { window.__noticeRows = [...document.querySelectorAll("#notice > .action-notice")]; window.__noticeAdds = 0;
         new MutationObserver(list => { for (const record of list) window.__noticeAdds += record.addedNodes.length; }).observe(document.getElementById("notice"), { childList: true }); });
@@ -275,6 +277,27 @@ async function launchFocus(page) {
     await page.locator("#search").fill("");
 }
 
+// In the narrow details view the list is hidden. Dismissing the last notice for an action that has a control both in
+// the hidden list and in the details must focus a visible element, not the hidden row control or the hidden search.
+async function narrowDismiss(page) {
+    await page.evaluate(() => { for (const dismiss of document.querySelectorAll("#notice button")) if (!dismiss.hidden) dismiss.click(); });
+    await page.setViewportSize({ width: 600, height: 960 });
+    const back = page.getByRole("button", { name: "Back to work", exact: true });
+    if (await back.isVisible()) await back.click();
+    await page.locator('#tree [data-node-id="3"] .row-select').click();
+    const review = page.locator("#inspector").getByRole("button", { name: "Review PR", exact: true });
+    await review.click();
+    const notice = page.locator("#notice .action-notice", { hasText: "acknowledged" });
+    await notice.waitFor();
+    await notice.getByRole("button").focus();
+    await page.keyboard.press("Enter");
+    const active = await page.evaluate(() => ({ tag: document.activeElement.tagName, text: document.activeElement.textContent,
+        inInspector: document.getElementById("inspector").contains(document.activeElement), rendered: document.activeElement.getClientRects().length > 0 }));
+    assert.deepEqual(active, { tag: "BUTTON", text: "Review PR", inInspector: true, rendered: true }, "focus after Dismiss is on the visible control that ran the action");
+    await back.click();
+    await page.setViewportSize({ width: 1440, height: 1080 });
+}
+
 /** Runs every check; the caller's page must show the seeded demo project at its default size. Queues one launch. */
 export async function verifyAccessibility({ page, workbench }) {
     await reconnecting(page, workbench);
@@ -284,4 +307,5 @@ export async function verifyAccessibility({ page, workbench }) {
     await tooltips(page);
     await focusKept(page);
     await launchFocus(page);
+    await narrowDismiss(page);
 }

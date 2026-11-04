@@ -430,9 +430,11 @@ function dismissNotice(key) {
     record.dismissed = true;
     paintFeedback();
     if (!hadFocus) return;
-    // Dismiss removes its own button: move focus to the next notice, else to the control that ran the action.
-    const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.hidden && !element.disabled);
-    (noticeRows.get(next)?.lastElementChild || control || $("search")).focus({ preventScroll: true });
+    // Dismiss removes its own button: move focus to the next notice, else to the control that ran the action. Only
+    // rendered elements count: the narrow details view hides the list (and search) behind a display: none ancestor.
+    const rendered = element => element && element.getClientRects().length > 0;
+    const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && rendered(element));
+    [noticeRows.get(next)?.lastElementChild, control, $("search"), $("back-to-work")].find(rendered)?.focus({ preventScroll: true });
 }
 function feedbackFor(nodeId) {
     const feedback = el("div", null, "action-feedback");

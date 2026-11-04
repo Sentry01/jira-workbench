@@ -20,7 +20,7 @@
     <button id="connections" title="Reload sites and repository projects">Reload connections</button>
     <div class="source-freshness" role="group" aria-label="Project source freshness"><span id="freshness" class="source" data-tone="idle" tabindex="0" role="note">Jira: not loaded</span><span id="session-freshness" class="source" data-tone="idle" tabindex="0" role="note">Sessions: not needed</span><span id="github-freshness" class="source" data-tone="idle" tabindex="0" role="note">GitHub: not needed</span></div>
   </section>
-  <div id="notice" role="status" aria-live="polite" aria-relevant="additions text" tabindex="-1"></div>
+  <div id="notice" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions text" tabindex="-1"></div>
   <div id="connection-status" role="status" aria-live="polite" hidden></div>
   <div id="sign-in" role="alert" hidden>
     <p><strong>Atlassian needs you to sign in.</strong> Jira stays read-only here; the last good data is kept. Sign in and the Workbench reloads on its own.</p>
