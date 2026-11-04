@@ -469,8 +469,8 @@ once it is confirmed missing. A poll that observes nothing new does not write
 `state.json`: the time of the check is kept in memory and shown in the panel,
 and is written at most once a minute. That time is shown only on the content it
 checked. A poll always writes when another panel or process has stored that
-project's traces since this panel last did, or when another check runs in the
-same panel. The one remaining case: another process's observation that started
+project's traces since this panel last did, or while another refresh in the same
+extension process has started and not yet saved its result. The one remaining case: another process's observation that started
 before a skipped poll and is saved after it replaces the newer result, shown with
 its own older time, until this panel's next poll writes the newer result back.
 

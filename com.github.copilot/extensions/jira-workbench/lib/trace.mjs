@@ -7,6 +7,10 @@ import { assertSessionId } from "./validate.mjs";
 const STAMP_PERSIST_MS = 60_000;
 const DETAIL_EVERY_MS = 60_000;
 
+// Refreshes from the start of their observation until their store write has committed, per store: every panel in a
+// process shares one store, so this counts the whole process.
+const observing = new WeakMap();
+
 async function mapLimit(items, limit, work) {
     const results = new Array(items.length);
     let next = 0;
@@ -139,7 +143,7 @@ export class Trace {
         this.persistedAt = Date.now();
         // The observation times this panel last stored for each trace, and how many observations are in progress.
         this.written = new Map();
-        this.collecting = 0;
+
         this.detailAt = new Map();
     }
     async attach(scope, sessionId, projectId, requestId = null) {
@@ -197,7 +201,7 @@ export class Trace {
         const scope = wb.selectedScope(), generation = wb.refreshGeneration;
         const key = `${wb.loadKey()}/${generation}/${source}${poll ? "/poll" : ""}${reuseRecent ? "/recent" : ""}`;
         if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key);
-        const pending = (async () => {
+        const pending = this.overlapping(async () => {
             const data = await wb.store.read();
             if (generation !== wb.refreshGeneration || scope !== wb.currentScope()) return wb.snapshot();
             // Only this project's own issues: cross-project context has no trace under this project's mapping.
@@ -218,7 +222,7 @@ export class Trace {
             const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, github, details }));
             if (traces.length) await this.persist(traces);
             return wb.snapshot();
-        })();
+        });
         wb.executionRefreshes.set(key, pending);
         try { return await pending; }
         finally { wb.executionRefreshes.delete(key); }
@@ -235,12 +239,12 @@ export class Trace {
     }
     // Writes the traces unless the write would change nothing but observation times. Skipping is safe only when no
     // other observation can be ordered against these times: the stored traces must be exactly what this panel last
-    // wrote (no other panel or process has written them since) and no other observation is running in this panel.
+    // wrote (no other panel or process has written them since) and no other refresh in this process has started and not yet saved its result.
     // Otherwise the times are written, so mergeTrace can keep an older observation from replacing this newer one.
     // Times kept in memory are written at least once a minute.
     async persist(traces) {
         const now = Date.now(), store = this.workbench.store;
-        if (!this.collecting && now - this.persistedAt < STAMP_PERSIST_MS) {
+        if (observing.get(store) === 1 && now - this.persistedAt < STAMP_PERSIST_MS) {
             const current = await store.read();
             if (traces.every(trace => this.written.get(trace.scope) === stampsOf(current.links[trace.scope]) && !changes(current.links[trace.scope], trace))) {
                 for (const trace of traces) this.keep(trace, current.links[trace.scope]);
@@ -273,17 +277,23 @@ export class Trace {
         const wb = this.workbench;
         wb.traceNode(nodeId);
         const scope = wb.selectedScope(nodeId);
-        const data = await wb.store.read();
-        const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] }, github: this.reader(true) });
-        const written = await wb.store.update(current => this.merge(current, trace));
-        this.wrote(scope, written);
-        return written.link;
+        return this.overlapping(async () => {
+            const data = await wb.store.read();
+            const trace = await this.collectTrace({ scope, previous: data.links[scope] || { sessions: [], prs: [] }, github: this.reader(true) });
+            const written = await wb.store.update(current => this.merge(current, trace));
+            this.wrote(scope, written);
+            return written.link;
+        });
     }
-    async collectTrace(options) {
-        this.collecting++;
-        try { return await this.observe(options); }
-        finally { this.collecting--; }
+    // Counts a refresh until its write has committed: while any other one is counted, a poll never skips its write,
+    // so mergeTrace can order the two observations by their stored times.
+    async overlapping(run) {
+        const store = this.workbench.store;
+        observing.set(store, (observing.get(store) || 0) + 1);
+        try { return await run(); }
+        finally { observing.set(store, observing.get(store) - 1); }
     }
+    collectTrace(options) { return this.observe(options); }
     // Observes every source for one scope concurrently, then folds results in stored order so
     // evidence and error attribution stay deterministic.
     // `github`: the refresh's PR reader; an explicit refresh reads its PRs from GitHub again rather than reuse a read

@@ -714,3 +714,29 @@ test("a session linked to more issues than one batch gets the same full read in 
     const links = (await store.read()).links;
     assert.deepEqual(scopes.map(scope => links[scope].sessions.find(s => s.id === "s-100-0").branch), scopes.map(() => "branch-new"));
 });
+
+// Copilot review on #22: an older refresh whose store write is still pending counts as overlapping until it commits.
+test("a newer unchanged poll writes while an older refresh's store write is still pending", async t => {
+    const { workbench, store, activity } = await linkedProject(t);
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    const scope = "cloud-demo/42/100";
+    const update = store.update;
+    let blocked, release;
+    const waiting = new Promise(resolve => { blocked = resolve; }), resume = new Promise(resolve => { release = resolve; });
+    let first = true;
+    store.update = async change => {
+        if (first) { first = false; blocked(); await resume; }
+        return update(change);
+    };
+    activity.set("s-100-1", "running");
+    const older = workbench.refreshTrace("100");
+    await waiting;
+    activity.set("s-100-1", "idle");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    release();
+    await older;
+    store.update = update;
+    assert.equal((await store.read()).links[scope].sessions[1].activity, "idle", "the older observation did not replace the newer one");
+    assert.equal((await workbench.snapshot()).links[scope].sessions[1].activity, "idle");
+});
