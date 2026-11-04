@@ -124,7 +124,9 @@ then answers one poll with a revision the panel does not hold and checks that th
 panel reads the full snapshot instead of applying it, and that a Jira change
 reaches the panel on the next poll, including the row that has keyboard focus: that
 row updates and keeps focus (on its own control, even when another row has a
-control with the same key), and unchanged rows stay the same elements. No real
+control with the same key), and unchanged rows stay the same elements. When a poll
+removes the focused row, focus moves to the next row, else the previous one, else
+the search field. No real
 service is contacted.
 
 ```sh

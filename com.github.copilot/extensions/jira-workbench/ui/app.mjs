@@ -840,6 +840,8 @@ function renderTree(force = false) {
     // Control keys repeat across rows (the same refresh action, or one session or PR linked to two issues), so focus is
     // restored inside the row that had it.
     const focusedRowId = hadFocus ? document.activeElement.closest("[data-node-id]")?.dataset.nodeId : undefined;
+    // The order the user saw, so a focused row that leaves the list hands focus to its nearest neighbour.
+    const shownOrder = focusedRowId === undefined ? [] : treeRows.map(row => row.dataset.nodeId);
     // A cleared digest means the scope or working set was replaced: build every row afresh.
     if (!treeDigest || rowView !== ui.view) rowCache = new Map();
     else if (rowIssues !== state.issues) for (const id of rowCache.keys()) if (!itemsById.has(id)) rowCache.delete(id);
@@ -929,9 +931,17 @@ function renderTree(force = false) {
     if (hadFocus && !container.contains(document.activeElement)) {
         const row = focusedRowId === undefined ? container : visibleRows.get(focusedRowId);
         if (row) restoreFocus(row, focus);
-        // The focused control went with its row's old content, or the row itself is gone: keep focus on a row.
-        if (!container.contains(document.activeElement) && document.activeElement === document.body)
-            focusRow(row ? focusedRowId : focusedNode, { scroll: false });
+        // The focused control went with its row's old content: keep focus on the row. If the row itself is gone, move to
+        // the next row the user saw, else the previous one, else out of the empty list, never to the page.
+        if (!container.contains(document.activeElement) && document.activeElement === document.body) {
+            const at = shownOrder.indexOf(focusedRowId);
+            const near = row ? focusedRowId : at < 0 ? focusedNode
+                : [...shownOrder.slice(at + 1), ...shownOrder.slice(0, at).reverse()].find(id => visibleRows.has(id));
+            if (!focusRow(near, { scroll: !row })) {
+                const rendered = element => element && element.getClientRects().length > 0;
+                [$("search"), $(`view-${ui.view}`), $("back-to-work")].find(rendered)?.focus({ preventScroll: true });
+            }
+        }
     }
 }
 function executionRow(item, execution, trace) {

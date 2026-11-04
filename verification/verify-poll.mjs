@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchBrowser, screenshotPath } from "./browser.mjs";
+import { launchBrowser, screenshotPath, search } from "./browser.mjs";
 import { createFixture, issues, seedProject } from "./fixture.mjs";
 
 // About 300 loaded issues with linked sessions: every session poll re-observes them and rewrites their freshness
@@ -101,9 +101,34 @@ try {
     assert.deepEqual(await page.evaluate(() => ({
         focus: document.activeElement?.closest("#tree [data-node-id]")?.dataset.nodeId, key: document.activeElement?.dataset.focusKey,
     })), { focus: shared.id, key: shared.key }, "focus returns to the control in its own row, not one with the same key in another row");
+
+    // A poll that removes the focused row moves focus to the nearest remaining row (the next, else the previous), and
+    // to the search field when no row is left, never to the page.
+    const rename = async (id, summary) => {
+        working = working.map(item => item.id === id ? { ...item, summary } : item);
+        await workbench.refresh({ fresh: true });
+        await sessionPoll();
+        await page.waitForFunction(id => !document.querySelector(`#tree [data-node-id="${id}"]`), id, { timeout: 5_000 });
+    };
+    const focused = () => page.evaluate(() => ({ row: document.activeElement?.closest("#tree [data-node-id]")?.dataset.nodeId, id: document.activeElement?.id || document.activeElement?.tagName }));
+    await search(page, "Generated work item 10");
+    const order = await page.evaluate(() => [...document.querySelectorAll("#tree [data-node-id]")].map(row => row.dataset.nodeId));
+    assert.equal(order.length, 10, `ten matching rows: ${order}`);
+    await page.locator(`#tree [data-node-id="${order[4]}"] .row-select`).focus();
+    await rename(order[4], "Moved out of the search");
+    assert.equal((await focused()).row, order[5], "focus moves to the next row when the focused row leaves the list");
+    await page.locator(`#tree [data-node-id="${order[9]}"] .row-select`).focus();
+    await rename(order[9], "Also moved out of the search");
+    assert.equal((await focused()).row, order[8], "focus moves to the previous row when the last row leaves the list");
+    await search(page, order[0] === "100" ? "Generated work item 100" : `DEMO-${order[0]}`);
+    await page.waitForFunction(() => document.querySelectorAll("#tree [data-node-id]").length === 1);
+    await page.locator("#tree [data-node-id] .row-select").focus();
+    await rename(await page.evaluate(() => document.querySelector("#tree [data-node-id]").dataset.nodeId), "Left the list entirely");
+    assert.deepEqual(await focused(), { row: undefined, id: "search" }, "focus moves to the search field when no row is left");
+    await search(page, "");
     await page.screenshot({ path: screenshotPath("poll.png") });
     assert.deepEqual(errors, []);
-    console.log("PASS: 300 issues with linked sessions; unchanged session polls send no working set, make one request each and record no mutation in #tree, #inspector-content or the action controls; a response for an unknown revision triggers a full read; a Jira change reaches the panel on the next poll, including the focused row, which keeps focus (on its own control even when another row has one with the same key) while unchanged rows stay in place. All services were synthetic; no Jira writes.");
+    console.log("PASS: 300 issues with linked sessions; unchanged session polls send no working set, make one request each and record no mutation in #tree, #inspector-content or the action controls; a response for an unknown revision triggers a full read; a Jira change reaches the panel on the next poll, including the focused row, which keeps focus (on its own control even when another row has one with the same key) while unchanged rows stay in place; when a poll removes the focused row, focus moves to the next or previous row, or to the search field when none is left. All services were synthetic; no Jira writes.");
 } finally {
     await page.close();
     await browser.close();
