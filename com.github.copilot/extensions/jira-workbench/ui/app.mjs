@@ -71,6 +71,12 @@ function setInert(control, inert) {
     else control.removeAttribute("aria-disabled");
 }
 const inert = control => control.disabled || control.getAttribute("aria-disabled") === "true";
+// For focus moved to a different place (not restored in place after a rebuild): scroll only as far as needed, in
+// every scrolling ancestor, so the focus indicator is visible.
+function focusInView(element) {
+    element.focus({ preventScroll: true });
+    element.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
 const actionKey = (kind, target, scope = state.scope) => JSON.stringify([scope || "", kind, target]);
 const jiraUrl = key => `${state.site.url}/browse/${encodeURIComponent(key)}`;
 const itemUrl = item => item.id === "project" ? `${state.site.url}/jira/software/projects/${encodeURIComponent(state.project.key)}/summary` : jiraUrl(item.key);
@@ -434,7 +440,8 @@ function dismissNotice(key) {
     // rendered elements count: the narrow details view hides the list (and search) behind a display: none ancestor.
     const rendered = element => element && element.getClientRects().length > 0;
     const control = [...document.querySelectorAll("[data-action-key]")].find(element => element.dataset.actionKey === key && !element.disabled && rendered(element));
-    [noticeRows.get(next)?.lastElementChild, control, $("search"), $("back-to-work")].find(rendered)?.focus({ preventScroll: true });
+    const target = [noticeRows.get(next)?.lastElementChild, control, $("search"), $("back-to-work")].find(rendered);
+    if (target) focusInView(target);
 }
 function feedbackFor(nodeId) {
     const feedback = el("div", null, "action-feedback");
@@ -1305,7 +1312,7 @@ function closePreview() {
     // disabled while the launch is pending, so focus goes to the notice that reports the launch instead.
     const active = document.activeElement;
     if (wasOpen && (!active || active === document.body || active.disabled || $("launch-dialog").contains(active)))
-        ($("notice").hidden ? $("search") : $("notice")).focus({ preventScroll: true });
+        focusInView($("notice").hidden ? $("search") : $("notice"));
 }
 async function confirmLaunch() {
     if (inert($("confirm-launch")) || !preview) return;

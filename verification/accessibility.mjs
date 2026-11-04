@@ -227,6 +227,36 @@ async function keyboardAction(page, control, route) {
     }
 }
 
+// Where the focused element is drawn: inside the viewport, and inside #work-scroll's visible box when it lives there.
+const focusInView = page => page.evaluate(() => {
+    const active = document.activeElement, box = active.getBoundingClientRect(), scroller = document.getElementById("work-scroll");
+    const within = (inner, outer) => inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1 && inner.left >= outer.left - 1 && inner.right <= outer.right + 1;
+    const viewport = { top: 0, left: 0, bottom: innerHeight, right: innerWidth };
+    return { focused: active.id || active.textContent.trim().slice(0, 30), inViewport: within(box, viewport),
+        inScroller: !scroller.contains(active) || within(box, scroller.getBoundingClientRect()) };
+});
+
+// Dismissing the last notice from the top of a scrolled page returns focus to the row control that ran the action,
+// which sits below the viewport and outside #work-scroll's visible box. Focus must be brought into view.
+async function scrolledDismiss(page) {
+    await page.evaluate(() => { for (const dismiss of document.querySelectorAll("#notice button")) if (!dismiss.hidden) dismiss.click(); });
+    await page.setViewportSize({ width: 1440, height: 500 });
+    const answer = page.locator('#tree [data-node-id="2"]').getByRole("button", { name: "Answer question", exact: true });
+    await answer.click();
+    const notice = page.locator("#notice .action-notice", { hasText: "acknowledged" });
+    await notice.waitFor();
+    await page.evaluate(() => {
+        const scroller = document.getElementById("work-scroll");
+        scroller.scrollTop = scroller.scrollHeight;
+        scrollTo(0, 0);
+    });
+    await notice.getByRole("button").focus();
+    await page.keyboard.press("Enter");
+    assert.deepEqual(await focusInView(page), { focused: "Answer question", inViewport: true, inScroller: true },
+        "focus after Dismiss is on the action's control, scrolled into view");
+    await page.setViewportSize({ width: 1440, height: 1080 });
+}
+
 async function focusKept(page) {
     const header = [["#refresh-execution", "**/api/refresh-execution"], ["#connections", "**/api/catalog"], ["#refresh", "**/api/refresh"]];
     for (const [selector, route] of header) {
@@ -269,11 +299,15 @@ async function launchFocus(page) {
     await page.locator("#review-changes").click();
     await (await reviewed).finished();
     await page.waitForFunction(() => !document.getElementById("confirm-launch").disabled);
+    // Confirm from a scrolled page: the notice that takes focus is above the viewport.
+    await page.setViewportSize({ width: 1440, height: 500 });
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
     await page.locator("#confirm-launch").focus();
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => !document.getElementById("launch-dialog").open);
-    const active = await page.evaluate(() => document.activeElement.id || document.activeElement.tagName);
-    assert.equal(active, "notice", "after a confirmed launch, focus moves to the notice that reports it");
+    const active = await focusInView(page);
+    assert.deepEqual(active, { focused: "notice", inViewport: true, inScroller: true }, "after a confirmed launch, focus moves to the notice that reports it, in view");
+    await page.setViewportSize({ width: 1440, height: 1080 });
     await page.locator("#search").fill("");
 }
 
@@ -308,4 +342,5 @@ export async function verifyAccessibility({ page, workbench }) {
     await focusKept(page);
     await launchFocus(page);
     await narrowDismiss(page);
+    await scrolledDismiss(page);
 }
