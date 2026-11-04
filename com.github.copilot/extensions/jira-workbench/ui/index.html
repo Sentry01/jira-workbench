@@ -18,9 +18,9 @@
     <span class="connection-arrow" aria-hidden="true">&rarr;</span>
     <label class="repo-label">Copilot repository<select id="repository"><option value="">Choose repository for sessions</option></select></label>
     <button id="connections" title="Reload sites and repository projects">Reload connections</button>
-    <div id="source-freshness" class="source-freshness" aria-label="Project source freshness"><span id="freshness" class="source" data-tone="idle" tabindex="0" role="note">Jira: not loaded</span><span id="session-freshness" class="source" data-tone="idle" tabindex="0" role="note">Sessions: not needed</span><span id="github-freshness" class="source" data-tone="idle" tabindex="0" role="note">GitHub: not needed</span></div>
+    <div class="source-freshness" role="group" aria-label="Project source freshness"><span id="freshness" class="source" data-tone="idle" tabindex="0" role="note">Jira: not loaded</span><span id="session-freshness" class="source" data-tone="idle" tabindex="0" role="note">Sessions: not needed</span><span id="github-freshness" class="source" data-tone="idle" tabindex="0" role="note">GitHub: not needed</span></div>
   </section>
-  <div id="notice" role="status" aria-live="polite" aria-relevant="additions text"></div>
+  <div id="notice" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions text" tabindex="-1"></div>
   <div id="connection-status" role="status" aria-live="polite" hidden></div>
   <div id="sign-in" role="alert" hidden>
     <p><strong>Atlassian needs you to sign in.</strong> Jira stays read-only here; the last good data is kept. Sign in and the Workbench reloads on its own.</p>
@@ -31,6 +31,7 @@
   </div>
   <div id="update-banner" role="status" aria-live="polite" hidden><span id="update-message"></span><button id="update-action" class="primary" hidden></button></div>
   <div id="errors" role="alert"></div>
+  <p id="retry-time" hidden></p>
   <main id="workbench">
     <section class="workspace">
       <div class="workspace-heading"><div><div class="eyebrow">PROJECT EXPLORER</div><h2><button id="project-title" class="project-title-action" title="Inspect project scope" disabled>Your work, connected.</button></h2></div><button id="project-start" class="primary" disabled>Start project session</button></div>
@@ -49,13 +50,14 @@
         <button id="show-details" disabled>Show details</button>
       </div>
       <div class="filters"><input id="search" type="search" placeholder="Search loaded items" aria-label="Search loaded items"><select id="status-filter" aria-label="Filter Jira status"><option value="all">All Jira statuses</option><option value="new">To do</option><option value="indeterminate">In progress</option><option value="done">Done</option></select><select id="sprint-filter" aria-label="Filter sprint" hidden><option value="">All sprints</option></select><button id="expand" hidden>Expand loaded</button></div>
+      <button id="skip-to-details" class="skip-link" type="button">Skip to details</button>
       <div id="work-scroll">
         <div id="hierarchy-header" class="tree-header" aria-hidden="true" hidden><span>Work hierarchy</span><span>Jira</span><span>Copilot / PR</span><span>Action</span></div>
         <div id="tree" role="list" aria-label="Daily execution queue"><div class="empty"><h3>Choose a Jira project</h3><p>Explore every epic, issue and subtask, including work outside active sprints.</p></div></div>
       </div>
       <footer><span id="work-count">No project loaded</span><span>Jira, sessions and PRs keep their own state</span></footer>
     </section>
-    <aside id="inspector" aria-label="Selected work item"><div class="drawer-toolbar"><button id="back-to-work">Back to work</button></div><div id="inspector-content"><div class="empty"><div class="empty-icon" aria-hidden="true">&#9671;</div><h3>Follow the thread</h3><p>Select an item to see its requirements, dependencies, sessions and pull requests.</p></div></div></aside>
+    <aside id="inspector" aria-label="Selected work item" tabindex="-1"><div class="drawer-toolbar"><button id="back-to-work">Back to work</button></div><div id="inspector-content"><div class="empty"><div class="empty-icon" aria-hidden="true">&#9671;</div><h3>Follow the thread</h3><p>Select an item to see its requirements, dependencies, sessions and pull requests.</p></div></div></aside>
   </main>
   <p id="build-version" class="build-version" title="Deployed Jira Workbench build (git commit · commit date)"></p>
   <dialog id="launch-dialog" aria-labelledby="launch-title">

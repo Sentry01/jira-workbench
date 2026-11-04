@@ -46,7 +46,8 @@ try {
     void workbench.background(() => workbench.warm({ cloudId: SITE.id, jiraProjectId: "42" }));
     await page.goto(server.url);
     await within("stopped-server explanation", async () => /MCP server atlassian is stopped/.test(await banner()));
-    await within("automatic-retry hint", async () => /Reconnecting (automatically in about \d+s|now)/.test(await banner()));
+    await within("automatic-retry hint", async () => /Reconnecting (automatically\. No need to press Reload connections\.|now)/.test(await banner()));
+    await within("next attempt time outside the alert", async () => /^(Next attempt at .+|Retrying now)\.$/.test(await page.locator("#retry-time").innerText()));
     assert.doesNotMatch(await banner(), /unrelated-sso/, "an unrelated server needing sign-in is not blamed");
     await page.screenshot({ path: screenshotPath("reconnect-1-stopped.png") });
 

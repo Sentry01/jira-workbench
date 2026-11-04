@@ -236,6 +236,19 @@ Keep two points in mind:
   session appears under *Running*.
 - If a row is in an unexpected group, expand **More evidence** to see why.
 
+### Use the keyboard
+
+- The list is a single Tab stop. The Up and Down arrow keys, Home and End move
+  between rows, and Tab moves into the focused row's own controls. In
+  **Hierarchy**, Right expands a row or moves to its first child, and Left
+  collapses it or moves to its parent.
+- **Skip to details** appears when you Tab past the filters. It moves focus
+  past the list to the selected item's details.
+- After you start an action, focus stays on its control, which shows as
+  unavailable until the action finishes. After you confirm a launch, focus moves
+  to the notice that reports it.
+- **Dismiss** on a notice moves focus to the next notice.
+
 ---
 
 ## 5. Start work from a Jira issue
@@ -445,7 +458,8 @@ The connection bar shows a dot for each source:
 - **Red**: the last read failed, or the source is unavailable.
 - **Grey**: not loaded or not needed.
 
-Hover over, tap, or tab to a dot for details.
+Hover over, tap, or tab to a dot for details. You can move the pointer onto the
+details to read them, and press Escape to hide them.
 
 ### Keep Jira statuses accurate
 
@@ -478,8 +492,8 @@ not count). Click **Refresh** afterwards to see the new statuses.
 ## 8. Narrow panels
 
 In a narrow panel, the canvas shows a single column. **Show details** opens the
-inspector, and **Back to work** returns to the list. The tree supports keyboard
-navigation.
+inspector, and **Back to work** returns to the list. The keyboard works as in a
+wide panel; **Skip to details** moves focus to **Show details**.
 
 ![The canvas in a narrow panel](images/06-narrow.png)
 
@@ -513,8 +527,8 @@ panels, and it is always in one of five states:
 | **Connecting** | "Connecting to Jira and Copilot...", "Loading ... from Jira...", or your last project with "Showing the cached ... snapshot while Jira and Copilot reconnect..." | Nothing. The canvas confirms the server with one Jira read, then loads your project |
 | **Ready** | A green Jira dot and no banner | Nothing. While a panel is open, a light read every 4 minutes keeps your sign-in fresh |
 | **Sign-in needed** | **Atlassian needs you to sign in**, with **Sign in to Atlassian** | Sign in. Until you do, the canvas keeps the last good data and sends no Jira requests from the panel unless you press **Refresh**. It checks for your sign-in at most once per interval, starting at 5 seconds and slowing to 5 minutes, and reloads by itself when you finish |
-| **Down** | The server and its state, such as "MCP server atlassian is stopped", and "Reconnecting automatically in about Ns" | Usually nothing. The canvas keeps the last good data, retries, and restarts a failed server up to 3 times. A stopped or disabled server needs `/mcp` |
-| **No session** | "This panel is not running in a Copilot session..." and no retry countdown | Open Jira Workbench from a Copilot session. This panel shows the last saved data, disables every action that needs Jira or a session except **Reload connections**, and checks again only once a minute |
+| **Down** | The server and its state, such as "MCP server atlassian is stopped", and "Reconnecting automatically", with the time of the next attempt below the banner | Usually nothing. The canvas keeps the last good data, retries, and restarts a failed server up to 3 times. A stopped or disabled server needs `/mcp` |
+| **No session** | "This panel is not running in a Copilot session..." and no next attempt time | Open Jira Workbench from a Copilot session. This panel shows the last saved data, disables every action that needs Jira or a session except **Reload connections**, and checks again only once a minute |
 
 Then find the message you see:
 
@@ -524,7 +538,7 @@ Then find the message you see:
 | "Copilot did not answer ... Still waiting; the Workbench checks again automatically." | Wait: the last good data stays visible. The canvas keeps waiting for that answer and asks Copilot again if it never comes. If it persists, reload extensions. If that does not help, restart the Copilot session |
 | "MCP server atlassian is stopped" | Start it with `/mcp` in Copilot. The canvas loads within about a second |
 | "atlassian failed to connect" | Usually nothing: the canvas restarts the server itself, up to 3 times. If it keeps failing, restart it with `/mcp` |
-| "Reconnecting automatically in about Ns" | Nothing. The canvas retries by itself; you never need **Reload connections** |
+| "Reconnecting automatically", with "Next attempt at" a time below the banner | Nothing. The canvas retries by itself; you never need **Reload connections**. The banner text stays the same between attempts, so a screen reader announces it once |
 | "...while MCP servers finish connecting" | Nothing. The canvas retries while the server starts |
 | "This panel is not running in a Copilot session" | The canvas was opened from **Canvases** in the app's sidebar, which starts it without a session, Atlassian connection or sign-in. Close it and ask Copilot in a session to open the jira-workbench canvas |
 | No Jira sites or projects listed | Check the connection state above. The canvas lists only projects you can browse |

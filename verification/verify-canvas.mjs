@@ -1,5 +1,6 @@
 import { launchBrowser, screenshotPath } from "./browser.mjs";
 import { createFixture, seedProject, scope, issues } from "./fixture.mjs";
+import { verifyAccessibility } from "./accessibility.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -134,6 +135,7 @@ try {
     });
     await page.locator("#confirm-launch").click();
     await bodyHas("Launch outcome unknown");
+    await page.unroute("**/api/launch");
     await page.locator("#cancel-launch").click();
     const request = Object.values((await store.read()).requests)[0];
     assert.equal(request.status, "queued");
@@ -164,7 +166,8 @@ try {
     assert.match(sent[1].prompt, /Jira status sync/);
     const syncRequest = Object.values((await store.read()).requests).find(r => r.kind === "jira-sync");
     assert.equal(syncRequest.status, "queued");
-    await page.waitForFunction(() => document.getElementById("sync-jira").disabled);
+    // Focus returned to Update Jira when the dialog closed, so it stays focused and is marked aria-disabled.
+    await page.waitForFunction(() => document.activeElement?.id === "sync-jira" && document.getElementById("sync-jira").getAttribute("aria-disabled") === "true");
 
     // A launch request with no receipt after 15 minutes is expired: it never blocks Start, and clearing it takes
     // a second, confirming click.
@@ -206,7 +209,7 @@ try {
     const prepareAgain = stuckRow.getByRole("button", { name: "Prepare implementation", exact: true });
     await prepareAgain.waitFor();
     assert.equal(await prepareAgain.isEnabled(), true, "Start is available again");
-    await page.waitForFunction(() => document.activeElement?.dataset.nodeId === "6");
+    await page.waitForFunction(() => document.activeElement?.closest("[data-node-id]")?.dataset.nodeId === "6");
     assert.equal((await store.read()).requests.stuck.status, "cancelled");
     await requestCard.getByText("Cleared", { exact: true }).waitFor();
     assert.equal(sent.length, 2, "Clearing a request launches nothing");
@@ -288,8 +291,11 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Narrow canvas must not overflow");
     await page.screenshot({ path: screenshotPath("narrow.png"), fullPage: true });
     assert.equal(sent.length, 2, "Only the explicitly confirmed fake launches are queued");
+    await page.setViewportSize({ width: 1440, height: 1080 });
+    await verifyAccessibility({ page, workbench });
+    assert.equal(sent.length, 3, "The accessibility checks queue exactly one confirmed launch");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, and narrow layout. External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();
