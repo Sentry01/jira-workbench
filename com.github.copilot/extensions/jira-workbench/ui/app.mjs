@@ -939,7 +939,8 @@ function renderTree(force = false) {
                 : [...shownOrder.slice(at + 1), ...shownOrder.slice(0, at).reverse()].find(id => visibleRows.has(id));
             if (!focusRow(near, { scroll: !row })) {
                 const rendered = element => element && element.getClientRects().length > 0;
-                [$("search"), $(`view-${ui.view}`), $("back-to-work")].find(rendered)?.focus({ preventScroll: true });
+                const target = [$("search"), $(`view-${ui.view}`), $("back-to-work")].find(rendered);
+                if (target) focusInView(target);
             }
         }
     }
