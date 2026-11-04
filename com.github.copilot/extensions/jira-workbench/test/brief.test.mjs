@@ -149,3 +149,20 @@ test("an intro line before the criteria list does not end the section", () => {
     assert.deepEqual(criteriaFromDescription("## Acceptance criteria\nThe following must hold:\n- First\n- Second"), ["First", "Second"]);
     assert.deepEqual(criteriaFromDescription("**Acceptance criteria**\n\n**Out of scope**\n- Later section"), []);
 });
+
+test("long whitespace runs in description lines are scanned in linear time", () => {
+    const started = performance.now();
+    for (const line of [`Acceptance criteria${" ".repeat(4000)}x`, `## ${"\t ".repeat(4000)}acceptance criteria x`, `**${" ".repeat(4000)}Acceptance criteria${" ".repeat(4000)}:x`])
+        assert.deepEqual(criteriaFromDescription(`${line}\n- Not criteria`), []);
+    assert.deepEqual(criteriaFromDescription(`##   Acceptance   criteria  ${" ".repeat(4000)}\n- Kept`), ["Kept"]);
+    assert.ok(performance.now() - started < 500, "no catastrophic backtracking");
+});
+
+test("an empty criteria section ends at a plain section label instead of collecting the next section", () => {
+    assert.deepEqual(criteriaFromDescription("Acceptance criteria:\n\nOut of scope:\n- Rewrite the importer"), []);
+    assert.deepEqual(criteriaFromDescription("## Acceptance criteria\nNotes:\n- Ask design first"), []);
+    assert.deepEqual(criteriaFromDescription("## Acceptance criteria\nNon-goals for this release:\n- Billing"), []);
+    assert.deepEqual(criteriaFromDescription("## Acceptance criteria\n*Out of scope*\n- Billing"), []);
+    assert.deepEqual(criteriaFromDescription("## Acceptance criteria\nThe following must hold:\n- First"), ["First"]);
+    assert.deepEqual(criteriaFromDescription("Acceptance criteria:\nWhen the user exports a report:\n- A CSV downloads"), ["A CSV downloads"]);
+});

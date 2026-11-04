@@ -7,18 +7,23 @@ function text(value, label, max, required = false) {
     return value.trim();
 }
 
-// A Markdown or Jira wiki heading, or a bold or italic label, optionally "(AC)" and a trailing colon.
-const CRITERIA_HEADER = /^(?:#{1,6}\s*|h[1-6]\.\s*)?([*_]{1,2})?\s*acceptance criteria(?:\s*\(ac\))?\s*:?\s*\1?\s*:?$/i;
+// A Markdown or Jira wiki heading, or a bold or italic label, optionally "(AC)" and a trailing colon. Matched against a
+// whitespace-collapsed line, so each optional space matches at most one character and a long line cannot backtrack.
+const CRITERIA_HEADER = /^(?:#{1,6} ?|h[1-6]\. ?)?([*_]{1,2})? ?acceptance criteria(?: ?\(ac\))? ?:? ?\1? ?:?$/i;
 const CRITERIA_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.+)$/;
 const SECTION_HEADING = /^(?:#{1,6}|h[1-6]\.)\s/;
 const SECTION_LABEL = /^([*_]{1,2})\S.*\1:?$/;
+// A plain "Label:" line: a common section name, or any label of at most three words. Longer lines such as
+// "The following must hold:" are introductory prose and keep the section open.
+const PLAIN_LABEL = /^(?:(?:out of scope|not in scope|non-goals?|notes?|open questions|questions|assumptions|dependencies|risks|background|context|references|links|definition of done|technical notes|implementation notes|design)\b[^:]{0,60}|[^\s:]+(?: [^\s:]+){0,2}):$/i;
 const RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
 
-// Only the explicit criteria section counts. It ends at the next heading, label line or horizontal rule, or at the
-// first unindented prose line after its items, so later sections are never collected as criteria.
+// Only the explicit criteria section counts. It ends at the next heading, label line or horizontal rule (even before
+// its first item, so an empty section never collects the next one), or at the first unindented prose line after its
+// items, so later sections are never collected as criteria.
 export function criteriaFromDescription(description = "") {
     const lines = description.split(/\r?\n/);
-    const start = lines.findIndex(line => CRITERIA_HEADER.test(line.trim()));
+    const start = lines.findIndex(line => CRITERIA_HEADER.test(line.trim().replace(/\s+/g, " ")));
     if (start < 0) return [];
     const output = [];
     for (const line of lines.slice(start + 1)) {
@@ -26,7 +31,8 @@ export function criteriaFromDescription(description = "") {
         if (SECTION_HEADING.test(trimmed) || RULE.test(line)) break;
         const match = CRITERIA_ITEM.exec(line);
         if (match) { output.push(match[1].trim()); continue; }
-        if (SECTION_LABEL.test(trimmed) || (output.length && trimmed && !/^\s/.test(line))) break;
+        if (SECTION_LABEL.test(trimmed) || PLAIN_LABEL.test(trimmed.replace(/\s+/g, " "))
+            || (output.length && trimmed && !/^\s/.test(line))) break;
     }
     return output;
 }
