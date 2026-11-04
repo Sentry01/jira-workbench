@@ -34,6 +34,8 @@ test("changes recommended, needs a closer look, open issues or an unknown format
         [overview("Changes recommended", "2 open issues"), "changes recommended"],
         [overview("Needs a closer look"), "needs a closer look"],
         [overview("Approval recommended", "1 open issue"), "approval recommended"],
+        [overview("Approval recommended", "Earlier we said No open issues, but 1 open issue remains."), "approval recommended"],
+        [overview("Approval recommended", "**No open issues**\n\n2 previously missed issues"), "approval recommended"],
         ["Looks good to me.", "no recognized verdict"],
     ];
     for (const [body, said] of cases) {
@@ -122,4 +124,14 @@ test("a failed read blocks that commit, the rest are still checked, and the run 
     await assert.rejects(run(api, { log: () => {} }), /CCR gate failed for #1: unexpected request: pulls\/1\/reviews/);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"], ["bbb", "success"]]);
     assert.match(api.posted[0].description, /^Could not check Copilot code review/);
+});
+
+test("a failed read of a pull request still blocks the head commit it was listed with", async () => {
+    const clean = { context: CONTEXT, state: "success", description: "Copilot code review of aaa: approval recommended, no open issues.", creator: ACTIONS_BOT_USER };
+    const api = fakeApi({
+        "pulls?state=open&per_page=100": [{ number: 1, head: { sha: "aaa" } }],
+        "commits/aaa/statuses?per_page=100": [clean],
+    });
+    await assert.rejects(run(api, { log: () => {} }), /CCR gate failed for #1: unexpected request: pulls\/1$/);
+    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"]]);
 });

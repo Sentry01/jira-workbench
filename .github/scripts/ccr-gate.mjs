@@ -10,6 +10,9 @@ import { client, postStatus } from "./stack-gate.mjs";
 export const CONTEXT = "CCR gate";
 export const REVIEWER = "copilot-pull-request-reviewer[bot]";
 const VERDICTS = ["Approval recommended", "Needs a closer look", "Changes recommended"];
+// The overview's own summary line for a clean review, and any count of issues, wherever it appears.
+const NO_OPEN_ISSUES = /^\*\*No open issues\*\*/m;
+const SOME_ISSUES = /\b[1-9]\d* (?:open|previously missed) issues?\b/i;
 
 // The verdict heading of a Copilot code review overview, or null when the body has none.
 export function verdictOf(body = "") {
@@ -21,15 +24,17 @@ export function verdictOf(body = "") {
     return null;
 }
 
-// Clean means the latest Copilot review is of the head commit, recommends approval and lists no open issues.
-// "Needs a closer look" is not clean: it can report issues the review missed earlier.
+// Clean means the latest Copilot review is of the head commit, recommends approval, has the "No open issues"
+// summary line, and counts no issues anywhere. "Needs a closer look" is not clean: it can report issues the
+// review missed earlier. Text that merely mentions "No open issues" is not the summary line.
 export function ccrStatus(pull, reviews = []) {
     const review = reviews.filter(r => r.user?.login === REVIEWER && r.state !== "PENDING").at(-1);
     const head = pull.head.sha.slice(0, 7);
     if (!review) return { state: "failure", description: "Waiting for Copilot code review." };
     if (review.commit_id !== pull.head.sha) return { state: "failure", description: `Waiting for Copilot code review of ${head}.` };
     const verdict = verdictOf(review.body);
-    if (verdict === "Approval recommended" && /\bNo open issues\b/.test(review.body ?? "")) {
+    const body = review.body ?? "";
+    if (verdict === "Approval recommended" && NO_OPEN_ISSUES.test(body) && !SOME_ISSUES.test(body)) {
         return { state: "success", description: `Copilot code review of ${head}: approval recommended, no open issues.` };
     }
     return { state: "failure", description: `Copilot code review of ${head}: ${verdict ? verdict.toLowerCase() : "no recognized verdict"}.` };
@@ -43,8 +48,10 @@ export function ccrStatus(pull, reviews = []) {
 export async function run(api, { targetUrl, log = console.log } = {}) {
     const done = new Set();
     const errors = [];
-    for (const { number } of await api.list("pulls?state=open&per_page=100")) {
-        let sha;
+    for (const listed of await api.list("pulls?state=open&per_page=100")) {
+        const { number } = listed;
+        // The listed head lets a failed read of the pull request still block its commit.
+        let sha = listed.head?.sha;
         try {
             const pull = await api.get(`pulls/${number}`);
             if (!pull || pull.state !== "open" || done.has(pull.head.sha)) continue;
