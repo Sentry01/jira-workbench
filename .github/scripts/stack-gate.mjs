@@ -33,7 +33,8 @@ export function requiredChecks(branch, rules = []) {
 }
 
 // The bot account each app posts commit statuses as. GitHub Actions (app 15368) posts as github-actions[bot].
-const APP_BOTS = new Map([[15368, 41898282]]);
+export const ACTIONS_BOT = 41898282;
+const APP_BOTS = new Map([[15368, ACTIONS_BOT]]);
 
 // Each required check is "pass", "fail" or "pending", from its latest check run and its latest commit status.
 // `statuses` is the commit's status list, newest first, which names each status's creator.
@@ -170,7 +171,9 @@ export async function unresolvedThreads(api, number) {
 // Posts only a change: GitHub keeps at most 1000 statuses per commit and context, and the sweep re-posts often.
 export async function postStatus(api, sha, context, { state, description }, targetUrl, statuses) {
     statuses ??= (await api.get(`commits/${sha}/statuses?per_page=100`)) ?? [];
-    const current = statuses.find(s => s.context === context);
+    // Compare with the gate's own last status: the required checks trust only github-actions[bot], so a matching
+    // status from anyone else must not stop the gate from posting.
+    const current = statuses.find(s => s.context === context && s.creator?.id === ACTIONS_BOT);
     if (current?.state === state && current.description === description) return false;
     await api.post(`statuses/${sha}`, { state, description, context, ...(targetUrl ? { target_url: targetUrl } : {}) });
     return true;
@@ -234,10 +237,15 @@ async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
     return { ...result, members };
 }
 
+const CCR_GATE_WORKFLOW = ".github/workflows/ccr-gate.yml";
+
 // Which pull requests an event touches. A CI run names its pull requests, or is found through its commit.
-// The schedule, and a manual run without a number, sweep every open pull request.
+// The schedule, a manual run without a number, and a finished CCR gate run (which checks every open pull
+// request, and may have changed a member's required status without a push) sweep every open pull request.
 export async function pullsForEvent(api, eventName, event, input) {
-    if (eventName === "schedule" || (eventName === "workflow_dispatch" && !input)) {
+    const ccrGate = eventName === "workflow_run" && event.workflow_run?.path === CCR_GATE_WORKFLOW;
+    if (ccrGate && event.action !== "completed") return [];
+    if (ccrGate || eventName === "schedule" || (eventName === "workflow_dispatch" && !input)) {
         const pulls = await api.list("pulls?state=open&per_page=100");
         return pulls.map(pull => ({ number: pull.number, pull }));
     }

@@ -140,8 +140,11 @@ on the head commit of every open pull request:
   run workflows. A status is posted only when it changes.
 - Unresolved review threads, including Copilot's, are blocked separately by
   `main`'s conversation resolution rule.
-- To check by hand, run the workflow from the Actions tab with a pull request
-  number, or with no number to check every open pull request.
+- Every run checks every open pull request, one run at a time, so two runs
+  cannot post conflicting statuses for the same commit. To check by hand, run
+  the workflow from the Actions tab.
+- Each finished run re-evaluates every stack, because a member's **CCR gate**
+  can change without a push.
 
 If Copilot code review does not review a pull request, request a review from
 Copilot on it. Like the stack gate, this workflow never checks out or runs pull

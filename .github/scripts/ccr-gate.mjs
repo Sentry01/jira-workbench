@@ -4,7 +4,6 @@
 // Unresolved review threads are enforced separately, by main's conversation resolution rule.
 // Usage: node .github/scripts/ccr-gate.mjs
 // It reads and writes through the GitHub API only; it never checks out or runs pull request code.
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { client, postStatus } from "./stack-gate.mjs";
 
@@ -36,23 +35,15 @@ export function ccrStatus(pull, reviews = []) {
     return { state: "failure", description: `Copilot code review of ${head}: ${verdict ? verdict.toLowerCase() : "no recognized verdict"}.` };
 }
 
-// The schedule, and a manual run without a number, check every open pull request.
-export async function pullNumbers(api, eventName, event, input) {
-    if (event.pull_request) return [event.pull_request.number];
-    if (eventName === "workflow_dispatch" && input) {
-        if (!/^\d+$/.test(String(input).trim())) throw new Error(`"${input}" is not a pull request number.`);
-        return [Number(input)];
-    }
-    return (await api.list("pulls?state=open&per_page=100")).map(p => p.number);
-}
-
 // Several open pull requests can share a head commit, and a status belongs to the commit, so success needs a
 // clean review on every one of them. If a check fails partway, its commit is blocked rather than left with an
 // earlier success, and the rest are still checked; the run then fails with every error.
-export async function run(api, eventName, event, { input, targetUrl, log = console.log } = {}) {
+// Every run checks every open pull request. Runs are serialized, and a newer pending run replaces an older one,
+// so the last status posted for a commit always comes from the latest read, and no pull request is skipped.
+export async function run(api, { targetUrl, log = console.log } = {}) {
     const done = new Set();
     const errors = [];
-    for (const number of await pullNumbers(api, eventName, event, input)) {
+    for (const { number } of await api.list("pulls?state=open&per_page=100")) {
         let sha;
         try {
             const pull = await api.get(`pulls/${number}`);
@@ -87,8 +78,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const env = process.env;
     const api = client({ token: env.GH_TOKEN, repository: env.GITHUB_REPOSITORY, apiUrl: env.GITHUB_API_URL });
     const targetUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
-    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
-    run(api, env.GITHUB_EVENT_NAME, event, { input: env.PULL_REQUEST, targetUrl }).catch(error => {
+    run(api, { targetUrl }).catch(error => {
         console.log(`::error::${error.message}`);
         process.exit(1);
     });

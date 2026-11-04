@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CONTEXT, REVIEWER, ccrStatus, pullNumbers, run, verdictOf } from "./ccr-gate.mjs";
+import { CONTEXT, REVIEWER, ccrStatus, run, verdictOf } from "./ccr-gate.mjs";
+import { ACTIONS_BOT } from "./stack-gate.mjs";
+
+const ACTIONS_BOT_USER = { id: ACTIONS_BOT, login: "github-actions[bot]" };
 
 const HEAD = "1234567890abcdef";
 const pull = (number = 7, sha = HEAD) => ({ number, state: "open", head: { sha } });
@@ -64,16 +67,7 @@ function fakeApi(responses) {
     };
 }
 
-test("an event checks its pull request; the schedule and an empty manual run check all open ones", async () => {
-    const api = fakeApi({ "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }] });
-    assert.deepEqual(await pullNumbers(api, "pull_request_review", { pull_request: { number: 9 } }), [9]);
-    assert.deepEqual(await pullNumbers(api, "workflow_dispatch", {}, "9"), [9]);
-    assert.deepEqual(await pullNumbers(api, "workflow_dispatch", {}, ""), [1, 2]);
-    assert.deepEqual(await pullNumbers(api, "schedule", {}), [1, 2]);
-    await assert.rejects(pullNumbers(api, "workflow_dispatch", {}, "9; true"), /not a pull request number/);
-});
-
-test("a run posts the status only when it changes, and skips closed pull requests", async () => {
+test("every run checks every open pull request, and posts a status only when it changes", async () => {
     const api = fakeApi({
         "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }, { number: 3 }],
         "pulls/1": pull(1, "aaa"),
@@ -84,9 +78,9 @@ test("a run posts the status only when it changes, and skips closed pull request
         "pulls/1/reviews?per_page=100": [review(overview("Approval recommended"), "aaa")],
         "pulls/2/reviews?per_page=100": [review(overview("Changes recommended", "1 open issue"), "bbb")],
         "commits/aaa/statuses?per_page=100": [],
-        "commits/bbb/statuses?per_page=100": [{ context: CONTEXT, state: "failure", description: "Copilot code review of bbb: changes recommended." }],
+        "commits/bbb/statuses?per_page=100": [{ context: CONTEXT, state: "failure", description: "Copilot code review of bbb: changes recommended.", creator: ACTIONS_BOT_USER }],
     });
-    await run(api, "schedule", {}, { log: () => {} });
+    await run(api, { log: () => {} });
     assert.deepEqual(api.posted.map(p => [p.sha, p.state, p.context]), [["aaa", "success", CONTEXT]]);
 });
 
@@ -102,22 +96,19 @@ test("pull requests that share a head commit pass only if every one of them has 
         "pulls/1/reviews?per_page=100": [review(overview("Approval recommended"), "aaa")],
         "pulls/2/reviews?per_page=100": [],
         "commits/aaa/statuses?per_page=100": [],
-        "pulls?state=open&per_page=100": [{ number: 2 }, { number: 1 }],
+        "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }],
     };
     let api = fakeApi(responses);
-    await run(api, "pull_request_target", { pull_request: { number: 1 } }, { log: () => {} });
+    await run(api, { log: () => {} });
     assert.deepEqual(api.posted.map(p => [p.sha, p.state, p.description]), [["aaa", "failure", "#2: Waiting for Copilot code review."]]);
-    api = fakeApi(responses);
-    await run(api, "schedule", {}, { log: () => {} });
-    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"]]);
     responses["pulls/2/reviews?per_page=100"] = [review(overview("Approval recommended"), "aaa")];
     api = fakeApi(responses);
-    await run(api, "schedule", {}, { log: () => {} });
+    await run(api, { log: () => {} });
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "success"]]);
 });
 
 test("a failed read blocks that commit, the rest are still checked, and the run fails", async () => {
-    const clean = { context: CONTEXT, state: "success", description: "Copilot code review of aaa: approval recommended, no open issues." };
+    const clean = { context: CONTEXT, state: "success", description: "Copilot code review of aaa: approval recommended, no open issues.", creator: ACTIONS_BOT_USER };
     const api = fakeApi({
         "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }],
         "pulls/1": pull(1, "aaa"),
@@ -128,7 +119,7 @@ test("a failed read blocks that commit, the rest are still checked, and the run 
         "commits/bbb/statuses?per_page=100": [],
         "pulls/2/reviews?per_page=100": [review(overview("Approval recommended"), "bbb")],
     });
-    await assert.rejects(run(api, "schedule", {}, { log: () => {} }), /CCR gate failed for #1: unexpected request: pulls\/1\/reviews/);
+    await assert.rejects(run(api, { log: () => {} }), /CCR gate failed for #1: unexpected request: pulls\/1\/reviews/);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"], ["bbb", "success"]]);
     assert.match(api.posted[0].description, /^Could not check Copilot code review/);
 });

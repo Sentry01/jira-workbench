@@ -8,7 +8,12 @@ name: ccr gate
 #
 # A new push gets no status until the gate posts one, so a required CCR gate blocks the new head
 # from the moment it is pushed. Copilot's own review events need manual approval to run workflows,
-# so the schedule picks up new reviews; pushes are also checked at once.
+# so the schedule picks up new reviews; pull request events also start a check at once.
+#
+# Every run checks every open pull request, one run at a time: pull requests can share a head
+# commit, and a status belongs to the commit. A newer pending run replaces an older one, so the
+# last status posted always comes from the latest read. The stack gate re-evaluates stacks after
+# each run.
 #
 # pull_request_target runs with a write token, so this workflow never checks out or runs pull
 # request code. It checks out the default branch for .github/scripts alone and reads the pull
@@ -19,16 +24,11 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
-    inputs:
-      pull_request:
-        description: Pull request number to check; empty checks every open pull request
-        required: false
-        type: string
 
 permissions: {}
 
 concurrency:
-  group: ccr-gate-${{ github.event.pull_request.number || inputs.pull_request || 'sweep' }}
+  group: ccr-gate
   cancel-in-progress: false
 
 jobs:
@@ -54,4 +54,3 @@ jobs:
         run: node .github/scripts/ccr-gate.mjs
         env:
           GH_TOKEN: ${{ github.token }}
-          PULL_REQUEST: ${{ inputs.pull_request }}

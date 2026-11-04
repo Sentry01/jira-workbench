@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    CONTEXT, changesRequestedBy, checkStates, evaluateStack, memberProblems, requiredChecks, resolve, unresolvedThreads, verdict,
+    ACTIONS_BOT, CONTEXT, changesRequestedBy, checkStates, evaluateStack, memberProblems, requiredChecks, resolve, unresolvedThreads, verdict,
 } from "./stack-gate.mjs";
 
 const ACTIONS = 15368;
+const ACTIONS_BOT_USER = { id: ACTIONS_BOT, login: "github-actions[bot]" };
 const protectedBranch = (...contexts) => ({
     protected: true,
     protection: { enabled: true, required_status_checks: { contexts, checks: contexts.map(context => ({ context, app_id: ACTIONS })) } },
@@ -214,11 +215,22 @@ test("unresolved threads are counted across every page", async () => {
 
 test("a status that has not changed is not posted again", async () => {
     const responses = stackResponses([[19, "aaa", [run("Tests", "success")]], [20, "bbb", [run("Tests", "success")]]]);
-    const ready = { context: CONTEXT, state: "success", description: "All 2 open pull requests in stack #26 are ready." };
+    const ready = { context: CONTEXT, state: "success", description: "All 2 open pull requests in stack #26 are ready.", creator: ACTIONS_BOT_USER };
     responses["commits/aaa/statuses?per_page=100"] = [ready];
     const api = fakeApi(responses);
     await evaluateStack(api, 26, { log: () => {} });
     assert.deepEqual(api.posted.map(p => p.sha), ["bbb"]);
+});
+
+test("a matching status from anyone but github-actions[bot] does not stop the gate from posting", async () => {
+    const responses = stackResponses([[19, "aaa", [run("Tests", "failure")]]]);
+    responses["commits/aaa/statuses?per_page=100"] = [
+        { context: CONTEXT, state: "failure", description: "Stack #26 not ready: #19 (checks failing)", creator: { id: 1, login: "someone" } },
+        { context: CONTEXT, state: "success", description: "The open pull request in stack #26 is ready.", creator: ACTIONS_BOT_USER },
+    ];
+    const api = fakeApi(responses);
+    await evaluateStack(api, 26, { log: () => {} });
+    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"]]);
 });
 
 test("merged and closed members are skipped, and get no status", async () => {
@@ -309,7 +321,7 @@ test("the schedule sweeps every open pull request", async () => {
         "stacks?pull_request=15": [],
         "stacks?pull_request=16": [],
         "commits/ddd/statuses?per_page=100": [],
-        "commits/eee/statuses?per_page=100": [{ context: CONTEXT, state: "success", description: "Not in a stack." }],
+        "commits/eee/statuses?per_page=100": [{ context: CONTEXT, state: "success", description: "Not in a stack.", creator: ACTIONS_BOT_USER }],
     });
     assert.deepEqual(await resolve(api, "schedule", {}, { log: () => {} }), [26]);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["ddd", "success"]]);
@@ -319,4 +331,11 @@ test("a manual run without a number sweeps, and rejects anything but a number", 
     const api = fakeApi({ "pulls?state=open&per_page=100": [pull(19, "aaa", { stack: { number: 26 } })] });
     assert.deepEqual(await resolve(api, "workflow_dispatch", {}, { input: "", log: () => {} }), [26]);
     await assert.rejects(resolve(api, "workflow_dispatch", {}, { input: "22; true", log: () => {} }), /not a pull request number/);
+});
+
+test("a finished CCR gate run sweeps every open pull request; its other activity is ignored", async () => {
+    const api = fakeApi({ "pulls?state=open&per_page=100": [pull(19, "aaa", { stack: { number: 26 } })] });
+    const event = action => ({ action, workflow_run: { path: ".github/workflows/ccr-gate.yml", head_sha: "main", pull_requests: [] } });
+    assert.deepEqual(await resolve(api, "workflow_run", event("completed"), { log: () => {} }), [26]);
+    assert.deepEqual(await resolve(api, "workflow_run", event("requested"), { log: () => {} }), []);
 });
