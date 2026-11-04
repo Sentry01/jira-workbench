@@ -47,8 +47,9 @@ function mergeSession(live, record) {
 }
 
 // Applies one observed trace to the latest persisted state without regressing a newer concurrent observation.
-// observed: the IDs of sessions this trace actually read (not skipped or failed).
-function mergeTrace(current, { scope, previous, next, stamp, source, observed = [] }) {
+// observed: the IDs of sessions this trace actually read (not skipped or failed); skipped: the IDs a poll did not ask
+// about, whose persisted record is kept as it is now, since another refresh may have read them meanwhile.
+function mergeTrace(current, { scope, previous, next, stamp, source, observed = [], skipped = [] }) {
     const link = current.links[scope] || previous;
     const newer = name => Date.parse(link.sourceStatus?.[name]?.fetchedAt || "") > Date.parse(stamp);
     const applySessions = source !== "github" && !newer("sessions");
@@ -61,7 +62,10 @@ function mergeTrace(current, { scope, previous, next, stamp, source, observed = 
         sourceStatus.github = next.sourceStatus.github;
     // A newer sessions source can come from a poll that skipped a session confirmed missing. It did not observe that
     // session, so this trace's own observation of it still applies unless the session was read after this trace began.
-    const sessions = applySessions ? next.sessions.map(record => mergeSession(link.sessions.find(s => s.id === record.id), record))
+    const sessions = applySessions ? next.sessions.map(record => {
+        const live = link.sessions.find(s => s.id === record.id);
+        return skipped.includes(record.id) && live ? live : mergeSession(live, record);
+    })
         : source === "github" ? link.sessions : link.sessions.map(live => {
             const record = observed.includes(live.id) && next.sessions.find(s => s.id === live.id);
             return record && !(Date.parse(live.verifiedAt || "") > Date.parse(stamp)) ? mergeSession(live, record) : live;
@@ -184,10 +188,10 @@ export class Trace {
         if (statusError) next.errors.push(`Live session activity unavailable: ${statusError}`);
         let sessionError = statusError, githubError = null;
         const observations = await mapLimit(previous.sessions, 4, async stored => {
-            const result = { stored, record: stored, observed: false, read: false, pr: null, error: null };
+            const result = { stored, record: stored, observed: false, read: false, skipped: false, pr: null, error: null };
             // Polls stop asking about a session confirmed missing; an explicit refresh still checks it.
             if (poll && stored.activity === "missing" && stored.missingPolls >= MISSING_POLLS) {
-                result.observed = true;
+                result.observed = result.skipped = true;
                 return result;
             }
             if (source !== "github") {
@@ -243,6 +247,7 @@ export class Trace {
         });
         if (source !== "github") next.sourceStatus.sessions = { state: sessionError ? "stale" : "fresh", fetchedAt: stamp, error: sessionError };
         if (source !== "sessions") next.sourceStatus.github = { state: githubError ? "stale" : "fresh", fetchedAt: stamp, error: githubError };
-        return { scope, previous, next, stamp, source, observed: observations.filter(o => o.read).map(o => o.stored.id) };
+        return { scope, previous, next, stamp, source, observed: observations.filter(o => o.read).map(o => o.stored.id),
+            skipped: observations.filter(o => o.skipped).map(o => o.stored.id) };
     }
 }

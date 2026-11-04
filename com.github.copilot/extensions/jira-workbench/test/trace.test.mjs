@@ -400,3 +400,43 @@ test("Review PR opens the native PR view when the session that created it was de
     await workbench.openPr({ nodeId: "2", repo: "example/demo", number: 9 });
     assert.deepEqual(calls, ["native PR view"]);
 });
+
+// Review thread: a poll that skipped a missing session and finishes last must not overwrite the restored record.
+test("a poll that skipped a missing session and finishes last keeps a refresh's restored record", async t => {
+    const { workbench, store, gateway } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [
+            { id: "session-1", name: "Restored", activity: "missing", missingSince: "2026-01-01T00:00:00.000Z", missingPolls: 3,
+                verifiedAt: "2026-01-01T00:00:00.000Z", projectId: copilot.id },
+            { id: "session-2", name: "Sibling", activity: "idle", projectId: copilot.id },
+        ] };
+    });
+    const original = gateway.call, gates = [];
+    let arrived = () => {};
+    // Every read of the sibling waits for the test to release it, in order.
+    gateway.call = async (name, args) => {
+        if (name === "get_session" && args.project_session_id === "session-2") {
+            await new Promise(resolve => { gates.push(resolve); arrived(); });
+        }
+        return original(name, args);
+    };
+    const waitFor = count => new Promise(resolve => {
+        arrived = () => gates.length >= count && resolve();
+        arrived();
+    });
+    const refreshing = workbench.refreshTrace("2");
+    await waitFor(1);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const polling = workbench.refreshExecution({ source: "sessions", poll: true });
+    await waitFor(2);
+    gates[0]();
+    await refreshing;
+    assert.equal((await store.read()).links[scope].sessions.find(s => s.id === "session-1").activity, "idle", "the refresh restored it");
+    gates[1]();
+    await polling;
+    const restored = (await store.read()).links[scope].sessions.find(s => s.id === "session-1");
+    assert.equal(restored.activity, "idle", "the poll that only skipped it does not undo the refresh");
+    assert.equal(restored.missingPolls, undefined);
+});
