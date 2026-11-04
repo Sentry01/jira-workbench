@@ -136,7 +136,9 @@ async function loadMoreAction(context) {
     const version = ++snapshotVersion;
     const snapshot = await api("load-more", {});
     if (!context.current()) return { status: "superseded" };
+    // A read started after this one (an action's refresh) owns the panel; read again so the page still shows.
     if (version === snapshotVersion) acceptSnapshot(snapshot);
+    else await sync(context.epoch);
     // The server reports what this request did, even if a later refresh has since replaced the working set.
     if (snapshot.pageResult?.status === "superseded") return { status: "superseded" };
     if (snapshot.pageResult?.error) throw new Error(snapshot.pageResult.error);
@@ -1553,7 +1555,7 @@ for (const id of ["tree", "inspector-content"]) $(id).addEventListener("focusout
 function pollingPaused() {
     return document.hidden || selecting || $("launch-dialog").open || $("sync-dialog").open || reviewing || launching ||
         [...actions.values()].some(action => action.scope === state.scope && action.status === "pending" &&
-            ["prepare", "launch", "trace", "refresh-jira", "refresh-execution"].includes(action.kind));
+            ["prepare", "launch", "trace", "refresh-jira", "refresh-execution", "load-more"].includes(action.kind));
 }
 let lastSessionPoll = 0;
 async function poll() {

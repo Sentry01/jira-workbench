@@ -103,7 +103,7 @@ recovery the server made in milliseconds took 5s to appear.
 Exercises explicit JQL and saved-filter application, persisted scope, one-page
 initial loading, real cursor continuation, failed-page retention and retry,
 cross-project Feature and Portfolio Epic context and its accessible labels, scope
-isolation, per-generation **Load more**, loaded-count labels and linked work kept
+isolation, per-generation **Load more** (a background poll never drops a pending page), loaded-count labels and linked work kept
 outside the loaded pages.
 It writes `scoped-loading.png` from synthetic
 data only. No real service is contacted.
