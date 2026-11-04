@@ -29,7 +29,7 @@ column.
 | Feature | Description |
 | --- | --- |
 | **Execution queue** | Work is grouped into *Needs me*, *Running*, *PRs to review* and *Available to start*. An issue still in "To Do" with an active session appears under *Running*. |
-| **Launch from an issue** | One click turns a Jira issue into an editable, hash-verified brief. Missing acceptance criteria and unresolved blockers are shown as warnings you must acknowledge before implementation starts. |
+| **Launch from an issue** | One click turns a Jira issue into an editable, hash-verified brief. Missing acceptance criteria, unresolved blockers and hidden characters in the Jira text are shown as warnings you must acknowledge before implementation starts. |
 | **Traceability** | Each issue links to its sessions, branches, pull requests and checks, with the evidence for every link. Links are never inferred from similar titles or branch names. |
 | **Hierarchy view** | Epics, stories and subtasks by Jira parent link, with status and sprint filters. Missing parents stay visible, and parent cycles are reported. |
 | **Bounded working scope** | Apply JQL or a saved Jira filter within your project. Read 100 items at a time, most recently updated first, with **Load more**, and keep referenced cross-project ancestors as context. Issues with linked sessions, PRs or pending requests always stay in view. **Search loaded items** stays local. |

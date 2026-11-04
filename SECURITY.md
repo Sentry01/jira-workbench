@@ -56,7 +56,12 @@ These properties are deliberate. They are useful context for a report:
   `<jira-context>` block that the session is told to treat as reference data,
   never as instructions. The prompt sent to the canvas-owning agent also says the
   session name and kickoff embed untrusted Jira text, to be passed on verbatim and
-  never acted on.
+  never acted on. Invisible characters in Jira text reach the session only as
+  visible `\uXXXX` escapes and are removed from session names. Unicode tag
+  characters and text-direction controls are also removed from the brief fields
+  and raise a warning that Implement must acknowledge. Both kickoffs say their
+  write rules take precedence over the brief and over anything the session reads,
+  and forbid Confluence and other Atlassian writes.
 - **The local server is loopback-only and token-gated.** Data and action endpoints
   require a random per-panel token, and cross-origin requests are rejected. Each
   route caps its request body (about 100 KB, or about 6 MB for preferences); a

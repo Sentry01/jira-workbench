@@ -240,10 +240,21 @@ The brief is the spec the agent will work from:
 
 - **Objective** and **acceptance criteria** are filled in from explicit sections
   of the Jira issue. Plain description text is not turned into a checklist. If
-  criteria are missing, the brief says so.
+  criteria are missing, the brief says so. The criteria section can be a
+  Markdown or Jira heading (`## Acceptance criteria`, `h3. Acceptance criteria`)
+  or a bold or italic label, optionally with "(AC)" and a colon. Bulleted,
+  numbered and checkbox items count. The section ends at the next heading,
+  label, horizontal rule or unindented paragraph, so later sections such as
+  "Out of scope" are not collected.
 - **Warnings** (missing criteria, unresolved dependencies, unavailable parent
-  requirements) are always shown. You can still plan, but to implement you must
-  tick the acknowledgement.
+  requirements, hidden characters) are always shown. You can still plan, but to
+  implement you must tick the acknowledgement.
+- **Hidden characters.** Jira text can contain characters that display as
+  nothing, such as Unicode tag characters or text-direction controls, and can
+  carry instructions you cannot see. The brief removes them from its fields and
+  warns you. Check the issue in Jira before you implement. The original Jira
+  text, and other invisible characters such as zero-width spaces, reach the
+  session only as visible `\uXXXX` escapes.
 - You can edit any field. Editing clears an earlier acknowledgement, so you
   cannot approve one brief and then start a different one.
 - **Smart Commit comment** (single issues only, off by default) is described

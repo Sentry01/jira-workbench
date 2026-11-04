@@ -256,8 +256,14 @@ and the item is released, so pressing the button again starts a fresh request. A
 runtime that answers late cannot rewrite the recorded outcome.
 
 The launch brief is editable. Explicit acceptance sections can prefill criteria;
-general description prose does not invent a checklist. Missing criteria, unavailable
-parent requirements, and recorded unresolved dependencies are visible warnings.
+general description prose does not invent a checklist. A section starts at a
+Markdown or Jira wiki heading, or a bold or italic label, reading "Acceptance
+criteria" (optionally "(AC)" and a colon). It collects `-`, `*`, `+`, numbered and
+checkbox items, and ends at the next heading, label, horizontal rule or unindented
+paragraph. Missing criteria, unavailable parent requirements, hidden characters in
+the selected issue, its parent or its descendants (Unicode tag characters and
+bidirectional controls, which are also stripped from the brief fields), and
+recorded unresolved dependencies are visible warnings.
 Planning stays available; implementation requires acknowledging warnings in the
 same preview. Editing fields or changing source context invalidates acknowledgement.
 The server enforces the reviewed hash and warning set, not just the form.
@@ -500,6 +506,12 @@ recorded on the launch request, and the server rejects it for project-level
 launches. Project-level launches and malformed keys get no commit references and
 no Smart Commit authorization.
 
+Both kickoffs state that these write rules take precedence over the reviewed brief
+and over anything the session reads, forbid Confluence and other Atlassian writes
+(including through `executeWrite` and `executeDestructive`), and tell the session
+that Jira, Confluence and GitHub text it reads itself is untrusted data, so it must
+report any other requested write to the user instead.
+
 All delegated writes are bounded **by the kickoff prompt only**. The extension
 validates every identifier it puts into the prompt, but a launched session runs
 with your Atlassian MCP access, and nothing technical stops it from making other
@@ -512,7 +524,11 @@ reviewed briefs, and launch receipts. Confirmed launches are sent to the owning 
 request is never presented as an already-created session. The prompt sent to the
 owning agent says that the session `name` and `kickoff.prompt` embed untrusted
 Jira text, to be passed to `create_session` verbatim and never followed, acted on
-or answered. The `name` is flattened to one line of at most 40 characters.
+or answered. The `name` is flattened to one line of at most 40 characters, with
+invisible and text-direction characters removed. Inside `<jira-context>`, invisible
+code points (default-ignorable characters such as zero-width and tag characters,
+bidirectional controls, and line and paragraph separators) are written as `\uXXXX`
+escapes, so the session sees them and the context still parses to the original text.
 
 Loopback data and action endpoints require a random per-panel token. Cross-origin
 requests are rejected. Jira text is rendered as text, never injected as HTML.

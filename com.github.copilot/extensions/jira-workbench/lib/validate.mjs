@@ -7,6 +7,14 @@ export const CLOUD_ID = /^[\w-]{1,100}$/;
 export const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,49}$/;
 export const PROJECT_ID = /^\d{1,18}$/;
 
+// Code points that render as nothing: default-ignorables (zero-width, tag characters, variation selectors), bidi
+// controls and the line and paragraph separators. Escaped wherever Jira text reaches a prompt.
+export const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/gu;
+// Unicode tag characters and bidi controls have no place in issue text; they can hide or reorder instructions.
+// Narrow on purpose, so emoji variation selectors, ZWJ sequences and ZWNJ in Persian or Indic text stay intact.
+export const HIDDEN = /[\u{E0000}-\u{E007F}\p{Bidi_Control}]/gu;
+export const hasHidden = value => typeof value === "string" && value.search(HIDDEN) >= 0;
+
 const valid = (pattern, value) => typeof value === "string" && pattern.test(value);
 const enforce = (pattern, value, message) => {
     if (!valid(pattern, value)) throw new Error(message);
@@ -15,14 +23,7 @@ const enforce = (pattern, value, message) => {
 
 export const isRepo = value => valid(REPO, value);
 export const isSessionId = value => valid(SESSION_ID, value);
-export const isIssueKey = value => valid(ISSUE_KEY, value);
 export const isCloudId = value => valid(CLOUD_ID, value);
-export const isProjectKey = value => valid(PROJECT_KEY, value);
-export const isProjectId = value => valid(PROJECT_ID, value);
 
 export const assertRepo = (value, message = "A valid GitHub repository in owner/repo form is required.") => enforce(REPO, value, message);
 export const assertSessionId = (value, message = "A valid app session ID is required.") => enforce(SESSION_ID, value, message);
-export const assertIssueKey = (value, message = "A valid Jira issue key is required.") => enforce(ISSUE_KEY, value, message);
-export const assertCloudId = (value, message = "A valid Jira site ID is required.") => enforce(CLOUD_ID, value, message);
-export const assertProjectKey = (value, message = "A valid Jira project key is required.") => enforce(PROJECT_KEY, value, message);
-export const assertProjectId = (value, message = "A valid Jira project ID is required.") => enforce(PROJECT_ID, value, message);
