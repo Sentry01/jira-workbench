@@ -63,6 +63,8 @@ export class Launches {
         this.workbench = workbench;
         this.sendTimeoutMs = SEND_TIMEOUT_MS;
         this.syncRejections = new Map();
+        // Unknown send outcomes not yet saved (the state write failed), by request ID, shown until saved or resolved.
+        this.sendErrors = new Map();
     }
     makeBrief(node, mode, fields, mapping, smartCommitComment = false) {
         const wb = this.workbench;
@@ -102,12 +104,24 @@ export class Launches {
         catch (error) {
             const status = error?.status === 504 ? 504 : 502;
             const cause = status === 504 ? error.message : `Copilot reported an error after the prompt was sent (${String(error?.message || error).slice(0, 300)})`;
+            this.sendErrors.set(requestId, cause);
             await wb.commit(data => {
                 const request = Object.hasOwn(data.requests, requestId) ? data.requests[requestId] : null;
                 if (request?.status === "queued") request.sendError = cause;
-            }).catch(() => {});
+            }).then(() => this.sendErrors.delete(requestId), () => {});
             throw Object.assign(new Error(cause), { status, outcome: "unknown", requestId });
         } finally { clearTimeout(timer); }
+    }
+    // A stored request as the panel should see it: with its unsaved unknown send outcome, until a claim, a receipt,
+    // a failure or a clear resolves it, or a later write saves it.
+    withSendError(request) {
+        const cause = this.sendErrors.get(request?.requestId);
+        if (cause === undefined) return request;
+        if (request.status !== "queued" || request.claimedAt || request.sendError) {
+            this.sendErrors.delete(request.requestId);
+            return request;
+        }
+        return { ...request, sendError: cause };
     }
     async prepare({ nodeId, mode, fields, smartCommitComment = false }) {
         const wb = this.workbench;

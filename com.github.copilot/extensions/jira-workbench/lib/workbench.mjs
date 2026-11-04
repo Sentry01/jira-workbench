@@ -372,7 +372,7 @@ export class Workbench {
         const prefix = this.site && this.project ? `${[this.site.id, this.project.id].map(encodeURIComponent).join("/")}/` : null;
         const links = prefix ? Object.fromEntries(Object.entries(data.links).filter(([key]) => key.startsWith(prefix))
             .map(([key, link]) => [key, withStamps(link, this.trace.stamps.get(key))])) : {};
-        const requests = prefix ? Object.values(data.requests).filter(r => r.scope.startsWith(prefix)) : [];
+        const requests = prefix ? Object.values(data.requests).filter(r => r.scope.startsWith(prefix)).map(r => this.launches.withSendError(r)) : [];
         const mapping = this.site && this.project ? data.mappings[this.selectedScope()] || null : null;
         const executionNodes = this.issues.filter(issue => !issue.contextOnly);
         if (this.site && this.project && (links[this.selectedScope()]?.sessions.length || requests.some(r => r.nodeId === "project")))

@@ -330,7 +330,9 @@ retry was sent), refused, or superseded.
   is bounded at 30 seconds. A rejection does not prove the host refused the prompt
   (it can enqueue it and then lose the reply), so a rejection or a timeout keeps
   the request queued with a `sendError`, answers HTTP 502 or 504, and nothing is
-  retried. The panel shows "Launch outcome unknown ... No retry was sent." and
+  retried. If saving the `sendError` fails (for example, another process holds
+  the state lock), the panel's state still carries it from memory until a claim,
+  a receipt, a failure or a clear resolves the request. The panel shows "Launch outcome unknown ... No retry was sent." and
   offers **Clear stuck request**. A late receipt still attaches; once cleared, the
   prompt's claim is refused. The panel also stops waiting for `/api/launch` and
   `/api/sync-jira` after 45 seconds. Error responses carry the `requestId`, and

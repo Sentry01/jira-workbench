@@ -742,3 +742,31 @@ test("an Update Jira rejected before it is queued is remembered by its client ID
     await assert.rejects(workbench.syncJira({ clientId: "client-2" }), /after the prompt was sent/);
     assert.deepEqual((await workbench.snapshot()).syncRejections.map(r => r.clientId), ["client-1"]);
 });
+
+test("an unknown send outcome stays visible when saving it fails, until a claim or receipt resolves it", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const commit = workbench.commit.bind(workbench);
+    workbench.send = async value => {
+        sent.push(value);
+        // Another process holds the state lock when the outcome is saved.
+        workbench.commit = async () => { throw new Error("State is locked by process 4242."); };
+        throw new Error("connection disposed");
+    };
+    const error = await launchIssue(workbench).catch(caught => caught);
+    workbench.commit = commit;
+    assert.equal(error.status, 502);
+    const stored = (await store.read()).requests[error.requestId];
+    assert.equal(stored.status, "queued");
+    assert.equal(stored.sendError, undefined, "the save failed");
+    const snapshot = await workbench.snapshot();
+    assert.match(snapshot.requests.find(r => r.requestId === error.requestId).sendError, /after the prompt was sent/);
+    const execution = snapshot.executions.find(e => e.nodeId === "2");
+    assert.ok(execution.signals.some(s => s.kind === "request_unknown"));
+    assert.deepEqual(execution.primary, { kind: "clear_request", label: "Clear stuck request", requestId: error.requestId });
+    // The agent did receive it: its claim resolves the uncertainty.
+    assert.equal((await workbench.claimRequest({ requestId: error.requestId })).status, "claimed");
+    const claimed = await workbench.snapshot();
+    assert.equal(claimed.requests.find(r => r.requestId === error.requestId).sendError, undefined);
+    assert.ok(claimed.executions.find(e => e.nodeId === "2").signals.some(s => s.kind === "request_queued"));
+});
