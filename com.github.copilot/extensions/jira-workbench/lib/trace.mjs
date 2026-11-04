@@ -111,8 +111,10 @@ export function withStamps(link, stamps) {
     return { ...link, sourceStatus, verifiedAt: later(stamps.verifiedAt, link.verifiedAt || null) || null };
 }
 
-// A session record that names its branch and PR needs no get_session: its live state comes from get_sessions_status.
+// A session record that names its branch and PR needs no get_session: its live state comes from get_sessions_status,
+// provided the listing reports an activity; without one, only get_session can say what the session is doing.
 function complete(stored, status) {
+    if (typeof status.activity?.status !== "string" || !status.activity.status) return false;
     const named = status.name || (stored.name && stored.name !== stored.id);
     const pr = (status.created_pr_number && status.created_pr_repo) || (stored.prNumber && stored.prRepo);
     return Boolean(named && (status.branch || stored.branch) && pr);

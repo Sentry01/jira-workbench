@@ -461,7 +461,8 @@ refresh, and session polling skips projects with no linked sessions.
 
 Session polling reads live state from one `get_sessions_status` call. A linked
 session is read in full with `get_session` only when it is missing from that
-list, when its stored record has no name, branch or PR yet, or once a minute.
+list or listed without an activity, when its stored record has no name, branch or
+PR yet, or once a minute.
 **Refresh**, **Refresh live state** and **Refresh Sessions** read every linked
 session in full. A session the host reports as deleted is no longer read by polls
 once it is confirmed missing. A poll that observes nothing new does not write

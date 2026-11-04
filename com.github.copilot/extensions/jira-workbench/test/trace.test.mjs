@@ -669,3 +669,26 @@ test("an explicit Refresh Sessions reads every linked session in full; backgroun
     await workbench.refreshExecution({ source: "sessions" });
     assert.equal(counts.get_session, 300);
 });
+
+// Copilot review on #18: a listing without activity must not turn a known activity into "unknown".
+test("a poll reads a session in full when the status list gives it no activity", async t => {
+    const { workbench, counts, store } = await linkedProject(t);
+    const scope = "cloud-demo/42/100";
+    const original = workbench.gateway.call;
+    workbench.gateway.call = async (name, args) => {
+        const result = await original(name, args);
+        if (name === "get_sessions_status")
+            return { sessions: result.sessions.map(s => s.id === "s-100-0" ? { id: s.id, awaiting_user_input: true, awaiting_input: { question: "Which?", choices: ["A"], request_id: "q-1" } } : s) };
+        if (name === "get_session" && args.project_session_id === "s-100-0") return { ...result, activity: { status: "idle" } };
+        return result;
+    };
+    await workbench.refreshExecution({ source: "all" });
+    counts.get_session = 0;
+    for (let poll = 0; poll < 2; poll++) await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal(counts.get_session, 2, "only the session listed without activity, once per poll");
+    const session = (await store.read()).links[scope].sessions[0];
+    assert.equal(session.activity, "idle");
+    assert.equal(session.awaitingInput.question, "Which?");
+    const execution = (await workbench.snapshot()).executions.find(e => e.nodeId === "100");
+    assert.equal(execution.primary?.label, "Answer question");
+});
