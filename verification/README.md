@@ -58,8 +58,10 @@ keyboard focus, the freshness dots, and the narrow layout.
 
 It then runs the WCAG 2.2 AA checks in [`accessibility.mjs`](accessibility.mjs): no
 change to the `role="alert"` banner over 5 seconds while reconnecting, text contrast
-of at least 4.5:1 for status badges, type icons and unverified progress steps in
-light and emulated dark themes, input borders of at least 3:1 and a non-color
+of at least 4.5:1 for status badges, type icons and unverified progress steps
+with the panel's own fallback colors and with the GitHub Copilot app's default
+light and dark theme values (see the comment in `accessibility.mjs` for their
+source), input borders of at least 3:1 and a non-color
 pressed state, 24 by 24 px targets in the list, one tab stop for the list and a
 skip link, ArrowLeft keeping the parent row in view, freshness details that can be
 hovered and dismissed with Escape, notices added without rebuilding the others,

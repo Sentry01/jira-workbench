@@ -4,12 +4,23 @@
 // tab stop for every row control.
 import assert from "node:assert/strict";
 
-// Stand-ins for the host's dark theme tokens (GitHub Primer dark). The real values are not in this repository.
-// --true-color-purple is left unset on purpose, so the hard-coded fallback hue is checked too.
-const DARK_TOKENS = {
-    "--background-color-default": "#0d1117", "--text-color-default": "#e6edf3", "--text-color-muted": "#9198a1",
+// The host injects its canvas theme contract at runtime, from the theme the user picked, so there is no single fixed
+// set of values. The semantic values below are the GitHub Copilot app's own standalone light and dark defaults
+// (Primer), as shipped in GitHub.app 1.1.35 (Contents/Resources/app-extensions/azure-devops/pull-request.css, "Standalone
+// GitHub light/dark defaults"). The app ships no static --true-color-* values; blue, green and red use the same
+// defaults' accent, success and danger text colors. The contract has no --true-color-purple, so the panel always uses
+// its #8250df fallback, and it is left unset here.
+const HOST_LIGHT_TOKENS = {
+    "--background-color-default": "#ffffff", "--text-color-default": "#1f2328", "--text-color-muted": "#59636e",
+    "--border-color-default": "#d1d9e0", "--true-color-blue": "#0969da", "--true-color-green": "#1a7f37", "--true-color-red": "#d1242f",
+};
+const HOST_DARK_TOKENS = {
+    "--background-color-default": "#0d1117", "--text-color-default": "#f0f6fc", "--text-color-muted": "#9198a1",
     "--border-color-default": "#3d444d", "--true-color-blue": "#4493f8", "--true-color-green": "#3fb950", "--true-color-red": "#f85149",
 };
+// Set through the CSSOM: the panel's CSP blocks injected style elements.
+const setTokens = (page, tokens) => page.evaluate(values => { for (const [name, value] of Object.entries(values)) document.documentElement.style.setProperty(name, value); }, tokens);
+const clearTokens = (page, tokens) => page.evaluate(values => { for (const name of Object.keys(values)) document.documentElement.style.removeProperty(name); }, tokens);
 
 // Elements whose text carries status, rendered once as probes so every state is measured whatever the data shows.
 const PROBES = `
@@ -107,16 +118,20 @@ async function reconnecting(page, workbench) {
         }));
         assert.equal(mutations, 0, "the role=alert region is not rewritten while reconnecting");
         // Contrast, while the stale Jira data shows unverified progress steps.
-        const light = await contrast(page, "light");
+        // First with the panel's own fallbacks (no host tokens), then with the host's light and dark defaults.
+        const fallback = await contrast(page, "light fallbacks");
+        await setTokens(page, HOST_LIGHT_TOKENS);
+        const light = await contrast(page, "host light");
+        await clearTokens(page, HOST_LIGHT_TOKENS);
         await page.emulateMedia({ colorScheme: "dark" });
-        // Set through the CSSOM: the panel's CSP blocks injected style elements.
-        await page.evaluate(tokens => { for (const [name, value] of Object.entries(tokens)) document.documentElement.style.setProperty(name, value); }, DARK_TOKENS);
-        const dark = await contrast(page, "dark");
-        assert.ok(light > 10 && dark > 10, "status text was measured");
+        await setTokens(page, HOST_DARK_TOKENS);
+        const dark = await contrast(page, "host dark");
+        assert.ok(fallback > 10 && light > 10 && dark > 10, "status text was measured");
     } finally {
         workbench.connection = connection;
         workbench.error = null;
-        await page.evaluate(tokens => { for (const name of Object.keys(tokens)) document.documentElement.style.removeProperty(name); }, DARK_TOKENS);
+        await clearTokens(page, HOST_LIGHT_TOKENS);
+        await clearTokens(page, HOST_DARK_TOKENS);
         await page.emulateMedia({ colorScheme: "light" });
     }
     await page.waitForFunction(() => document.getElementById("errors").hidden && document.getElementById("retry-time").hidden);
