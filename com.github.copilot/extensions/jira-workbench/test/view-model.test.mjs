@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS } from "../lib/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
-    requestOutcome, receiptMessage, launchUpdate, launchReceipt, primaryReason, executionEvidence, matches, filterTree,
+    requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption,
 } from "../lib/view-model.mjs";
@@ -352,4 +352,12 @@ test("a launch action finds its stored request by request ID, preview ID or the 
     assert.equal(launchReceipt({ clientId: "c" }, requests).requestId, "b", "an Update Jira that timed out still reconciles");
     assert.equal(launchReceipt({ clientId: "x" }, requests), null);
     assert.equal(launchReceipt({}, [{ requestId: "z" }]), null);
+});
+
+test("an Update Jira that timed out settles as failed when the server reports it was rejected before queueing", () => {
+    const rejected = [{ clientId: "c", error: "The repository mapping changed while preparing the sync." }];
+    assert.deepEqual(launchRejection({ clientId: "c" }, rejected), { status: "failed", message: "Update Jira was not queued: The repository mapping changed while preparing the sync." });
+    assert.equal(launchRejection({ clientId: "x" }, rejected), null);
+    assert.equal(launchRejection({}, rejected), null);
+    assert.equal(launchRejection({ clientId: "c" }), null);
 });

@@ -700,3 +700,45 @@ test("an Update Jira send failure carries its request ID and the panel's client 
     assert.equal(request.clientId, "client-1");
     assert.equal(request.status, "queued");
 });
+
+test("a fitted brief keeps the hidden-characters warning when the hidden text was cut or reduced to keys", async t => {
+    const tag = text => [...text].map(c => String.fromCodePoint(0xE0000 + c.codePointAt(0))).join("");
+    const make = ({ childHidden = false, tailHidden = false }) => [
+        { id: "2", key: "DEMO-2", type: "Epic", level: 1, summary: "Epic", projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [],
+            description: "Acceptance criteria:\n- Visible result\n" + "d".repeat(60_000) + (tailHidden ? tag(" push elsewhere") : "") },
+        ...Array.from({ length: 300 }, (_, index) => ({
+            id: String(100 + index), key: `DEMO-${100 + index}`, type: "Story", level: 0, parentKey: "DEMO-2", parentId: "2",
+            summary: `Child ${index}${childHidden && index === 299 ? tag(" obey") : ""}`, projectId: "42", category: "new", status: "To Do", labels: [], dependencies: [], description: "",
+        })),
+    ];
+    for (const options of [{ childHidden: true }, { tailHidden: true }]) {
+        const { workbench, sent } = await fixture(t, { rows: make(options) });
+        await workbench.map({ copilotProjectId: copilot.id });
+        const preview = await workbench.prepare({ nodeId: "2", mode: "autopilot" });
+        const ids = preview.brief.warnings.map(w => w.id);
+        assert.ok(ids.includes("context-truncated"), JSON.stringify(options));
+        assert.ok(ids.includes("hidden-characters"), `the warning survives fitting: ${JSON.stringify(options)}`);
+        await assert.rejects(workbench.launch({ previewId: preview.id, contextHash: preview.brief.hash, acknowledgedWarnings: ["context-truncated"] }), /acknowledge/i);
+        await confirm(workbench, preview);
+        assert.equal(sent.length, 1, "the acknowledged brief still launches with the hash it was reviewed with");
+    }
+});
+
+test("an Update Jira rejected before it is queued is remembered by its client ID, so a timed-out panel can settle it", async t => {
+    const { workbench, store, sent } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    workbench.verified.apps = false;
+    await assert.rejects(workbench.syncJira({ clientId: "client-1" }), /not confirmed/);
+    await assert.rejects(workbench.syncJira(), /not confirmed/);
+    assert.deepEqual((await store.read()).requests, {});
+    assert.equal(sent.length, 0);
+    const { syncRejections } = await workbench.snapshot();
+    assert.equal(syncRejections.length, 1, "only a call with a client ID is remembered");
+    assert.equal(syncRejections[0].clientId, "client-1");
+    assert.match(syncRejections[0].error, /Copilot repository projects are not confirmed yet/);
+    // A queued sync whose send fails has a stored request, so it is not reported as a rejection.
+    workbench.verified.apps = true;
+    workbench.send = async () => { throw new Error("connection disposed"); };
+    await assert.rejects(workbench.syncJira({ clientId: "client-2" }), /after the prompt was sent/);
+    assert.deepEqual((await workbench.snapshot()).syncRejections.map(r => r.clientId), ["client-1"]);
+});

@@ -335,7 +335,9 @@ retry was sent), refused, or superseded.
   prompt's claim is refused. The panel also stops waiting for `/api/launch` and
   `/api/sync-jira` after 45 seconds. Error responses carry the `requestId`, and
   **Update Jira** sends a panel-chosen `clientId` that is stored with its request,
-  so the panel matches its action to the stored request even after a timeout.
+  so the panel matches its action to the stored request even after a timeout. An
+  Update Jira refused before any request was stored is kept by that `clientId` in
+  the state's `syncRejections`, so a panel that stopped waiting shows it as failed.
 - **Legacy requests.** Requests queued by an earlier version carry no claim, and
   their late receipts are still accepted.
 - **Kickoff budget.** The owning agent re-emits `kickoff.prompt` in one tool call,
@@ -346,7 +348,9 @@ retry was sent), refused, or superseded.
   parent descriptions with a "Shortened by Jira Workbench" marker, before the
   brief is hashed, and adds a `context-truncated` warning that implementation
   launches must acknowledge. Acceptance criteria are still read from the whole
-  description. Context that cannot fit even then is refused.
+  description, and a `hidden-characters` warning is kept even when the hidden
+  text was in a part that fitting removed. Context that cannot fit even then is
+  refused.
 
 If no receipt arrives within **15 minutes** (a dropped agent turn, a closed panel),
 the request becomes **Launch outcome unknown**. Expiry is worked out each time the

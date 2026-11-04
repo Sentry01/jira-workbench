@@ -401,6 +401,7 @@ export class Workbench {
             mapping, links, requests, executions,
             preferences: this.site && this.project ? data.preferences?.[this.selectedScope()] || {} : {},
             navigationReceipts: this.hostActions?.snapshot?.() || [],
+            syncRejections: [...this.launches.syncRejections.values()],
             fetchedAt: this.fetchedAt || null, stale: Boolean(this.error), error: this.error,
             cached: this.cached, warming: this.warming, backgroundError: this.backgroundError,
             refreshing: this.pending.size > 0 || this.executionRefreshes.size > 0,

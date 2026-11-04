@@ -8,6 +8,8 @@ const partialScope = wb => ({ filtered: wb.workingScope.kind !== "project", more
 
 // session.send has no time limit of its own; past this the launch outcome is reported as unknown.
 const SEND_TIMEOUT_MS = 30_000;
+// Update Jira calls refused before queueing, kept by the panel's client ID for this panel's lifetime.
+const SYNC_REJECTIONS_KEPT = 20;
 
 const clip = (text, limit) => text.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
 
@@ -60,6 +62,7 @@ export class Launches {
     constructor(workbench) {
         this.workbench = workbench;
         this.sendTimeoutMs = SEND_TIMEOUT_MS;
+        this.syncRejections = new Map();
     }
     makeBrief(node, mode, fields, mapping, smartCommitComment = false) {
         const wb = this.workbench;
@@ -70,17 +73,18 @@ export class Launches {
             id: "partial-context",
             message: `Only ${children.length} loaded descendant${children.length === 1 ? " is" : "s are"} included${more ? "; more scope pages remain in Jira" : ""}${filtered ? "; the working scope filters which items load" : ""}. Other child work may exist.`,
         }] : [];
-        const build = ({ children, node: selected, parent, warnings }) => createBrief({
-            node: selected, parent, children, mapping, siteUrl: wb.site.url, mode, fields,
+        const parent = issueParent(node, issueIndex(wb.issues));
+        const build = ({ children: listed, node: selected, parent: context, warnings }) => createBrief({
+            node: selected, parent: context, children: listed, mapping, siteUrl: wb.site.url, mode, fields,
             dependencyWarnings: [...partial, ...dependencyWarnings(node), ...warnings], smartCommitComment,
-            criteriaText: node.description,
+            criteriaText: node.description, hiddenIn: [node, parent, ...children],
         });
         // Measured as the launch sends it; the partial-children sentence is counted whether or not it is sent.
         const measure = brief => kickoffBytes(launchKickoff({
             cloudId: wb.site.id, jiraProjectId: wb.project.id, repo: mapping.repo, siteUrl: wb.site.url,
             node, mode, brief, smartCommitComment, partialChildren: true,
         }));
-        return fitBrief(build, measure, { node, parent: issueParent(node, issueIndex(wb.issues)), children });
+        return fitBrief(build, measure, { node, parent, children });
     }
     // Sends a launcher prompt. A rejection does not prove the host refused it (it can admit the prompt and then lose
     // the reply), and a send that never settles says nothing either, so both keep the request queued: its receipt
@@ -184,9 +188,24 @@ export class Launches {
     }
     // clientId: an ID the panel chose before calling, stored with the request so the panel can match it after a timeout.
     async syncJira({ clientId } = {}) {
-        const wb = this.workbench;
         if (clientId !== undefined && (typeof clientId !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(clientId)))
             throw new Error("The Update Jira client ID must be 1 to 64 letters, digits or hyphens.");
+        let queued;
+        try { queued = await this.queueSync(clientId); }
+        catch (error) {
+            // Refused before any request was stored. The panel may have stopped waiting already, so it settles its
+            // action from this terminal outcome instead of a stored request.
+            if (clientId) {
+                this.syncRejections.set(clientId, { clientId, error: String(error?.message || error).slice(0, 500), at: new Date().toISOString() });
+                for (const key of this.syncRejections.keys()) if (this.syncRejections.size > SYNC_REJECTIONS_KEPT) this.syncRejections.delete(key);
+            }
+            throw error;
+        }
+        await this.deliver(queued.requestId, queued.prompt);
+        return { status: "queued", requestId: queued.requestId };
+    }
+    async queueSync(clientId) {
+        const wb = this.workbench;
         // Read everything from the selected project now: an await below can outlast a project switch.
         const site = wb.site, project = wb.project, selection = wb.selections, issues = wb.issues, statuses = wb.statuses;
         if (!site || !project) throw new Error("Select a Jira project first.");
@@ -241,8 +260,7 @@ export class Launches {
                 ...(clientId ? { clientId } : {}),
             };
         });
-        await this.deliver(requestId, prompt);
-        return { status: "queued", requestId };
+        return { requestId, prompt };
     }
     async recordSession({ requestId, sessionId }) {
         const wb = this.workbench;

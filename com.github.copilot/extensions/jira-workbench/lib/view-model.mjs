@@ -117,6 +117,12 @@ export function launchReceipt(record, requests = []) {
         || (record.clientId && r.clientId === record.clientId)) || null;
 }
 
+// An Update Jira the server refused before storing a request (the panel may have timed out waiting): failed, with why.
+export function launchRejection(record, rejections = []) {
+    const rejected = record.clientId && rejections.find(r => r.clientId === record.clientId);
+    return rejected ? { status: "failed", message: `Update Jira was not queued: ${rejected.error}` } : null;
+}
+
 // What a stored request says about this panel's own launch action, or null to keep the action as it is
 // (an attached receipt whose session the trace has not shown yet).
 export function launchUpdate(receipt, { linkedSessionIds = [], now = Date.now() } = {}) {

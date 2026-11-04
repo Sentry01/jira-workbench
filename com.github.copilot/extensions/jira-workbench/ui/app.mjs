@@ -1,7 +1,7 @@
 import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } from "/model.mjs";
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
-    receiptMessage, launchUpdate, launchReceipt, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
+    receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
 } from "/view-model.mjs";
 
@@ -357,7 +357,11 @@ function reconcileReceipts() {
         if (record.scope !== state.scope || !["pending", "queued", "uncertain", "expired"].includes(record.status)) continue;
         if (record.kind === "launch") {
             const receipt = launchReceipt(record, state.requests);
-            if (!receipt) continue;
+            if (!receipt) {
+                const rejected = launchRejection(record, state.syncRejections);
+                if (rejected) Object.assign(record, rejected);
+                continue;
+            }
             record.requestId = receipt.requestId;
             const update = launchUpdate(receipt, { linkedSessionIds: nodeLinks(record.nodeId).sessions.map(session => session.id) });
             if (update) Object.assign(record, update);
