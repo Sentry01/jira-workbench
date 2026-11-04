@@ -17,23 +17,38 @@ export function issueParent(issue, index) {
     return index.get(issue.parentKey) || (issue.parentId ? index.get(`id:${issue.parentId}`) : undefined);
 }
 
-export function descendants(issues, nodeId) {
+// Each issue's direct children (in working-set order) and position, built once and shared by descendants() calls.
+export function childIndex(issues) {
+    const index = issueIndex(issues), children = new Map(), position = new Map();
+    issues.forEach((issue, at) => {
+        position.set(issue, at);
+        const parent = issueParent(issue, index);
+        if (!parent) return;
+        if (!children.has(parent.id)) children.set(parent.id, []);
+        children.get(parent.id).push(issue);
+    });
+    return { children, position };
+}
+
+// Every issue below nodeId, walking the child index (O(subtree)); a parent cycle stops at a repeat. The order is the
+// one a repeated scan of the working set produced: by scan pass, then by position. A child is found in its parent's
+// pass when it comes after the parent, otherwise in the next pass.
+export function descendants(issues, nodeId, { children, position } = childIndex(issues)) {
     if (nodeId === "project") return issues.filter(issue => !issue.contextOnly);
     const root = issues.find(issue => issue.id === nodeId);
     if (!root) return [];
-    const index = issueIndex(issues), ids = new Set([root.id]), children = [];
-    for (let pass = 0; pass < issues.length; pass++) {
-        let added = false;
-        for (const child of issues) {
-            if (!ids.has(child.id) && ids.has(issueParent(child, index)?.id)) {
-                ids.add(child.id);
-                children.push(child);
-                added = true;
-            }
+    const ids = new Set([root.id]), found = [], pass = new Map([[root, 0]]), queue = [root];
+    for (let next = 0; next < queue.length; next++) {
+        const parent = queue[next];
+        for (const child of children.get(parent.id) || []) {
+            if (ids.has(child.id)) continue;
+            ids.add(child.id);
+            pass.set(child, parent === root ? 0 : pass.get(parent) + (position.get(parent) < position.get(child) ? 0 : 1));
+            found.push(child);
+            queue.push(child);
         }
-        if (!added) break;
     }
-    return children;
+    return found.sort((a, b) => pass.get(a) - pass.get(b) || position.get(a) - position.get(b));
 }
 
 // Custom field IDs differ per Jira site. v1 returns them under their raw ID; v2 maps each to

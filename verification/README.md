@@ -1,7 +1,7 @@
 # Verification harnesses
 
 Browser checks that run the real canvas UI. They are development tools and are not
-installed with the extension. There are five harnesses:
+installed with the extension. There are six harnesses:
 
 | Harness | Runs against | In CI |
 | --- | --- | --- |
@@ -9,9 +9,10 @@ installed with the extension. There are five harnesses:
 | [`verify-reconnect.mjs`](#verify-reconnectmjs-mcp-connection-resilience) | A behavioral model of the MCP runtime | Yes |
 | [`verify-scope.mjs`](#verify-scopemjs-bounded-scopes-and-context) | Synthetic scoped Jira pages and cross-project parents | Yes |
 | [`verify-poll.mjs`](#verify-pollmjs-unchanged-polls) | 300 synthetic issues with linked sessions | Yes |
+| [`verify-scale.mjs`](#verify-scalemjs-ui-budgets-at-1000-issues) | 1,000 synthetic issues | Yes |
 | [`verify-live.mjs`](#verify-livemjs-read-only-live-check) | Your real, open canvas (read-only) | No |
 
-CI's **Browser harnesses** job runs the four synthetic harnesses on every pull request, on Linux
+CI's **Browser harnesses** job runs the five synthetic harnesses on every pull request, on Linux
 with Google Chrome, and uploads their screenshots as an artifact when one fails.
 
 Install the browser driver once, from the repository root. The repository has no
@@ -33,7 +34,7 @@ ln -s "$SCRATCH/node_modules" node_modules
 rm node_modules
 ```
 
-All five harnesses, and the screenshot generator, need a Chromium-based browser.
+All six harnesses, and the screenshot generator, need a Chromium-based browser.
 They default to Microsoft Edge on macOS; set `BROWSER_EXECUTABLE` to a Chrome,
 Edge, or Chromium binary anywhere else. Set `HEADED=1` to watch a run, and
 `SCREENSHOT_DIR` to keep the screenshots (they go to a temporary directory by
@@ -116,15 +117,32 @@ WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verifica
 
 Loads 300 synthetic issues with linked sessions and proves that an unchanged
 session poll is one request that carries no working set (`issues: null`) and no
-tree, and that it adds, removes or replaces no element in the list or the
-inspector, even though every poll rewrites the sessions' observation times. It
+tree, and that it records no DOM mutation at all in the list, the inspector or the
+header's action controls (no rebuilt element and no same-value rewrite of a label
+or attribute), even though every poll rewrites the sessions' observation times. It
 then answers one poll with a revision the panel does not hold and checks that the
 panel reads the full snapshot instead of applying it, and that a Jira change
-reaches the panel on the next poll. It prints how many same-value control label
-rewrites remain per poll. No real service is contacted.
+reaches the panel on the next poll, including the row that has keyboard focus: that
+row updates and keeps focus, and unchanged rows stay the same elements. No real
+service is contacted.
 
 ```sh
 WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-poll.mjs
+```
+
+## `verify-scale.mjs`: UI budgets at 1,000 issues
+
+Loads 1,000 synthetic issues (ten generated epics under the fixture project) and,
+in both views, measures the main-thread time of a search keystroke (including the
+debounced render), selecting a row, expanding a parent, ArrowDown and an unchanged
+session poll. Each figure is a median after a warm-up round, checked against a
+budget well above what a laptop measures. It also checks the structure on any
+machine: a burst of keys renders the list once, after the pause; selecting a row
+replaces only the old and the new selected row; and collapsing a parent removes its
+rows without rebuilding the others. No real service is contacted.
+
+```sh
+WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node verification/verify-scale.mjs
 ```
 
 ## `verify-live.mjs`: read-only live check

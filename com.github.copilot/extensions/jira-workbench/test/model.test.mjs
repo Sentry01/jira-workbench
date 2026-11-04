@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, CLAIM_TTL_MS, requestStatus, KICKOFF_BUDGET_BYTES, kickoffBytes, keyOrder } from "../lib/model.mjs";
+import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, CLAIM_TTL_MS, requestStatus, KICKOFF_BUDGET_BYTES, kickoffBytes, keyOrder, childIndex, issueIndex, issueParent } from "../lib/model.mjs";
 
 const issue = (id, key, parent, type = "Story", category = "new") => ({
     id, key, fields: {
@@ -81,6 +81,61 @@ test("project and epic scopes enumerate descendants without confusing attached w
     assert.deepEqual(descendants(rows, "1").map(i => i.id), ["2", "3"]);
     assert.equal(descendants(rows, "project").length, 5);
     assert.equal(descendants(rows, "3").length, 0);
+});
+
+// The release's pass-by-pass walk, kept as the reference the indexed walk must reproduce (members and order).
+function descendantsByPasses(issues, nodeId) {
+    const root = issues.find(issue => issue.id === nodeId);
+    if (!root) return [];
+    const index = issueIndex(issues), ids = new Set([root.id]), children = [];
+    for (let pass = 0; pass < issues.length; pass++) {
+        let added = false;
+        for (const child of issues) {
+            if (!ids.has(child.id) && ids.has(issueParent(child, index)?.id)) { ids.add(child.id); children.push(child); added = true; }
+        }
+        if (!added) break;
+    }
+    return children;
+}
+
+test("indexed descendants match the pass-by-pass walk, in the same order, for shuffled trees, parent IDs and cycles", () => {
+    let seed = 7;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let round = 0; round < 60; round++) {
+        const count = 2 + Math.floor(random() * 40);
+        const list = Array.from({ length: count }, (_, n) => ({ id: String(n + 1), key: `DEMO-${n + 1}` }));
+        for (const item of list) {
+            const parent = list[Math.floor(random() * count)];
+            const roll = random();
+            // Parents by key, by ID only, unknown, or none; self and mutual references make cycles.
+            if (roll < 0.45) item.parentKey = parent.key;
+            else if (roll < 0.7) item.parentId = parent.id;
+            else if (roll < 0.8) item.parentKey = "DEMO-999";
+        }
+        for (let n = list.length - 1; n > 0; n--) { const m = Math.floor(random() * (n + 1)); [list[n], list[m]] = [list[m], list[n]]; }
+        const index = childIndex(list);
+        for (const item of list) {
+            const expected = descendantsByPasses(list, item.id).map(child => child.id);
+            assert.deepEqual(descendants(list, item.id).map(child => child.id), expected, `round ${round}, ${item.key}`);
+            assert.deepEqual(descendants(list, item.id, index).map(child => child.id), expected, `round ${round}, ${item.key}, shared index`);
+        }
+        assert.deepEqual(descendants(list, "missing", index), []);
+    }
+});
+
+test("indexed descendants stay linear: 10x the issues costs well under 100x the time", () => {
+    // Children listed before their parents: the pass-by-pass walk then needs one pass per level.
+    const chain = count => Array.from({ length: count }, (_, n) => ({ id: String(n), key: `DEMO-${n}`, parentKey: n ? `DEMO-${n - 1}` : null })).reverse();
+    const timing = count => {
+        const list = chain(count);
+        descendants(list, "0");
+        const started = performance.now();
+        for (let run = 0; run < 3; run++) descendants(list, "0");
+        return performance.now() - started;
+    };
+    const small = timing(500), large = timing(5000);
+    assert.equal(descendants(chain(5000), "0").length, 4999);
+    assert.ok(large < Math.max(small, 1) * 40, `500: ${small.toFixed(1)}ms, 5000: ${large.toFixed(1)}ms`);
 });
 
 

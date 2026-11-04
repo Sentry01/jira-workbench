@@ -1,4 +1,4 @@
-import { launchBrowser, screenshotPath } from "./browser.mjs";
+import { launchBrowser, screenshotPath, search } from "./browser.mjs";
 import { createFixture, seedProject, scope, issues } from "./fixture.mjs";
 import { verifyAccessibility } from "./accessibility.mjs";
 import assert from "node:assert/strict";
@@ -94,7 +94,7 @@ try {
     assert.equal(navigationSelections[0], "2", "The acted-on item is persisted before native navigation");
     assert.equal(sent.length, 0, "Navigation must not launch work");
 
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     await page.getByRole("button", { name: "Prepare implementation", exact: true }).click();
     await page.locator("#launch-dialog[open]").waitFor();
     assert.equal(await page.locator("#launch-mode").inputValue(), "autopilot", "A story with subtasks keeps the implementation default");
@@ -105,7 +105,7 @@ try {
     await smartComment.check();
     assert.equal(await page.locator("#confirm-launch").isDisabled(), true, "Opting in needs a reviewed brief");
     await page.locator("#cancel-launch").click();
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     await page.locator("#project-start").click();
     await page.locator("#launch-dialog[open]").waitFor();
@@ -180,7 +180,7 @@ try {
                 repository: { projectId: "app-project", repo: "example/demo" }, sources: [], warnings: [], children: [] },
         };
     });
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     await byName("Refresh live state");
     const stuckRow = page.locator('#tree [data-node-id="6"]');
     await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor();
@@ -213,14 +213,14 @@ try {
     assert.equal((await store.read()).requests.stuck.status, "cancelled");
     await requestCard.getByText("Cleared", { exact: true }).waitFor();
     assert.equal(sent.length, 2, "Clearing a request launches nothing");
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     await byName("Hierarchy");
     // One search rule in both views: a parent key finds its children (DEMO-8 is a subtask of DEMO-6).
-    await page.locator("#search").fill("DEMO-6");
+    await search(page, "DEMO-6");
     await page.waitForFunction(() => document.querySelectorAll('#tree [role="treeitem"]').length === 3);
     assert.deepEqual(await page.$$eval('#tree [role="treeitem"]', rows => rows.map(row => row.dataset.nodeId)), ["1", "6", "8"]);
-    await page.locator("#search").fill("");
+    await search(page, "");
     // The status filter is built from the project's own workflow, including a step no issue is in yet.
     const statusOptions = () => page.$$eval("#status-filter option", options => options.map(o => [o.parentElement.label || "", o.value, o.textContent]));
     assert.deepEqual(await statusOptions(), [
@@ -238,7 +238,7 @@ try {
     assert.match(await page.locator("#inspector").innerText(), /Missing criteria and blocked/);
     const preferencesSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok()
         && response.request().postDataJSON()?.preferences?.query === "Ready example");
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     await preferencesSaved;
     await page.locator("#project").selectOption("43");
     await page.waitForFunction(() => document.getElementById("project-title").textContent === "Another project");
@@ -252,7 +252,7 @@ try {
     await page.waitForFunction(() => document.getElementById("project-title").textContent === "Daily execution demo");
     await page.waitForFunction(() => document.getElementById("search").value === "Ready example");
     assert.match(await page.locator("#inspector").innerText(), /Missing criteria and blocked/);
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     const epic = page.getByRole("treeitem", { name: /DEMO-1 / });
     await epic.focus();

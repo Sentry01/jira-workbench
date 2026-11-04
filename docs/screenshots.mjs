@@ -5,7 +5,7 @@
 //
 // Requires playwright-core and a Chromium-based browser (see verification/README.md).
 
-import { launchBrowser } from "../verification/browser.mjs";
+import { launchBrowser, search } from "../verification/browser.mjs";
 import { createFixture, seedProject } from "../verification/fixture.mjs";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,7 +53,7 @@ try {
     await page.screenshot({ path: preview, clip: { x: 0, y: 0, width: 1440, height: 810 } });
     console.log(`Wrote the plugin preview to ${preview}`);
 
-    await page.locator("#search").fill("Work item 8");
+    await search(page, "Work item 8");
     await page.getByRole("button", { name: "Prepare implementation", exact: true }).first().click();
     await page.locator("#launch-dialog[open]").waitFor();
     const review = page.getByRole("button", { name: "Review changes", exact: true });
@@ -65,7 +65,7 @@ try {
     await page.locator("#launch-ack-label").waitFor();
     await shot("03-launch-brief.png", page.locator("#launch-dialog"));
     await page.locator("#cancel-launch").click();
-    await page.locator("#search").fill("");
+    await search(page, "");
 
     await page.getByRole("button", { name: "Hierarchy", exact: true }).click();
     await page.getByRole("treeitem", { name: /DEMO-3 / }).click();
@@ -111,7 +111,7 @@ try {
         };
     });
     await page.getByRole("button", { name: "Refresh live state", exact: true }).click();
-    await page.locator("#search").fill("Ready example");
+    await search(page, "Ready example");
     const stuck = page.locator('#tree [data-node-id="6"]');
     await stuck.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor();
     await stuck.locator(".issue-key").click();

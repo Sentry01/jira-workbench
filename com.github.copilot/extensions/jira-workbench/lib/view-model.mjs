@@ -219,13 +219,47 @@ export function statusFilterGroups(statuses = [], selected = "all") {
 }
 
 // Keeps matching nodes and the ancestors of matches. With no filter, every node keeps all its children.
+// With nothing filtered every node matches, so the tree is returned as is; callers must not change it.
 export function filterTree(roots, query = "", category = "all", sprint = "all") {
-    const unfiltered = !query.trim() && category === "all" && sprint === "all";
+    if (!query.trim() && category === "all" && sprint === "all") return roots;
     return roots.flatMap(node => {
         const children = filterTree(node.children, query, category, sprint);
-        const hit = matches(node.issue, query, category, sprint);
-        return hit || children.length ? [{ ...node, children: hit && unfiltered ? node.children : children }] : [];
+        return matches(node.issue, query, category, sprint) || children.length ? [{ ...node, children }] : [];
     });
+}
+
+// The hierarchy's visible rows in display order: depth, parent, position among siblings and expansion. A collapsed
+// node's subtree is left out.
+export function flattenTree(roots, isExpanded) {
+    const rows = [];
+    const add = (nodes, depth, parentId) => nodes.forEach((node, index) => {
+        const expanded = isExpanded(node.issue.id);
+        rows.push({ node, depth, parentId, index, count: nodes.length, expanded });
+        if (expanded) add(node.children, depth + 1, node.issue.id);
+    });
+    add(roots, 0, "");
+    return rows;
+}
+
+const UNOBSERVED = "Live execution state has not been observed. Refresh live state to check.";
+// Executions by node, built once per snapshot. A repeated node keeps its first record, as a linear find did.
+export function indexExecutions(executions = []) {
+    const index = new Map();
+    for (const execution of executions) if (!index.has(execution.nodeId)) index.set(execution.nodeId, execution);
+    return index;
+}
+export function executionFor(index, id) {
+    return index.get(id) || {
+        nodeId: id, views: ["all"], signals: [], reasons: [UNOBSERVED],
+        primary: { kind: "inspect", label: "Inspect work" }, rank: Number.MAX_SAFE_INTEGER,
+    };
+}
+
+// A clock label for a stored timestamp; `format` is a cached Intl.DateTimeFormat, which throws on an invalid date.
+export function timeLabel(value, format) {
+    if (!value) return "not refreshed";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "Invalid Date" : format(date);
 }
 
 // Distinct linked session IDs among each issue's descendants (as model.mjs descendants() defines them), for every

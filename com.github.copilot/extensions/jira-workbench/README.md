@@ -542,6 +542,19 @@ inspector redraw only when what they show changes: observation times that are
 rewritten on every check do not redraw rows, the inspector shows them to the
 minute, and a launch request still redraws when it expires.
 
+The list is updated in place, keyed by issue ID: a poll, a selection, an expand or
+collapse, or a filter change replaces only the rows whose content changed and keeps
+the others as they are, so it also stays current while keyboard focus is inside it.
+A replaced row that had focus gets it back. Rows a filter hides are kept for the
+current view until their issue leaves the working set, so clearing a search does
+not rebuild them. Off-screen rows skip layout and paint (`content-visibility`).
+Search renders about 180 ms after the last key rather than on every key. Action
+controls, notices and header fields are written only when their value changes.
+The panel's check for a new extension version (once a minute) is skipped while the
+panel is hidden and runs when it becomes visible again. Every loaded row is still
+in the DOM: the first render of a very large working set (10,000 issues) is not
+windowed.
+
 GitHub reads are shared by every panel in the extension process. Each PR is read
 with one `gh pr view` per refresh, however many issues and sessions refer to it,
 and at most 4 `gh` processes run at once. The
