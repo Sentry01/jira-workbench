@@ -104,8 +104,9 @@ request in the stack:
   base branch, and ignores **Stack gate** itself when it judges the members.
 - Any change in the stack re-evaluates all of it: a member is opened, pushed,
   edited, closed, marked draft or ready, reviewed or commented on, or a run of
-  the `tests` workflow finishes.
-- A schedule also sweeps every open pull request every 5 minutes (GitHub can
+  the `tests` workflow starts or finishes. A re-run that leaves the head commit
+  unchanged therefore blocks the stack while its checks are pending.
+- A schedule also sweeps every open pull request every 15 minutes (GitHub can
   delay scheduled runs). It picks up resolved and reopened review threads,
   which trigger no workflow, and review events on stacked pull requests, which
   run the workflow file from the pull request's merge ref and so miss it until
@@ -117,6 +118,46 @@ Required on `main`, the status blocks merging any part of a stack until the
 whole stack could merge. The workflow runs with a write token, so it never
 checks out or runs pull request code: it runs `.github/scripts/stack-gate.mjs`
 from the default branch and reads everything else through the API.
+
+### Copilot code review
+
+No pull request merges, by a person or an agent, until Copilot code review has
+found it clean. The `ccr gate` workflow posts a commit status named **CCR gate**
+on the head commit of every open pull request:
+
+- It is success only when the latest Copilot code review is of the current head
+  commit, its verdict is "Approval recommended", and it lists no open issues.
+  "Changes recommended", "Needs a closer look", a review of an older commit, or
+  no review at all is a failure, and the description says which. If several
+  open pull requests share a head commit, each of them needs that clean review.
+- If the gate cannot read a pull request's reviews, it marks the head commit as
+  failed rather than leave an earlier success, and checks the others.
+- A new push has no **CCR gate** status until the gate posts one, so a required
+  gate blocks the new head commit until Copilot reviews it. The workflow checks
+  pushes at once, and a schedule checks every open pull request every 15
+  minutes to pick up new reviews, so a clean review can take that long to count: Copilot's own review events need manual approval to
+  run workflows. A status is posted only when it changes.
+- Unresolved review threads, including Copilot's, are blocked separately by
+  `main`'s conversation resolution rule.
+- Every run checks every open pull request, one run at a time, so two runs
+  cannot post conflicting statuses for the same commit. To check by hand, run
+  the workflow from the Actions tab.
+- A run that changes a status starts a stack gate sweep, because a member's
+  **CCR gate** can change without a push.
+
+If Copilot code review does not review a pull request, request a review from
+Copilot on it. Like the stack gate, this workflow never checks out or runs pull
+request code.
+
+Limits of both gates:
+
+- They share the `GITHUB_TOKEN` budget of 1,000 API requests an hour for this
+  repository. They read as little as they can and sweep every 15 minutes; do
+  not make the schedules more frequent without checking that budget.
+- The required checks trust statuses from `github-actions[bot]`, and any
+  workflow in this repository can post as that account, including one that a
+  pull request adds or edits. The gates stop a merge that comes too early, not
+  a change to `.github/` itself, so review such changes by hand.
 
 ## Review rules
 
@@ -161,8 +202,9 @@ New behavior needs a test. The suite is plain `node:test` with no framework:
 - Keep it focused. Several small pull requests are better than one large one.
 - Explain *why* in the description. The code already shows *what*.
 - Paste the output of the verification commands you ran.
-- Copilot code review runs on every push and follows [`REVIEW.md`](REVIEW.md);
-  its comments are advisory and do not block merging.
+- Copilot code review runs on every push and follows [`REVIEW.md`](REVIEW.md).
+  A pull request merges only after it finds the head commit clean (see
+  [Copilot code review](#copilot-code-review)), and its threads are resolved.
 - Update the docs you invalidated: [`docs/guide.md`](docs/guide.md) for user-facing
   behavior, [`com.github.copilot/extensions/jira-workbench/README.md`](com.github.copilot/extensions/jira-workbench/README.md)
   for semantics and boundaries.
@@ -251,8 +293,8 @@ assets/preview.png           The plugin listing image; docs/screenshots.mjs rege
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version
-.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it) and the stack gate
-.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack gate and the release workflow
+.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the stack gate and the CCR gate
+.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```

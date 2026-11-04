@@ -32,15 +32,21 @@ export function requiredChecks(branch, rules = []) {
     return [...found.values()];
 }
 
-// Each required check is "pass", "fail" or "pending", from its latest check run and its commit status.
-// A check pinned to an app accepts only that app's check runs; commit statuses carry no app to match.
-// When a check run and a commit status share an unpinned name, GitHub requires both, so every one present must pass.
+// The bot account each app posts commit statuses as. GitHub Actions (app 15368) posts as github-actions[bot].
+export const ACTIONS_BOT = 41898282;
+const APP_BOTS = new Map([[15368, ACTIONS_BOT]]);
+
+// Each required check is "pass", "fail" or "pending", from its latest check run and its latest commit status.
+// `statuses` is the commit's status list, newest first, which names each status's creator.
+// A check pinned to an app accepts only that app's check runs, and only statuses its bot posted; a status
+// from any other app is ignored. When a check run and a commit status share a name, GitHub requires both,
+// so every one present must pass.
 export function checkStates(required, checkRuns = [], statuses = []) {
     return required.map(({ context, appId }) => {
         const run = checkRuns
             .filter(r => r.name === context && (!appId || r.app?.id === appId))
             .sort((a, b) => b.id - a.id)[0];
-        const status = appId ? null : statuses.find(s => s.context === context);
+        const status = statuses.find(s => s.context === context && (!appId || s.creator?.id === APP_BOTS.get(appId)));
         const states = [
             !run ? null : run.status !== "completed" ? "pending" : PASSING.has(run.conclusion) ? "pass" : "fail",
             !status ? null : status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail",
@@ -99,10 +105,18 @@ export function verdict(stackNumber, members) {
 export const NOT_IN_STACK = { state: "success", description: "Not in a stack." };
 
 // A minimal REST client. get() returns null for 404; list() follows Link pagination.
-export function client({ token, repository, apiUrl = "https://api.github.com" }) {
+// The API answers some reads with a transient 5xx, so each request is retried twice before it fails.
+export function client({ token, repository, apiUrl = "https://api.github.com", fetch: send = fetch, retryDelayMs = 1000 }) {
+    const fetchWithRetry = async (url, init) => {
+        for (let tries = 0; ; tries++) {
+            const response = await send(url, init);
+            if (response.status < 500 || tries === 2) return response;
+            await new Promise(done => setTimeout(done, retryDelayMs * (tries + 1)));
+        }
+    };
     const request = async (method, path, body) => {
         const url = path.startsWith("https://") ? path : `${apiUrl}/repos/${repository}/${path}`;
-        const response = await fetch(url, {
+        const response = await fetchWithRetry(url, {
             method,
             headers: {
                 accept: "application/vnd.github+json",
@@ -163,13 +177,17 @@ export async function unresolvedThreads(api, number) {
 }
 
 // Posts only a change: GitHub keeps at most 1000 statuses per commit and context, and the sweep re-posts often.
-async function post(api, sha, { state, description }, targetUrl, statuses) {
-    statuses ??= (await api.get(`commits/${sha}/status?per_page=100`))?.statuses ?? [];
-    const current = statuses.find(s => s.context === CONTEXT);
+export async function postStatus(api, sha, context, { state, description }, targetUrl, statuses) {
+    statuses ??= (await api.get(`commits/${sha}/statuses?per_page=100`)) ?? [];
+    // Compare with the gate's own last status: the required checks trust only github-actions[bot], so a matching
+    // status from anyone else must not stop the gate from posting.
+    const current = statuses.find(s => s.context === context && s.creator?.id === ACTIONS_BOT);
     if (current?.state === state && current.description === description) return false;
-    await api.post(`statuses/${sha}`, { state, description, context: CONTEXT, ...(targetUrl ? { target_url: targetUrl } : {}) });
+    await api.post(`statuses/${sha}`, { state, description, context, ...(targetUrl ? { target_url: targetUrl } : {}) });
     return true;
 }
+
+const post = (api, sha, result, targetUrl, statuses) => postStatus(api, sha, CONTEXT, result, targetUrl, statuses);
 
 // Recomputes one stack and posts the verdict to the head commit of every open member.
 // If the evaluation fails partway, a success posted earlier must not stand: the members are blocked first.
@@ -198,17 +216,17 @@ async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
     const rules = await api.list(`rules/branches/${base}?per_page=100`);
     const required = requiredChecks(branch, rules);
     const members = [];
-    for (const entry of stack.pull_requests) {
-        const pull = await api.get(`pulls/${entry.number}`);
-        if (!pull || pull.state !== "open" || pull.merged_at) continue;
+    // The stack detail already names each member's state, draft flag and head, so no per-member pull request
+    // read is needed; that keeps a stack evaluation inside the GITHUB_TOKEN budget of 1,000 requests an hour.
+    for (const pull of stack.pull_requests) {
+        if (pull.state !== "open" || pull.merged_at) continue;
         const sha = pull.head.sha;
-        const [checkRuns, combined, reviews, threads] = await Promise.all([
+        const [checkRuns, statuses, reviews, threads] = await Promise.all([
             api.list(`commits/${sha}/check-runs?filter=latest&per_page=100`, "check_runs"),
-            api.get(`commits/${sha}/status?per_page=100`),
+            api.list(`commits/${sha}/statuses?per_page=100`),
             api.list(`pulls/${pull.number}/reviews?per_page=100`),
             unresolvedThreads(api, pull.number),
         ]);
-        const statuses = combined?.statuses ?? [];
         members.push({ ...memberProblems({ pull, required, checkRuns, statuses, reviews, unresolvedThreads: threads }), sha, statuses });
     }
     if (!members.length) {
@@ -229,7 +247,8 @@ async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
 }
 
 // Which pull requests an event touches. A CI run names its pull requests, or is found through its commit.
-// The schedule, and a manual run without a number, sweep every open pull request.
+// The schedule, and a manual run without a number, sweep every open pull request. The CCR gate starts such a
+// manual run when it changes a status, since a member's required CCR gate can change without a push.
 export async function pullsForEvent(api, eventName, event, input) {
     if (eventName === "schedule" || (eventName === "workflow_dispatch" && !input)) {
         const pulls = await api.list("pulls?state=open&per_page=100");
