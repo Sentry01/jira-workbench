@@ -327,3 +327,76 @@ test("a session found again after being missing loses its missing marker", async
     assert.equal(session.missingSince, undefined);
     assert.equal(session.missingPolls, undefined);
 });
+
+const notFound = id => Object.assign(new Error(`Session ${id} not found`), { kind: "permanent", notFound: true });
+
+// Review thread: a poll that skips a missing session must not discard an explicit refresh that observed it.
+test("a poll that skips a missing session does not discard a concurrent trace refresh's observation", async t => {
+    const { workbench, store, gateway } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [{ id: "session-1", name: "Restored", activity: "missing",
+            missingSince: "2026-01-01T00:00:00.000Z", missingPolls: 3, verifiedAt: "2026-01-01T00:00:00.000Z", projectId: copilot.id }] };
+    });
+    const original = gateway.call;
+    let release, asked;
+    const reached = new Promise(resolve => { asked = resolve; });
+    gateway.call = async (name, args) => {
+        if (name === "get_session") { asked(); await new Promise(resolve => { release = resolve; }); }
+        return original(name, args);
+    };
+    const refreshing = workbench.refreshTrace("2");
+    await reached;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal((await store.read()).links[scope].sessions[0].activity, "missing", "the poll skipped it");
+    release();
+    await refreshing;
+    const session = (await store.read()).links[scope].sessions[0];
+    assert.equal(session.activity, "idle", "the refresh's observation is kept");
+    assert.equal(session.missingPolls, undefined);
+});
+
+// Review thread: a deleted session's recorded PR is still verified, and a failed check is GitHub's.
+test("a deleted session's recorded PR is still verified on GitHub", async t => {
+    const { workbench, store, gateway, githubReads } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    const unchecked = { state: "unknown", error: "Session reports a PR not yet checked on GitHub.", fetchedAt: null };
+    const seed = () => store.update(data => {
+        data.links[scope] = { prs: [], sourceStatus: { github: unchecked }, sessions: [{ id: "session-1", name: "Gone", activity: "idle",
+            prNumber: 9, prRepo: "example/demo", projectId: copilot.id }] };
+    });
+    await seed();
+    const original = gateway.call;
+    gateway.call = async (name, args) => name === "get_session" ? Promise.reject(notFound(args.project_session_id)) : original(name, args);
+    await workbench.refreshTrace("2");
+    let link = (await store.read()).links[scope];
+    assert.deepEqual(githubReads, ["example/demo#9"]);
+    assert.deepEqual(link.prs.map(pr => pr.number), [9]);
+    assert.equal(link.sessions[0].activity, "missing");
+    assert.equal(link.sourceStatus.github.state, "fresh");
+    assert.equal(link.sourceStatus.sessions.state, "fresh");
+    await seed();
+    workbench.github = async () => { throw new Error("gh: rate limited"); };
+    await workbench.refreshTrace("2");
+    link = (await store.read()).links[scope];
+    assert.equal(link.sourceStatus.github.state, "stale", "the failed lookup is GitHub's");
+    assert.match(link.sourceStatus.github.error, /rate limited/);
+    assert.equal(link.sourceStatus.sessions.state, "fresh");
+});
+
+// Review thread: Review PR never navigates through a deleted session.
+test("Review PR opens the native PR view when the session that created it was deleted", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await store.update(data => {
+        data.links["cloud-demo/42/2"] = { sessions: [{ id: "session-1", name: "Gone", activity: "missing", prNumber: 9, prRepo: "example/demo" }],
+            prs: [{ number: 9, repo: "example/demo", url: "https://github.com/example/demo/pull/9", state: "OPEN", sessionIds: ["session-1"] }] };
+    });
+    const calls = [];
+    workbench.hostActions = { openPr: async (repo, number, options) => { calls.push(options.sessionId || "native PR view"); return { status: "acknowledged" }; } };
+    await workbench.openPr({ nodeId: "2", repo: "example/demo", number: 9 });
+    assert.deepEqual(calls, ["native PR view"]);
+});
