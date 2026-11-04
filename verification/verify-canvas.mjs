@@ -6,6 +6,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Rows use content-visibility: auto and render incrementally, so an offscreen or just-rebuilt row can report empty
+// innerText. Scroll it into view and wait for its rendered text before asserting on it.
+async function rowText(row) {
+    await row.scrollIntoViewIfNeeded();
+    await row.evaluate(el => new Promise((resolve, reject) => {
+        const deadline = Date.now() + 10_000;
+        const check = () => el.innerText.trim() ? resolve() : Date.now() > deadline ? reject(new Error("Row text never rendered.")) : requestAnimationFrame(check);
+        check();
+    }));
+    return row.innerText();
+}
+
 const directory = await mkdtemp(join(tmpdir(), "jira-workbench-v2-browser-"));
 const { workbench, store, sent, navigations, navigationSelections, navigation, startServer } = await createFixture({ directory });
 await seedProject(workbench);
@@ -183,8 +195,8 @@ try {
     await byName("Refresh live state");
     const stuckRow = page.locator('#tree [data-node-id="6"]');
     await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor();
-    assert.match(await stuckRow.innerText(), /Launch outcome unknown: no session receipt after 15 minutes/);
-    assert.doesNotMatch(await stuckRow.innerText(), /Launch queued/, "an expired request is not shown as queued");
+    assert.match(await rowText(stuckRow), /Launch outcome unknown: no session receipt after 15 minutes/);
+    assert.doesNotMatch(await rowText(stuckRow), /Launch queued/, "an expired request is not shown as queued");
     await stuckRow.locator(".issue-key").click();
     const inspector = page.locator("#inspector"), requestCard = inspector.locator(".session-card", { hasText: "Launch request" });
     await requestCard.getByText("Outcome unknown (no receipt after 15 minutes)").waitFor();

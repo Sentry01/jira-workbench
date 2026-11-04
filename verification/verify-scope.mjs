@@ -5,6 +5,18 @@ import { join } from "node:path";
 import { launchBrowser, screenshotPath } from "./browser.mjs";
 import { createFixture, issues, scope } from "./fixture.mjs";
 
+// Rows use content-visibility: auto and render incrementally, so an offscreen or just-rebuilt row can report empty
+// innerText. Scroll it into view and wait for its rendered text before asserting on it.
+async function rowText(row) {
+    await row.scrollIntoViewIfNeeded();
+    await row.evaluate(el => new Promise((resolve, reject) => {
+        const deadline = Date.now() + 10_000;
+        const check = () => el.innerText.trim() ? resolve() : Date.now() > deadline ? reject(new Error("Row text never rendered.")) : requestAnimationFrame(check);
+        check();
+    }));
+    return row.innerText();
+}
+
 const directory = await mkdtemp(join(tmpdir(), "jira-workbench-scope-"));
 const { workbench, gateway, store, startServer } = await createFixture({ directory });
 const calls = [];
@@ -88,7 +100,7 @@ try {
     await page.getByRole("treeitem", { name: /PARENT-101 Cross-project feature/ }).waitFor();
     await page.getByRole("treeitem", { name: /PORT-102 Portfolio context/ }).waitFor();
     const featureRow = page.getByRole("treeitem", { name: /PARENT-101 Cross-project feature/ });
-    assert.match(await featureRow.innerText(), /Context only/);
+    assert.match(await rowText(featureRow), /Context only/);
     assert.match(await featureRow.getAttribute("aria-label"), /, Context only$/, "screen readers hear the context label");
     await featureRow.click();
     await page.getByText("Select this item's own Jira project to view, link or refresh", { exact: false }).waitFor();
@@ -194,7 +206,7 @@ try {
     await page.locator("#refresh").click();
     const linkedRow = page.getByRole("treeitem", { name: /DEMO-3 Running with a PR, Jira To Do, Linked, outside scope/ });
     await linkedRow.waitFor();
-    assert.match(await linkedRow.innerText(), /Linked, outside scope/);
+    assert.match(await rowText(linkedRow), /Linked, outside scope/);
     await page.waitForFunction(() => document.getElementById("scope-summary").textContent.includes("1 linked items outside the loaded pages"));
     assert.ok((await workbench.snapshot()).executions.some(execution => execution.nodeId === "3"), "pending work stays in the execution queue");
     await page.screenshot({ path: screenshotPath("scoped-loading.png") });
