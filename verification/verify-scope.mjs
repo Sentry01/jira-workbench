@@ -68,8 +68,20 @@ try {
     assert.doesNotMatch(await page.locator("#connection-status").innerText(), /Scope applied\./);
     assert.match((await workbench.snapshot()).pageError, /Synthetic page outage.*\nScope was not applied/);
     failPage = false;
+    // A background poll that reads state while Load more is pending must not make the panel drop the page it returns.
+    let polledDuringLoad = false;
+    await page.route("**/api/load-more", async route => {
+        polledDuringLoad = await page.waitForResponse(response => new URL(response.url()).pathname === "/api/state", { timeout: 7_000 })
+            .then(() => true, () => false);
+        await route.continue();
+    });
+    const loaded = page.waitForResponse(response => response.url().endsWith("/api/load-more"));
     await page.locator("#load-more").click();
-    await page.locator("#load-more").waitFor({ state: "hidden" });
+    await loaded;
+    await page.unroute("**/api/load-more");
+    await page.locator("#load-more").waitFor({ state: "hidden", timeout: 1_000 });
+    await page.locator('#tree [data-node-id="6"]').waitFor({ timeout: 1_000 });
+    assert.equal(polledDuringLoad, false, "background polls pause while Load more is pending");
     await page.waitForFunction(() => document.activeElement !== document.body && document.activeElement.id !== "load-more");
     assert.equal(workbench.page.loaded, 2);
     await page.locator("#view-hierarchy").click();

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, CLAIM_TTL_MS, requestStatus, KICKOFF_BUDGET_BYTES, kickoffBytes } from "../lib/model.mjs";
+import { normalizeIssue, findSprintField, buildTree, scopeKey, launchPrompt, jiraSyncPrompt, projectStatuses, parseToolResult, descendants, progressRollup, freshnessTone, jiraFreshness, REQUEST_TTL_MS, CLAIM_TTL_MS, requestStatus, KICKOFF_BUDGET_BYTES, kickoffBytes, keyOrder } from "../lib/model.mjs";
 
 const issue = (id, key, parent, type = "Story", category = "new") => ({
     id, key, fields: {
@@ -59,6 +59,13 @@ test("builds epic, issue, subtask hierarchy without losing orphan or unparented 
     assert.equal(roots[0].done, 1);
 });
 
+
+test("issue keys sort in numeric order with one shared collator", () => {
+    assert.deepEqual(["DEMO-10", "DEMO-2", "ABC-3", "DEMO-1"].sort(keyOrder), ["ABC-3", "DEMO-1", "DEMO-2", "DEMO-10"]);
+    const issue = (id, key) => ({ id, key, level: 0, summary: key, category: "new" });
+    const tree = buildTree([issue("10", "DEMO-10"), issue("2", "DEMO-2"), issue("9", "DEMO-9")]);
+    assert.deepEqual(tree.roots.map(node => node.issue.key), ["DEMO-2", "DEMO-9", "DEMO-10"]);
+});
 
 test("breaks malformed parent cycles visibly rather than recursing forever or dropping work", () => {
     const { roots, warnings } = buildTree([

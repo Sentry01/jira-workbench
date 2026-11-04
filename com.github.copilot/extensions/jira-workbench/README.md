@@ -154,7 +154,8 @@ foreign context items.
 Canvas automation passes `{ kind, value }` to `apply_scope`. Supported kinds
 are `project`, `jql` and `filter`. `load_more` advances the working-set cursor.
 `get_state` returns `workingScope`, `workingSetKey`, `workingSetGeneration`,
-`page`, `pageError` and `ancestorWarnings`. `load_more` also returns a
+`page`, `pageError` and `ancestorWarnings`, plus the `tree` hierarchy built from `issues`; every canvas
+action that returns a snapshot includes `tree`. `load_more` also returns a
 `pageResult` with the target, `loaded`, `failed` or `superseded` status and
 its error; `pageError` remains the combined banner.
 `scopeError` identifies the Apply error independently of other page errors,
@@ -528,6 +529,18 @@ project's traces since this panel last did, or while another refresh in the same
 extension process has started and not yet saved its result. The one remaining case: another process's observation that started
 before a skipped poll and is saved after it replaces the newer result, shown with
 its own older time, until this panel's next poll writes the newer result back.
+
+The panel's poll is one request. The session refresh returns the snapshot, so no
+second read follows it. Each snapshot carries `issuesRevision`, which changes
+whenever the loaded working set is replaced (project pick, Apply, Refresh, Load
+more, or a cached start). The panel sends the revision it holds, and the server
+answers with `issues: null` while that revision is still current; everything else
+in the snapshot is sent in full. A response for a revision the panel does not hold
+is never applied: the panel reads the full snapshot instead. The HTTP snapshot
+omits the hierarchy tree; the panel builds it from `issues`. Rows and the
+inspector redraw only when what they show changes: observation times that are
+rewritten on every check do not redraw rows, the inspector shows them to the
+minute, and a launch request still redraws when it expires.
 
 GitHub reads are shared by every panel in the extension process. Each PR is read
 with one `gh pr view` per refresh, however many issues and sessions refer to it,

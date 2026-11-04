@@ -1,4 +1,5 @@
-import { buildTree, projectStatuses, requestStatus, scopeKey } from "./model.mjs";
+import { randomUUID } from "node:crypto";
+import { buildTree, keyOrder, projectStatuses, requestStatus, scopeKey } from "./model.mjs";
 import { deriveExecution } from "./execution.mjs";
 import { Launches } from "./launches.mjs";
 import { objects, settle, standaloneError } from "./runtime.mjs";
@@ -17,6 +18,14 @@ function cachedIssues(issues) {
         ? { ...issue, description: issue.description.slice(0, CACHED_DESCRIPTION_CHARS) + SHORTENED } : issue);
 }
 
+// Working-set revisions are unique per process and per panel, so a revision from a reloaded extension or another
+// panel never matches. The epoch keeps them unique across extension restarts.
+const EPOCH = randomUUID().slice(0, 8);
+let revisions = 0;
+
+// Agents read the hierarchy from canvas actions; the panel builds it itself, so the HTTP snapshot leaves it out.
+export const withTree = value => value && Array.isArray(value.issues) ? { ...value, tree: buildTree(value.issues) } : value;
+
 // Issues the execution queue must never lose: unresolved launch requests and durable session or PR links.
 function trackedIds(data, prefix) {
     const ids = new Set();
@@ -31,6 +40,15 @@ function trackedIds(data, prefix) {
 }
 
 export class Workbench {
+    #issues;
+    // The working set is only ever replaced, never edited in place, so each new array is a new revision. The panel
+    // sends the revision it holds and gets `issues: null` back while it is still current.
+    get issues() { return this.#issues; }
+    set issues(value) {
+        if (value === this.#issues) return;
+        this.#issues = value;
+        this.issuesRevision = `${EPOCH}:${++revisions}`;
+    }
     constructor(options) {
         Object.assign(this, options);
         this.sites = [];
@@ -367,8 +385,10 @@ export class Workbench {
         return mapping;
     }
     // Pure: the panel polls this, so it only reads state; retries are the connection's job.
-    async snapshot() {
+    // `since` is the working-set revision the panel holds: while it is current, `issues` is null.
+    async snapshot({ since = null } = {}) {
         const data = await this.store.read();
+        const unchanged = typeof since === "string" && since === this.issuesRevision;
         const prefix = this.site && this.project ? `${[this.site.id, this.project.id].map(encodeURIComponent).join("/")}/` : null;
         const links = prefix ? Object.fromEntries(Object.entries(data.links).filter(([key]) => key.startsWith(prefix))
             .map(([key, link]) => [key, withStamps(link, this.trace.stamps.get(key))])) : {};
@@ -377,10 +397,15 @@ export class Workbench {
         const executionNodes = this.issues.filter(issue => !issue.contextOnly);
         if (this.site && this.project && (links[this.selectedScope()]?.sessions.length || requests.some(r => r.nodeId === "project")))
             executionNodes.push(this.node("project"));
+        const requestsByNode = new Map();
+        for (const request of requests) {
+            const list = requestsByNode.get(request.nodeId);
+            if (list) list.push(request); else requestsByNode.set(request.nodeId, [request]);
+        }
         const executions = executionNodes.map(issue => deriveExecution({
             issue, trace: links[this.selectedScope(issue.id)] || {}, mapping,
-            requests: requests.filter(r => r.nodeId === issue.id), jiraStale: Boolean(this.error || issue.unverified),
-        })).sort((a, b) => a.rank - b.rank || a.nodeId.localeCompare(b.nodeId, undefined, { numeric: true }));
+            requests: requestsByNode.get(issue.id) || [], jiraStale: Boolean(this.error || issue.unverified),
+        })).sort((a, b) => a.rank - b.rank || keyOrder(a.nodeId, b.nodeId));
         const connection = this.connection?.status();
         return {
             scope: this.site && this.project ? this.selectedScope() : null,
@@ -388,13 +413,11 @@ export class Workbench {
             sites: this.sites, appProjects: this.appProjects, catalogErrors: this.catalogErrors,
             retryAt: connection && !["ready", "standalone"].includes(connection.state) ? connection.nextCheckAt : null,
             connection: connection ? { state: connection.state, reason: connection.reason, server: connection.server, connector: connection.connector, nextCheckAt: connection.nextCheckAt } : null,
-            signIn: connection?.state === "signin" ? { server: connection.server, connector: connection.connector } : null,
             projects: this.site ? this.projectLists.get(this.site.id) || [] : [],
-            issues: this.issues, tree: buildTree(this.issues),
+            issues: unchanged ? null : this.issues, issuesRevision: this.issuesRevision,
             workingScope: this.workingScope, workingSetKey: this.site && this.project ? this.loadKey() : null,
             page: this.page, pageError: Object.values(this.pageErrors).join("\n") || null,
             scopeError: this.pageErrors.scope || null,
-            jiraRefreshing: Boolean(this.jiraRefreshing),
             workingSetGeneration: this.refreshGeneration,
             ancestorWarnings: [...this.linkedWarnings, ...this.ancestorWarnings, ...(this.store.notices?.() || [])],
             statuses: this.site && this.project ? projectStatuses(this.statuses, this.issues.filter(issue => issue.projectId === this.project.id)) : [],

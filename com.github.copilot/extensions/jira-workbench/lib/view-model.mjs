@@ -2,6 +2,8 @@
 // The server serves this file as /view-model.mjs next to /model.mjs, which it imports.
 import { REQUEST_TTL_MS, CLAIM_TTL_MS, jiraFreshness, requestStatus, issueIndex, issueParent } from "./model.mjs";
 
+const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
+
 export const humanize = value => String(value || "unknown").replace(/[_-]/g, " ");
 
 // Why a loaded row is not ordinary scope work; shown as a badge and in the row's accessible name.
@@ -183,7 +185,7 @@ export function matches(item, query = "", category = "all", sprint = "all") {
 export function sprintOptions(issues = []) {
     const sprints = new Map(issues.flatMap(item => item.sprints || []).map(sprint => [sprint.id, sprint.name]));
     if (!sprints.size) return [];
-    const options = [...sprints].sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true, sensitivity: "base" }))
+    const options = [...sprints].sort((a, b) => nameOrder(a[1], b[1]))
         .map(([id, name]) => ({ value: `sprint:${id}`, label: name }));
     return issues.some(item => !item.sprints?.length) ? [{ value: "none", label: "No sprint" }, ...options] : options;
 }
@@ -313,3 +315,29 @@ export function nextFocusKey(keys, removed) {
     if (index < 0) return null;
     return keys[index + 1] ?? keys[index - 1] ?? null;
 }
+
+// The snapshot to apply. While the panel's working-set revision is current the server sends `issues: null`, and the
+// panel's own copy fills in. Null when the panel does not hold the revision the server compared against (responses
+// raced, or the panel never had it): the caller must then read the full snapshot rather than keep a stale set.
+export function resolveSnapshot(snapshot, held) {
+    if (!snapshot || typeof snapshot !== "object") return null;
+    if (Array.isArray(snapshot.issues)) return snapshot;
+    if (snapshot.issues !== null || !snapshot.issuesRevision || snapshot.issuesRevision !== held?.issuesRevision || !Array.isArray(held.issues)) return null;
+    return { ...snapshot, issues: held.issues };
+}
+
+// Trace links for a render digest. Every observation rewrites `verifiedAt` and `fetchedAt` even when the evidence is
+// unchanged; rows never show them, and the inspector shows them through `format` (to the minute), so only a change
+// that is visible changes the digest.
+export const linksDigest = (links, format = () => undefined) =>
+    JSON.stringify(links, (key, value) => key === "verifiedAt" || key === "fetchedAt" ? format(value) : value);
+
+// The minute a timestamp falls in, for the inspector digest: the inspector shows trace times to the minute, and this
+// changes exactly when that label does without formatting every stamp on every poll. Unparseable values stay as sent.
+export const minuteKey = value => {
+    const at = Date.parse(value);
+    return Number.isNaN(at) ? value : Math.floor(at / 60_000);
+};
+
+// Request statuses depend on the clock: a queued request turns expired without any field changing.
+export const requestStatuses = (requests = [], now = Date.now()) => requests.map(request => requestStatus(request, now));

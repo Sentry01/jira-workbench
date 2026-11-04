@@ -197,16 +197,17 @@ export class Trace {
     // refresh, such as Refresh Sessions, is the user's request and checks them again.
     // `reuseRecent`: a background pass (after a pick or revalidation) may use a PR read from the last minute. Requests
     // from the panel always read GitHub, deduplicated within the refresh.
-    async refreshExecution({ source = "all", poll = false } = {}, { reuseRecent = false } = {}) {
+    async refreshExecution({ source = "all", poll = false, since = null } = {}, { reuseRecent = false } = {}) {
         const wb = this.workbench;
         if (!["all", "sessions", "github"].includes(source)) throw new Error("Choose a supported execution source.");
         poll = poll === true;
         const scope = wb.selectedScope(), generation = wb.refreshGeneration;
         const key = `${wb.loadKey()}/${generation}/${source}${poll ? "/poll" : ""}${reuseRecent ? "/recent" : ""}`;
-        if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key);
+        // Callers that join a running refresh each get their own snapshot: they may hold different working-set revisions.
+        if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key).then(() => wb.snapshot({ since }));
         const pending = this.overlapping(async () => {
             const data = await wb.store.read();
-            if (generation !== wb.refreshGeneration || scope !== wb.currentScope()) return wb.snapshot();
+            if (generation !== wb.refreshGeneration || scope !== wb.currentScope()) return;
             // Only this project's own issues: cross-project context has no trace under this project's mapping.
             const targets = ["project", ...wb.issues.filter(issue => issue.projectId === wb.project.id).map(issue => issue.id)]
                 .map(nodeId => wb.selectedScope(nodeId))
@@ -214,7 +215,7 @@ export class Trace {
                 .map(scope => ({ scope, previous: data.links[scope] }));
             const linkedSessions = targets.some(target => target.previous.sessions.length);
             // Polling only asks about sessions; with none linked there is nothing to observe or write.
-            if (source === "sessions" && !linkedSessions) return wb.snapshot();
+            if (source === "sessions" && !linkedSessions) return;
             let statuses = [], statusError = null;
             if (source !== "github" && linkedSessions) {
                 try { statuses = objects(await wb.gateway.call("get_sessions_status", {})); }
@@ -224,11 +225,12 @@ export class Trace {
             const details = new Map();
             const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, github, details }));
             if (traces.length) await this.persist(traces);
-            return wb.snapshot();
         });
         wb.executionRefreshes.set(key, pending);
-        try { return await pending; }
+        try { await pending; }
         finally { wb.executionRefreshes.delete(key); }
+        // Read after this refresh is unregistered, so `refreshing` reports only work that is still running.
+        return wb.snapshot({ since });
     }
     // One GitHub read per PR for a whole refresh: the first lookup of a PR may bypass the recent-read cache, and every
     // later lookup of it in the same refresh, from any issue or read path, shares that result.

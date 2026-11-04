@@ -54,13 +54,18 @@ test("snapshots of explicitly loaded large working sets stay fast and scale line
         while (workbench.page.nextPageToken) await workbench.loadMore();
         assert.equal(workbench.issues.length, count);
         await workbench.snapshot(); // warm the JIT
-        const started = performance.now();
-        await workbench.snapshot();
-        timings[count] = performance.now() - started;
+        // Take the fastest of several runs: a single few-millisecond sample is dominated by GC and scheduler noise.
+        let best = Infinity;
+        for (let run = 0; run < 5; run++) {
+            const started = performance.now();
+            await workbench.snapshot();
+            best = Math.min(best, performance.now() - started);
+        }
+        timings[count] = best;
     }
-    assert.ok(timings[8000] < 600, `8,000-issue snapshot took ${timings[8000].toFixed(0)}ms`);
-    // 4x the issues: linear is ~4x, quadratic would be ~16x.
-    assert.ok(timings[8000] / Math.max(timings[2000], 1) < 9, `scaling ${JSON.stringify(timings)}`);
+    assert.ok(timings[8000] < 100, `8,000-issue snapshot took ${timings[8000].toFixed(0)}ms`);
+    // 4x the issues: linear is ~4x, quadratic would be ~16x. The 5 ms floor keeps a very fast small run from inflating the ratio.
+    assert.ok(timings[8000] / Math.max(timings[2000], 5) < 9, `scaling ${JSON.stringify(timings)}`);
 });
 
 test("paging to 10,000 issues coalesces cache saves instead of rewriting the cache per page", async t => {
@@ -85,6 +90,44 @@ test("paging to 10,000 issues coalesces cache saves instead of rewriting the cac
     const reopened = make("reopened");
     assert.equal(await reopened.hydrate(), true);
     assert.equal(reopened.issues.length, 10000, "closing the panel flushed the last pages to the cache");
+    reopened.close();
+});
+
+test("an unchanged 10,000-issue poll skips the working set, and every way of replacing it changes the revision", async t => {
+    const runtime = fakeRuntime({ issueCount: 10000 });
+    const { workbench, make } = await setup(t, runtime);
+    const revisions = [workbench.issuesRevision];
+    await workbench.select(requested);
+    revisions.push(workbench.issuesRevision);
+    while (workbench.page.nextPageToken) {
+        await workbench.loadMore();
+        revisions.push(workbench.issuesRevision);
+    }
+    assert.equal(workbench.issues.length, 10000);
+    assert.equal(new Set(revisions).size, revisions.length, "select and every Load more page install a new revision");
+    const full = await workbench.snapshot();
+    assert.equal(full.issuesRevision, workbench.issuesRevision);
+    await workbench.snapshot({ since: full.issuesRevision }); // warm the JIT
+    const started = performance.now();
+    const unchanged = await workbench.snapshot({ since: full.issuesRevision });
+    const ms = performance.now() - started;
+    const bytes = Buffer.byteLength(JSON.stringify(unchanged)), fullBytes = Buffer.byteLength(JSON.stringify(full));
+    assert.equal(unchanged.issues, null);
+    assert.ok(bytes < 5_000_000, `an unchanged poll sent ${(bytes / 1e6).toFixed(2)} MB (full: ${(fullBytes / 1e6).toFixed(2)} MB)`);
+    assert.ok(ms < 150, `an unchanged 10,000-issue snapshot took ${ms.toFixed(0)}ms`);
+    await workbench.refresh();
+    assert.notEqual(workbench.issuesRevision, full.issuesRevision, "refresh");
+    const refreshed = workbench.issuesRevision;
+    const applied = await workbench.applyScope({ kind: "project" });
+    assert.equal(applied.applyResult.status, "applied");
+    assert.notEqual(applied.issuesRevision, refreshed, "applyScope");
+    assert.ok(Array.isArray((await workbench.snapshot({ since: refreshed })).issues), "a panel holding the old revision gets the new set");
+    await workbench.idle();
+    const reopened = make("reopened");
+    const before = reopened.issuesRevision;
+    assert.equal(await reopened.hydrate(), true);
+    assert.notEqual(reopened.issuesRevision, before, "hydrate");
+    assert.notEqual(reopened.issuesRevision, workbench.issuesRevision, "two panels never share a revision");
     reopened.close();
 });
 

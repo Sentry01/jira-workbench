@@ -43,6 +43,16 @@ test("loopback server protects all data and action routes with a per-panel token
     assert.equal((await fetch(`${root}/api/update`, { method: "POST", headers, body: "{}" })).status, 400, "no updater: update is refused");
 });
 
+test("GET /api/state passes the panel's working-set revision to the snapshot", async t => {
+    const calls = [];
+    const server = await startServer({ snapshot: async options => { calls.push(options); return { issues: null }; } });
+    t.after(() => server.close());
+    const url = new URL(server.url), headers = { "x-workbench-token": url.hash.slice(1) };
+    await fetch(`${url.origin}/api/state?since=${encodeURIComponent("ab12:7")}`, { headers });
+    await fetch(`${url.origin}/api/state`, { headers });
+    assert.deepEqual(calls, [{ since: "ab12:7" }, { since: null }]);
+});
+
 test("the panel UI is the one loaded with the server code, not whatever is on disk later", async t => {
     let disk = "v1";
     const assets = await loadAssets(async file => `${disk}:${file}`);
