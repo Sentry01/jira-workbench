@@ -23,6 +23,12 @@ test("a clean review of the head commit passes", () => {
     assert.deepEqual(result, { state: "success", description: "Copilot code review of 1234567: approval recommended, no open issues." });
 });
 
+test("a clean review passes even when a resolved finding's title mentions open issues", () => {
+    const resolved = "**No open issues**\n\n<details>\n<summary><strong>2 resolved since last review</strong></summary>\n\n"
+        + "- [Reject approvals reporting 1 open issue](https://example.invalid/1)\n- [Count 3 previously missed issues](https://example.invalid/2)\n</details>";
+    assert.equal(ccrStatus(pull(), [review(overview("Approval recommended", resolved))]).state, "success");
+});
+
 test("no review, or a review still to come for a new push, waits", () => {
     assert.deepEqual(ccrStatus(pull(), []), { state: "failure", description: "Waiting for Copilot code review." });
     const old = review(overview("Approval recommended"), "oldsha");
@@ -35,7 +41,8 @@ test("changes recommended, needs a closer look, open issues or an unknown format
         [overview("Needs a closer look"), "needs a closer look"],
         [overview("Approval recommended", "1 open issue"), "approval recommended"],
         [overview("Approval recommended", "Earlier we said No open issues, but 1 open issue remains."), "approval recommended"],
-        [overview("Approval recommended", "**No open issues**\n\n2 previously missed issues"), "approval recommended"],
+        [overview("Approval recommended", "**No open issues**\n\n<details>\n<summary><strong>2 previously missed issues</strong></summary>\n</details>"), "approval recommended"],
+        [overview("Approval recommended", "**No open issues**\n\n<summary><strong>1 open issue</strong></summary>"), "approval recommended"],
         ["Looks good to me.", "no recognized verdict"],
     ];
     for (const [body, said] of cases) {

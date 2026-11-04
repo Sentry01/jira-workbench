@@ -10,9 +10,10 @@ import { client, postStatus } from "./stack-gate.mjs";
 export const CONTEXT = "CCR gate";
 export const REVIEWER = "copilot-pull-request-reviewer[bot]";
 const VERDICTS = ["Approval recommended", "Needs a closer look", "Changes recommended"];
-// The overview's own summary line for a clean review, and any count of issues, wherever it appears.
+// The overview's own summary line for a clean review, and its count fields for open and previously missed
+// issues. Only those fields count: a resolved finding's title can mention issues too.
 const NO_OPEN_ISSUES = /^\*\*No open issues\*\*/m;
-const SOME_ISSUES = /\b[1-9]\d* (?:open|previously missed) issues?\b/i;
+const SOME_ISSUES = /^\s*<summary>\s*<strong>\s*[1-9]\d* (?:open|previously missed) issues?\s*<\/strong>/im;
 
 // The verdict heading of a Copilot code review overview, or null when the body has none.
 export function verdictOf(body = "") {
@@ -25,8 +26,8 @@ export function verdictOf(body = "") {
 }
 
 // Clean means the latest Copilot review is of the head commit, recommends approval, has the "No open issues"
-// summary line, and counts no issues anywhere. "Needs a closer look" is not clean: it can report issues the
-// review missed earlier. Text that merely mentions "No open issues" is not the summary line.
+// summary line, and has no open or previously missed issue count. "Needs a closer look" is not clean: it can
+// report issues the review missed earlier. Text that merely mentions "No open issues" is not the summary line.
 export function ccrStatus(pull, reviews = []) {
     const review = reviews.filter(r => r.user?.login === REVIEWER && r.state !== "PENDING").at(-1);
     const head = pull.head.sha.slice(0, 7);
