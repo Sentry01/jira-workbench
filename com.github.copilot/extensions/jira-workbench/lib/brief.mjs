@@ -17,6 +17,8 @@ const SECTION_LABEL = /^([*_]{1,2})\S.*\1:?$/;
 // "The following must hold:" are introductory prose and keep the section open.
 const PLAIN_LABEL = /^(?:(?:out of scope|not in scope|non-goals?|notes?|open questions|questions|assumptions|dependencies|risks|background|context|references|links|definition of done|technical notes|implementation notes|design)\b[^:]{0,60}|[^\s:]+(?: [^\s:]+){0,2}):$/i;
 const RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
+// A Markdown setext underline directly below the header line belongs to the heading, not a section break.
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
 
 // Only the explicit criteria section counts. It ends at the next heading, label line or horizontal rule (even before
 // its first item, so an empty section never collects the next one), or at the first unindented prose line after its
@@ -26,7 +28,8 @@ export function criteriaFromDescription(description = "") {
     const start = lines.findIndex(line => CRITERIA_HEADER.test(line.trim().replace(/\s+/g, " ")));
     if (start < 0) return [];
     const output = [];
-    for (const line of lines.slice(start + 1)) {
+    const first = start + (SETEXT_UNDERLINE.test(lines[start + 1] || "") ? 2 : 1);
+    for (const line of lines.slice(first)) {
         const trimmed = line.trim();
         if (SECTION_HEADING.test(trimmed) || RULE.test(line)) break;
         const match = CRITERIA_ITEM.exec(line);

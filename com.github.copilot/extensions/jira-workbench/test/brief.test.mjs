@@ -166,3 +166,10 @@ test("an empty criteria section ends at a plain section label instead of collect
     assert.deepEqual(criteriaFromDescription("## Acceptance criteria\nThe following must hold:\n- First"), ["First"]);
     assert.deepEqual(criteriaFromDescription("Acceptance criteria:\nWhen the user exports a report:\n- A CSV downloads"), ["A CSV downloads"]);
 });
+
+test("a setext underline under the criteria heading is skipped, while later horizontal rules still end the section", () => {
+    assert.deepEqual(criteriaFromDescription("Acceptance criteria\n-------------------\n- Export works\n- Totals match"), ["Export works", "Totals match"]);
+    assert.deepEqual(criteriaFromDescription("Acceptance criteria\n===================\n- Export works"), ["Export works"]);
+    assert.deepEqual(criteriaFromDescription("Acceptance criteria\n---\n- Kept\n\n---\n- After rule"), ["Kept"]);
+    assert.deepEqual(criteriaFromDescription("Acceptance criteria\n\n---\n- After rule"), [], "a rule after a blank line is not an underline");
+});
