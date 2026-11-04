@@ -58,9 +58,8 @@ try {
     await sprintSaved;
     await page.locator("#view-execution").click();
     await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "list");
-    assert.match(await page.locator("body").innerText(), /Answer question/);
-    assert.match(await page.locator("body").innerText(), /Review PR/);
-    assert.match(await page.locator("body").innerText(), /Interrupted/);
+    // Rows render incrementally and skip offscreen paint, so wait for their text instead of reading innerText once.
+    await page.waitForFunction(() => ["Answer question", "Review PR", "Interrupted"].every(text => document.getElementById("tree").textContent.includes(text)));
     const queue = (await workbench.snapshot()).executions;
     assert.equal(queue.find(item => item.nodeId === "4").views.includes("prs"), false);
     assert.equal(queue.find(item => item.nodeId === "6").primary.mode, "autopilot");
