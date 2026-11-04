@@ -84,9 +84,26 @@ try {
         focus: document.activeElement?.closest("#tree [data-node-id]")?.dataset.nodeId, key: document.activeElement?.dataset.focusKey,
         kept: window.keptRow === document.querySelector('#tree [data-node-id="3"]'),
     })), { focus: "2", key: "row:2", kept: true }, "the focused row updates in place and keeps focus; unchanged rows are kept");
+    // Two rows can carry the same control key: one session or pull request linked to two issues, or the same refresh
+    // action. Focus on such a control in a later row stays in that row when the row is rebuilt.
+    const shared = await page.evaluate(() => {
+        const [first, second] = document.querySelectorAll("#tree [data-node-id]");
+        const control = second.querySelector(".row-action");
+        first.querySelector(".row-action").dataset.focusKey = control.dataset.focusKey;
+        control.focus();
+        return { id: second.dataset.nodeId, key: control.dataset.focusKey, active: document.activeElement === control };
+    });
+    assert.ok(shared.active && shared.id !== "2", `a later row's action has focus: ${JSON.stringify(shared)}`);
+    working = working.map(item => item.id === shared.id ? { ...item, summary: `${item.summary}, renamed again` } : item);
+    await workbench.refresh({ fresh: true });
+    await sessionPoll();
+    await page.waitForFunction(id => document.querySelector(`#tree [data-node-id="${id}"]`)?.textContent.includes("renamed again"), shared.id, { timeout: 5_000 });
+    assert.deepEqual(await page.evaluate(() => ({
+        focus: document.activeElement?.closest("#tree [data-node-id]")?.dataset.nodeId, key: document.activeElement?.dataset.focusKey,
+    })), { focus: shared.id, key: shared.key }, "focus returns to the control in its own row, not one with the same key in another row");
     await page.screenshot({ path: screenshotPath("poll.png") });
     assert.deepEqual(errors, []);
-    console.log("PASS: 300 issues with linked sessions; unchanged session polls send no working set, make one request each and record no mutation in #tree, #inspector-content or the action controls; a response for an unknown revision triggers a full read; a Jira change reaches the panel on the next poll, including the focused row, which keeps focus while unchanged rows stay in place. All services were synthetic; no Jira writes.");
+    console.log("PASS: 300 issues with linked sessions; unchanged session polls send no working set, make one request each and record no mutation in #tree, #inspector-content or the action controls; a response for an unknown revision triggers a full read; a Jira change reaches the panel on the next poll, including the focused row, which keeps focus (on its own control even when another row has one with the same key) while unchanged rows stay in place. All services were synthetic; no Jira writes.");
 } finally {
     await page.close();
     await browser.close();

@@ -559,7 +559,8 @@ function captureFocus(container) {
 }
 function restoreFocus(container, key) {
     if (!key) return;
-    const element = [...container.querySelectorAll("[data-focus-key]")].find(candidate => candidate.dataset.focusKey === key);
+    // The container itself counts: a hierarchy row carries its own key.
+    const element = [container, ...container.querySelectorAll("[data-focus-key]")].find(candidate => candidate.dataset.focusKey === key);
     if (!element) return;
     // A rebuilt action control that is still pending is created disabled; keep it focusable as aria-disabled.
     if (element.disabled && element.dataset.actionKey) {
@@ -827,6 +828,9 @@ function renderTree(force = false) {
     const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issuesRevision ?? state.issues, state.executions, linksDigest(state.links), state.requests, requestStatuses(state.requests), state.mapping, selecting, scopeConfirmed]);
     if (!force && signature === treeDigest) return;
     const focus = captureFocus(container), hadFocus = container.contains(document.activeElement);
+    // Control keys repeat across rows (the same refresh action, or one session or PR linked to two issues), so focus is
+    // restored inside the row that had it.
+    const focusedRowId = hadFocus ? document.activeElement.closest("[data-node-id]")?.dataset.nodeId : undefined;
     // A cleared digest means the scope or working set was replaced: build every row afresh.
     if (!treeDigest || rowView !== ui.view) rowCache = new Map();
     else if (rowIssues !== state.issues) for (const id of rowCache.keys()) if (!itemsById.has(id)) rowCache.delete(id);
@@ -914,9 +918,11 @@ function renderTree(force = false) {
     // Kept rows hold their scroll position; a list built afresh is put back where the user left it.
     if (!reused) $("work-scroll").scrollTop = ui.scrollTop;
     if (hadFocus && !container.contains(document.activeElement)) {
-        restoreFocus(container, focus);
-        // The focused control went with its row's old content: keep focus on the row.
-        if (!container.contains(document.activeElement) && document.activeElement === document.body) focusRow(focusedNode, { scroll: false });
+        const row = focusedRowId === undefined ? container : visibleRows.get(focusedRowId);
+        if (row) restoreFocus(row, focus);
+        // The focused control went with its row's old content, or the row itself is gone: keep focus on a row.
+        if (!container.contains(document.activeElement) && document.activeElement === document.body)
+            focusRow(row ? focusedRowId : focusedNode, { scroll: false });
     }
 }
 function executionRow(item, execution, trace) {

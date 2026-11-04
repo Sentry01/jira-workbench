@@ -81,7 +81,8 @@ try {
             const observer = new MutationObserver(list => { records += list.length; });
             observer.observe(tree, { childList: true, subtree: true });
             for (const query of ["g", "ge", "gen"]) { search.value = query; search.dispatchEvent(new Event("input", { bubbles: true })); }
-            const during = records;
+            // Records are delivered after this task: take the pending ones now, or synchronous tree work would go unseen.
+            const during = observer.takeRecords().length;
             await new Promise(resolve => setTimeout(resolve, 300));
             observer.disconnect();
             search.value = "";
