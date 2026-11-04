@@ -76,36 +76,26 @@ function fakeApi(responses) {
     };
 }
 
-test("every run checks every open pull request, and posts a status only when it changes", async () => {
+const listed = (number, sha) => ({ number, state: "open", head: { sha } });
+
+test("every run checks every open pull request from the list alone, and posts a status only when it changes", async () => {
     const api = fakeApi({
-        "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }, { number: 3 }],
-        "pulls/1": pull(1, "aaa"),
-        "pulls/2": pull(2, "bbb"),
-        "pulls/3": { ...pull(3, "ccc"), state: "closed" },
-        "commits/aaa/pulls?per_page=100": [],
-        "commits/bbb/pulls?per_page=100": [{ number: 2, state: "open", head: { sha: "bbb" } }],
+        "pulls?state=open&per_page=100": [listed(1, "aaa"), listed(2, "bbb")],
         "pulls/1/reviews?per_page=100": [review(overview("Approval recommended"), "aaa")],
         "pulls/2/reviews?per_page=100": [review(overview("Changes recommended", "1 open issue"), "bbb")],
         "commits/aaa/statuses?per_page=100": [],
         "commits/bbb/statuses?per_page=100": [{ context: CONTEXT, state: "failure", description: "Copilot code review of bbb: changes recommended.", creator: ACTIONS_BOT_USER }],
     });
-    await run(api, { log: () => {} });
+    assert.deepEqual(await run(api, { log: () => {} }), { changed: 1, errors: [] });
     assert.deepEqual(api.posted.map(p => [p.sha, p.state, p.context]), [["aaa", "success", CONTEXT]]);
 });
 
 test("pull requests that share a head commit pass only if every one of them has a clean review", async () => {
     const responses = {
-        "pulls/1": pull(1, "aaa"),
-        "pulls/2": pull(2, "aaa"),
-        "commits/aaa/pulls?per_page=100": [
-            { number: 1, state: "open", head: { sha: "aaa" } },
-            { number: 2, state: "open", head: { sha: "aaa" } },
-            { number: 3, state: "closed", head: { sha: "aaa" } },
-        ],
+        "pulls?state=open&per_page=100": [listed(1, "aaa"), listed(2, "aaa")],
         "pulls/1/reviews?per_page=100": [review(overview("Approval recommended"), "aaa")],
         "pulls/2/reviews?per_page=100": [],
         "commits/aaa/statuses?per_page=100": [],
-        "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }],
     };
     let api = fakeApi(responses);
     await run(api, { log: () => {} });
@@ -116,29 +106,17 @@ test("pull requests that share a head commit pass only if every one of them has 
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "success"]]);
 });
 
-test("a failed read blocks that commit, the rest are still checked, and the run fails", async () => {
+test("a failed read blocks that commit, the rest are still checked, and the errors are returned", async () => {
     const clean = { context: CONTEXT, state: "success", description: "Copilot code review of aaa: approval recommended, no open issues.", creator: ACTIONS_BOT_USER };
     const api = fakeApi({
-        "pulls?state=open&per_page=100": [{ number: 1 }, { number: 2 }],
-        "pulls/1": pull(1, "aaa"),
-        "pulls/2": pull(2, "bbb"),
-        "commits/aaa/pulls?per_page=100": [],
-        "commits/bbb/pulls?per_page=100": [],
+        "pulls?state=open&per_page=100": [listed(1, "aaa"), listed(2, "bbb")],
         "commits/aaa/statuses?per_page=100": [clean],
         "commits/bbb/statuses?per_page=100": [],
         "pulls/2/reviews?per_page=100": [review(overview("Approval recommended"), "bbb")],
     });
-    await assert.rejects(run(api, { log: () => {} }), /CCR gate failed for #1: unexpected request: pulls\/1\/reviews/);
+    const { changed, errors } = await run(api, { log: () => {} });
+    assert.equal(changed, 2);
+    assert.deepEqual(errors, ["#1: unexpected request: pulls/1/reviews?per_page=100"]);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"], ["bbb", "success"]]);
     assert.match(api.posted[0].description, /^Could not check Copilot code review/);
-});
-
-test("a failed read of a pull request still blocks the head commit it was listed with", async () => {
-    const clean = { context: CONTEXT, state: "success", description: "Copilot code review of aaa: approval recommended, no open issues.", creator: ACTIONS_BOT_USER };
-    const api = fakeApi({
-        "pulls?state=open&per_page=100": [{ number: 1, head: { sha: "aaa" } }],
-        "commits/aaa/statuses?per_page=100": [clean],
-    });
-    await assert.rejects(run(api, { log: () => {} }), /CCR gate failed for #1: unexpected request: pulls\/1$/);
-    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"]]);
 });

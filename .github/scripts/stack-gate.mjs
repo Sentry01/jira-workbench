@@ -105,10 +105,18 @@ export function verdict(stackNumber, members) {
 export const NOT_IN_STACK = { state: "success", description: "Not in a stack." };
 
 // A minimal REST client. get() returns null for 404; list() follows Link pagination.
-export function client({ token, repository, apiUrl = "https://api.github.com" }) {
+// The API answers some reads with a transient 5xx, so each request is retried twice before it fails.
+export function client({ token, repository, apiUrl = "https://api.github.com", fetch: send = fetch, retryDelayMs = 1000 }) {
+    const fetchWithRetry = async (url, init) => {
+        for (let tries = 0; ; tries++) {
+            const response = await send(url, init);
+            if (response.status < 500 || tries === 2) return response;
+            await new Promise(done => setTimeout(done, retryDelayMs * (tries + 1)));
+        }
+    };
     const request = async (method, path, body) => {
         const url = path.startsWith("https://") ? path : `${apiUrl}/repos/${repository}/${path}`;
-        const response = await fetch(url, {
+        const response = await fetchWithRetry(url, {
             method,
             headers: {
                 accept: "application/vnd.github+json",
@@ -208,9 +216,10 @@ async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
     const rules = await api.list(`rules/branches/${base}?per_page=100`);
     const required = requiredChecks(branch, rules);
     const members = [];
-    for (const entry of stack.pull_requests) {
-        const pull = await api.get(`pulls/${entry.number}`);
-        if (!pull || pull.state !== "open" || pull.merged_at) continue;
+    // The stack detail already names each member's state, draft flag and head, so no per-member pull request
+    // read is needed; that keeps a stack evaluation inside the GITHUB_TOKEN budget of 1,000 requests an hour.
+    for (const pull of stack.pull_requests) {
+        if (pull.state !== "open" || pull.merged_at) continue;
         const sha = pull.head.sha;
         const [checkRuns, statuses, reviews, threads] = await Promise.all([
             api.list(`commits/${sha}/check-runs?filter=latest&per_page=100`, "check_runs"),
@@ -237,15 +246,11 @@ async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
     return { ...result, members };
 }
 
-const CCR_GATE_WORKFLOW = ".github/workflows/ccr-gate.yml";
-
 // Which pull requests an event touches. A CI run names its pull requests, or is found through its commit.
-// The schedule, a manual run without a number, and a finished CCR gate run (which checks every open pull
-// request, and may have changed a member's required status without a push) sweep every open pull request.
+// The schedule, and a manual run without a number, sweep every open pull request. The CCR gate starts such a
+// manual run when it changes a status, since a member's required CCR gate can change without a push.
 export async function pullsForEvent(api, eventName, event, input) {
-    const ccrGate = eventName === "workflow_run" && event.workflow_run?.path === CCR_GATE_WORKFLOW;
-    if (ccrGate && event.action !== "completed") return [];
-    if (ccrGate || eventName === "schedule" || (eventName === "workflow_dispatch" && !input)) {
+    if (eventName === "schedule" || (eventName === "workflow_dispatch" && !input)) {
         const pulls = await api.list("pulls?state=open&per_page=100");
         return pulls.map(pull => ({ number: pull.number, pull }));
     }

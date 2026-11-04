@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    ACTIONS_BOT, CONTEXT, changesRequestedBy, checkStates, evaluateStack, memberProblems, requiredChecks, resolve, unresolvedThreads, verdict,
+    ACTIONS_BOT, CONTEXT, client, changesRequestedBy, checkStates, evaluateStack, memberProblems, requiredChecks, resolve, unresolvedThreads, verdict,
 } from "./stack-gate.mjs";
 
 const ACTIONS = 15368;
@@ -152,13 +152,12 @@ function fakeApi(responses) {
 
 const pull = (number, sha, extra = {}) => ({ number, state: "open", merged_at: null, draft: false, head: { sha }, ...extra });
 const memberResponses = (number, sha, runs, reviews = []) => ({
-    [`pulls/${number}`]: pull(number, sha),
     [`commits/${sha}/check-runs?filter=latest&per_page=100`]: { check_runs: runs },
     [`commits/${sha}/statuses?per_page=100`]: [{ context: CONTEXT, state: "failure" }],
     [`pulls/${number}/reviews?per_page=100`]: reviews,
 });
 const stackResponses = members => ({
-    "stacks/26": { number: 26, base: { ref: "main" }, pull_requests: members.map(([number]) => ({ number })) },
+    "stacks/26": { number: 26, base: { ref: "main" }, pull_requests: members.map(([number, sha]) => pull(number, sha)) },
     "branches/main": protectedBranch("Tests", CONTEXT),
     "rules/branches/main?per_page=100": [],
     ...Object.assign({}, ...members.map(args => memberResponses(...args))),
@@ -233,9 +232,17 @@ test("a matching status from anyone but github-actions[bot] does not stop the ga
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"]]);
 });
 
+test("a member's state comes from the stack detail, without reading each pull request", async () => {
+    const responses = stackResponses([[19, "aaa", [run("Tests", "success")]], [20, "bbb", [run("Tests", "success")]]]);
+    responses["stacks/26"].pull_requests[1] = pull(20, "bbb", { draft: true });
+    const api = fakeApi(responses);
+    await evaluateStack(api, 26, { log: () => {} });
+    assert.equal(api.posted[0].description, "Stack #26 not ready: #20 (draft)");
+});
+
 test("merged and closed members are skipped, and get no status", async () => {
     const responses = stackResponses([[19, "aaa", []], [20, "bbb", [run("Tests", "success")]]]);
-    responses["pulls/19"] = pull(19, "aaa", { state: "closed", merged_at: "2026-11-04T00:00:00Z" });
+    responses["stacks/26"].pull_requests[0] = pull(19, "aaa", { state: "closed", merged_at: "2026-11-04T00:00:00Z" });
     const api = fakeApi(responses);
     await evaluateStack(api, 26, { log: () => {} });
     assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["bbb", "success"]]);
@@ -333,9 +340,18 @@ test("a manual run without a number sweeps, and rejects anything but a number", 
     await assert.rejects(resolve(api, "workflow_dispatch", {}, { input: "22; true", log: () => {} }), /not a pull request number/);
 });
 
-test("a finished CCR gate run sweeps every open pull request; its other activity is ignored", async () => {
-    const api = fakeApi({ "pulls?state=open&per_page=100": [pull(19, "aaa", { stack: { number: 26 } })] });
-    const event = action => ({ action, workflow_run: { path: ".github/workflows/ccr-gate.yml", head_sha: "main", pull_requests: [] } });
-    assert.deepEqual(await resolve(api, "workflow_run", event("completed"), { log: () => {} }), [26]);
-    assert.deepEqual(await resolve(api, "workflow_run", event("requested"), { log: () => {} }), []);
+
+test("the client retries a transient server error, and fails after three attempts", async () => {
+    const replies = [500, 502, 200];
+    const calls = [];
+    const send = async url => {
+        calls.push(url);
+        const status = replies.shift() ?? 500;
+        return new Response(status === 200 ? "[1]" : "oops", { status });
+    };
+    const api = client({ token: "t", repository: "octo/demo", fetch: send, retryDelayMs: 0 });
+    assert.deepEqual(await api.get("pulls?state=open"), [1]);
+    assert.equal(calls.length, 3);
+    await assert.rejects(api.get("pulls/1"), /GET pulls\/1 failed: 500 oops/);
+    assert.equal(calls.length, 6);
 });

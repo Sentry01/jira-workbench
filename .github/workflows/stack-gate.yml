@@ -8,16 +8,18 @@ name: stack gate
 # See CONTRIBUTING.md.
 #
 # Any change to a member re-evaluates the whole stack, so every member's status stays in step:
-# pull request, review and review comment events, and every run of the tests workflow when it is
-# requested, starts and completes, so a re-run blocks the stack while its checks are pending.
-# Each completed ccr gate run sweeps every open pull request, since it can change a member's
-# required CCR gate status without a push.
-# A schedule also sweeps every open pull request from the default branch, because:
+# pull request, review and review comment events, and every run of the tests workflow when it
+# starts and completes, so a re-run blocks the stack while its checks are pending. The ccr gate
+# workflow starts a sweep when it changes a status, since a member's required CCR gate can change
+# without a push.
+# A 15-minute schedule also sweeps every open pull request from the default branch, because:
 # - resolving or reopening a review thread triggers no workflow (pull_request_review_thread is a
 #   webhook event, not an Actions trigger);
 # - review events load this file from the pull request's merge ref, which a stacked pull request
 #   lacks until its base branch contains it.
-# Statuses are posted only when they change.
+# Statuses are posted only when they change. Both gates share the GITHUB_TOKEN budget of 1,000 API
+# requests an hour for this repository, so they read as little as they can and sweep every 15
+# minutes, not more often.
 #
 # These events run with a write token, so this workflow never checks out or runs pull request
 # code. It checks out the default branch for .github/scripts alone and reads the pull requests
@@ -30,10 +32,10 @@ on:
   pull_request_review_comment:
     types: [created, edited, deleted]
   workflow_run:
-    workflows: [tests, ccr gate]
-    types: [requested, in_progress, completed]
+    workflows: [tests]
+    types: [in_progress, completed]
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       pull_request:

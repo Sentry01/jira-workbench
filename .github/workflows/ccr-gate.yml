@@ -8,12 +8,19 @@ name: ccr gate
 #
 # A new push gets no status until the gate posts one, so a required CCR gate blocks the new head
 # from the moment it is pushed. Copilot's own review events need manual approval to run workflows,
-# so the schedule picks up new reviews; pull request events also start a check at once.
+# so a 15-minute schedule picks up new reviews; pull request events also start a check at once.
 #
 # Every run checks every open pull request, one run at a time: pull requests can share a head
 # commit, and a status belongs to the commit. A newer pending run replaces an older one, so the
-# last status posted always comes from the latest read. The stack gate re-evaluates stacks after
-# each run.
+# last status posted always comes from the latest read. When a run changes a status, it starts a
+# stack gate sweep, since a stack member's required CCR gate can change without a push.
+#
+# Both gates share the GITHUB_TOKEN budget of 1,000 API requests an hour for this repository, so
+# they read as little as they can and sweep every 15 minutes, not more often.
+#
+# The required check trusts statuses from github-actions[bot], and any workflow in this repository
+# can post as that account, including one a pull request adds or edits. The gate guards against
+# merging too early, not against a change to .github/ itself; review those changes by hand.
 #
 # pull_request_target runs with a write token, so this workflow never checks out or runs pull
 # request code. It checks out the default branch for .github/scripts alone and reads the pull
@@ -22,7 +29,7 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -39,6 +46,8 @@ jobs:
       contents: read
       pull-requests: read
       statuses: write
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,6 +60,23 @@ jobs:
           node-version: "22"
 
       - name: Post the CCR gate status
+        id: gate
         run: node .github/scripts/ccr-gate.mjs
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # A workflow_dispatch from GITHUB_TOKEN is the one event it can start. Its own job keeps
+  # actions: write away from the job that reads pull requests.
+  refresh-stacks:
+    name: Re-evaluate stacks
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start a stack gate sweep
+        run: gh workflow run stack-gate.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

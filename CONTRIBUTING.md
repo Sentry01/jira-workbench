@@ -104,10 +104,9 @@ request in the stack:
   base branch, and ignores **Stack gate** itself when it judges the members.
 - Any change in the stack re-evaluates all of it: a member is opened, pushed,
   edited, closed, marked draft or ready, reviewed or commented on, or a run of
-  the `tests` workflow is requested, starts or finishes. A re-run that leaves
-  the head commit unchanged therefore blocks the stack while its checks are
-  pending.
-- A schedule also sweeps every open pull request every 5 minutes (GitHub can
+  the `tests` workflow starts or finishes. A re-run that leaves the head commit
+  unchanged therefore blocks the stack while its checks are pending.
+- A schedule also sweeps every open pull request every 15 minutes (GitHub can
   delay scheduled runs). It picks up resolved and reopened review threads,
   which trigger no workflow, and review events on stacked pull requests, which
   run the workflow file from the pull request's merge ref and so miss it until
@@ -131,24 +130,34 @@ on the head commit of every open pull request:
   "Changes recommended", "Needs a closer look", a review of an older commit, or
   no review at all is a failure, and the description says which. If several
   open pull requests share a head commit, each of them needs that clean review.
-- If the gate cannot read a pull request, it marks the head commit as failed
-  rather than leave an earlier success, and checks the others.
+- If the gate cannot read a pull request's reviews, it marks the head commit as
+  failed rather than leave an earlier success, and checks the others.
 - A new push has no **CCR gate** status until the gate posts one, so a required
   gate blocks the new head commit until Copilot reviews it. The workflow checks
-  pushes at once, and a schedule checks every open pull request every 5 minutes
-  to pick up new reviews: Copilot's own review events need manual approval to
+  pushes at once, and a schedule checks every open pull request every 15
+  minutes to pick up new reviews, so a clean review can take that long to count: Copilot's own review events need manual approval to
   run workflows. A status is posted only when it changes.
 - Unresolved review threads, including Copilot's, are blocked separately by
   `main`'s conversation resolution rule.
 - Every run checks every open pull request, one run at a time, so two runs
   cannot post conflicting statuses for the same commit. To check by hand, run
   the workflow from the Actions tab.
-- Each finished run re-evaluates every stack, because a member's **CCR gate**
-  can change without a push.
+- A run that changes a status starts a stack gate sweep, because a member's
+  **CCR gate** can change without a push.
 
 If Copilot code review does not review a pull request, request a review from
 Copilot on it. Like the stack gate, this workflow never checks out or runs pull
 request code.
+
+Limits of both gates:
+
+- They share the `GITHUB_TOKEN` budget of 1,000 API requests an hour for this
+  repository. They read as little as they can and sweep every 15 minutes; do
+  not make the schedules more frequent without checking that budget.
+- The required checks trust statuses from `github-actions[bot]`, and any
+  workflow in this repository can post as that account, including one that a
+  pull request adds or edits. The gates stop a merge that comes too early, not
+  a change to `.github/` itself, so review such changes by hand.
 
 ## Review rules
 

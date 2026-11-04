@@ -4,6 +4,7 @@
 // Unresolved review threads are enforced separately, by main's conversation resolution rule.
 // Usage: node .github/scripts/ccr-gate.mjs
 // It reads and writes through the GitHub API only; it never checks out or runs pull request code.
+import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { client, postStatus } from "./stack-gate.mjs";
 
@@ -41,27 +42,26 @@ export function ccrStatus(pull, reviews = []) {
     return { state: "failure", description: `Copilot code review of ${head}: ${verdict ? verdict.toLowerCase() : "no recognized verdict"}.` };
 }
 
-// Several open pull requests can share a head commit, and a status belongs to the commit, so success needs a
-// clean review on every one of them. If a check fails partway, its commit is blocked rather than left with an
-// earlier success, and the rest are still checked; the run then fails with every error.
-// Every run checks every open pull request. Runs are serialized, and a newer pending run replaces an older one,
-// so the last status posted for a commit always comes from the latest read, and no pull request is skipped.
+// Every run checks every open pull request, from the open list alone: one request for the list, then one for
+// each pull request's reviews and one for each head commit's statuses, to stay well inside the GITHUB_TOKEN
+// budget of 1,000 requests an hour. Several open pull requests can share a head commit, and a status belongs
+// to the commit, so success needs a clean review on every one of them. Runs are serialized, and a newer
+// pending run replaces an older one, so the last status posted always comes from the latest read.
+// If a check fails partway, its commit is blocked rather than left with an earlier success, and the rest are
+// still checked. Returns how many statuses changed and the errors met.
 export async function run(api, { targetUrl, log = console.log } = {}) {
-    const done = new Set();
+    const heads = new Map();
+    for (const pull of await api.list("pulls?state=open&per_page=100")) {
+        if (!heads.has(pull.head.sha)) heads.set(pull.head.sha, []);
+        heads.get(pull.head.sha).push(pull);
+    }
+    let changed = 0;
     const errors = [];
-    for (const listed of await api.list("pulls?state=open&per_page=100")) {
-        const { number } = listed;
-        // The listed head lets a failed read of the pull request still block its commit.
-        let sha = listed.head?.sha;
+    for (const [sha, pulls] of heads) {
+        const names = pulls.map(p => `#${p.number}`).join(", ");
         try {
-            const pull = await api.get(`pulls/${number}`);
-            if (!pull || pull.state !== "open" || done.has(pull.head.sha)) continue;
-            sha = pull.head.sha;
-            done.add(sha);
-            const sharing = (await api.list(`commits/${sha}/pulls?per_page=100`))
-                .filter(p => p.state === "open" && p.head?.sha === sha && p.number !== number);
             const results = [];
-            for (const p of [pull, ...sharing]) {
+            for (const p of pulls) {
                 results.push({ number: p.number, ...ccrStatus(p, await api.list(`pulls/${p.number}/reviews?per_page=100`)) });
             }
             const failed = results.find(r => r.state !== "success");
@@ -69,24 +69,28 @@ export async function run(api, { targetUrl, log = console.log } = {}) {
                 : results.length > 1 ? { state: "failure", description: `#${failed.number}: ${failed.description}` }
                 : failed;
             const posted = await postStatus(api, sha, CONTEXT, result, targetUrl);
-            log(`${results.map(r => `#${r.number}`).join(", ")}: ${result.state}: ${result.description}${posted ? "" : " (unchanged)"}`);
+            if (posted) changed++;
+            log(`${names}: ${result.state}: ${result.description}${posted ? "" : " (unchanged)"}`);
         } catch (error) {
-            errors.push(`#${number}: ${error.message}`);
-            log(`#${number}: ${error.message}`);
-            if (!sha) continue;
+            errors.push(`${names}: ${error.message}`);
+            log(`${names}: ${error.message}`);
             const blocked = { state: "failure", description: "Could not check Copilot code review; blocked until the CCR gate runs again." };
-            try { await postStatus(api, sha, CONTEXT, blocked, targetUrl); }
+            try { if (await postStatus(api, sha, CONTEXT, blocked, targetUrl)) changed++; }
             catch (postError) { log(`Could not block ${sha.slice(0, 7)}: ${postError.message}`); }
         }
     }
-    if (errors.length) throw new Error(`CCR gate failed for ${errors.join("; ")}`);
+    return { changed, errors };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     const env = process.env;
     const api = client({ token: env.GH_TOKEN, repository: env.GITHUB_REPOSITORY, apiUrl: env.GITHUB_API_URL });
     const targetUrl = env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : undefined;
-    run(api, { targetUrl }).catch(error => {
+    // `changed` lets the workflow re-evaluate stacks only when a member's CCR gate may have changed.
+    run(api, { targetUrl }).then(({ changed, errors }) => {
+        if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `changed=${changed > 0}\n`);
+        if (errors.length) throw new Error(`CCR gate failed for ${errors.join("; ")}`);
+    }).catch(error => {
         console.log(`::error::${error.message}`);
         process.exit(1);
     });
