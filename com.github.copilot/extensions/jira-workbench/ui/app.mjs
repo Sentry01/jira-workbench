@@ -764,6 +764,15 @@ function armClear(key, armed) {
         updateActionControl(control);
     }
 }
+// armClear relabels only the Clear controls on screen, so a cached row can hold a label from an earlier confirmation
+// state; such a row is rebuilt rather than shown again.
+const clearRows = new WeakSet();
+function clearStateCurrent(row) {
+    if (!clearRows.has(row)) return true;
+    for (const control of row.querySelectorAll("[data-clear-label]"))
+        if (control.classList.contains("confirming") !== armedClears.has(control.dataset.actionKey)) return false;
+    return true;
+}
 function clearRequestButton(label, nodeId, requestId) {
     const key = actionKey("clear-request", requestId), armed = armedClears.has(key);
     const control = button(armed ? "Confirm clear" : label, () => {
@@ -895,9 +904,10 @@ function renderTree(force = false) {
     const visible = new Map(), rows = [];
     for (const { item, digest, build } of entries) {
         const shown = `${itemDigest(item)}${digest}`, cached = rowCache.get(item.id);
-        let row = cached?.shown === shown && !visible.has(item.id) ? cached.row : null;
+        let row = cached?.shown === shown && !visible.has(item.id) && clearStateCurrent(cached.row) ? cached.row : null;
         if (!row) {
             row = build();
+            if (row.querySelector("[data-clear-label]")) clearRows.add(row);
             setRowTabStop(row, false);
             if (!visible.has(item.id)) rowCache.set(item.id, { row, shown });
         }

@@ -209,6 +209,27 @@ try {
     await page.locator("#launch-dialog[open]").waitFor();
     assert.equal(await page.locator("#launch-mode").inputValue(), "autopilot", "the inspector's Start opens a leaf in Implement, like the queue row");
     await page.locator("#cancel-launch").click();
+    // A row kept while a search hides it shows the current confirmation state when it returns. It is rebuilt while
+    // armed, the confirmation times out, a search hides it, and the inspector arms the same request again.
+    await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).click();
+    await stuckRow.getByRole("button", { name: "Confirm clear", exact: true }).waitFor();
+    const readySummary = issues[5].summary;
+    issues[5].summary = `${readySummary}, renamed`;
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(() => document.querySelector('#tree [data-node-id="6"]')?.textContent.includes("renamed"));
+    await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor({ timeout: 15_000 });
+    await search(page, "Needs your answer");
+    await stuckRow.waitFor({ state: "detached" });
+    await inspector.getByRole("button", { name: "Clear stuck request", exact: true }).click();
+    await inspector.getByRole("button", { name: "Confirm clear", exact: true }).waitFor();
+    await search(page, "Ready example");
+    assert.deepEqual(await stuckRow.locator("[data-clear-label]").evaluateAll(controls => controls.map(control => control.textContent)), ["Confirm clear"],
+        "a row shown again from the cache matches the request's current confirmation state");
+    await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor({ timeout: 15_000 });
+    issues[5].summary = readySummary;
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(() => !document.querySelector('#tree [data-node-id="6"]')?.textContent.includes("renamed"));
+    assert.equal((await store.read()).requests.stuck.status, "queued", "arming and timing out sends nothing");
     await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).click();
     const confirmClear = stuckRow.getByRole("button", { name: "Confirm clear", exact: true });
     await confirmClear.waitFor();
@@ -306,7 +327,7 @@ try {
     await verifyAccessibility({ page, workbench });
     assert.equal(sent.length, 3, "The accessibility checks queue exactly one confirmed launch");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();
