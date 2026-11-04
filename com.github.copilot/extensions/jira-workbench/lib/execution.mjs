@@ -77,6 +77,11 @@ export function deriveExecution({ issue, trace = {}, requests = [], mapping = nu
     for (const session of sessions) {
         const reference = { sessionId: session.id };
         const name = session.name || session.id;
+        // A deleted session observes nothing and must not make its live siblings uncertain.
+        if (session.activity === "missing") {
+            signal("session_missing", `${name}: session no longer exists.`, reference);
+            continue;
+        }
         const uncertain = session.stale || uncertainSource("sessions") || !["busy", "idle"].includes(session.activity);
         const observed = uncertain ? "last observed: " : "";
         const open = label => ({ kind: "open_session", label, ...reference });

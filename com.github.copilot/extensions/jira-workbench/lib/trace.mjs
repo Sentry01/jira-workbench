@@ -37,8 +37,19 @@ function sessionRecord(detail, id, status = detail) {
     };
 }
 
+// A linked session the host no longer knows is re-checked by this many polls, then only by an explicit trace refresh.
+export const MISSING_POLLS = 3;
+
+function mergeSession(live, record) {
+    const merged = { ...live, ...record, ...(live?.contextHash ? { contextHash: live.contextHash } : {}) };
+    if (record.activity !== "missing") { delete merged.missingSince; delete merged.missingPolls; }
+    return merged;
+}
+
 // Applies one observed trace to the latest persisted state without regressing a newer concurrent observation.
-function mergeTrace(current, { scope, previous, next, stamp, source }) {
+// observed: the IDs of sessions this trace actually read (not skipped or failed); skipped: the IDs a poll did not ask
+// about, whose persisted record is kept as it is now, since another refresh may have read them meanwhile.
+function mergeTrace(current, { scope, previous, next, stamp, source, observed = [], skipped = [] }) {
     const link = current.links[scope] || previous;
     const newer = name => Date.parse(link.sourceStatus?.[name]?.fetchedAt || "") > Date.parse(stamp);
     const applySessions = source !== "github" && !newer("sessions");
@@ -49,10 +60,16 @@ function mergeTrace(current, { scope, previous, next, stamp, source }) {
     if (source === "sessions" && next.sourceStatus.github?.state === "unknown"
         && next.sessions.some(s => s.prNumber && !link.prs.some(pr => pr.number === s.prNumber && pr.repo === s.prRepo)))
         sourceStatus.github = next.sourceStatus.github;
+    // A newer sessions source can come from a poll that skipped a session confirmed missing. It did not observe that
+    // session, so this trace's own observation of it still applies unless the session was read after this trace began.
     const sessions = applySessions ? next.sessions.map(record => {
         const live = link.sessions.find(s => s.id === record.id);
-        return { ...live, ...record, ...(live?.contextHash ? { contextHash: live.contextHash } : {}) };
-    }) : link.sessions;
+        return skipped.includes(record.id) && live ? live : mergeSession(live, record);
+    })
+        : source === "github" ? link.sessions : link.sessions.map(live => {
+            const record = observed.includes(live.id) && next.sessions.find(s => s.id === live.id);
+            return record && !(Date.parse(live.verifiedAt || "") > Date.parse(stamp)) ? mergeSession(live, record) : live;
+        });
     if (applySessions) sessions.push(...link.sessions.filter(s => !previous.sessions.some(p => p.id === s.id) && !sessions.some(n => n.id === s.id)));
     const prs = applyGithub ? [...next.prs, ...link.prs.filter(pr => !next.prs.some(p => p.url === pr.url))] : link.prs;
     const errors = [...new Set(Object.values(sourceStatus).flatMap(s => s?.error ? [s.error] : []))];
@@ -109,14 +126,18 @@ export class Trace {
         const link = (await wb.store.read()).links[wb.selectedScope(nodeId)];
         if (!link?.prs.some(pr => pr.repo === repo && pr.number === number)) throw new Error("This PR is not linked to the selected trace.");
         if (!wb.hostActions) throw new Error("Native PR navigation is unavailable in this runtime.");
-        const owner = link.sessions.find(s => s.prNumber === number && s.prRepo?.toLowerCase() === repo.toLowerCase());
+        // A deleted session cannot open its PR; the native PR view can.
+        const owner = link.sessions.find(s => s.activity !== "missing" && s.prNumber === number && s.prRepo?.toLowerCase() === repo.toLowerCase());
         return wb.hostActions.openPr(repo, number, owner ? { sessionId: owner.id } : {});
     }
-    async refreshExecution({ source = "all" } = {}) {
+    // poll: the panel's background session poll, which stops asking about sessions confirmed missing. Any other
+    // refresh, such as Refresh Sessions, is the user's request and checks them again.
+    async refreshExecution({ source = "all", poll = false } = {}) {
         const wb = this.workbench;
         if (!["all", "sessions", "github"].includes(source)) throw new Error("Choose a supported execution source.");
+        poll = poll === true;
         const scope = wb.selectedScope(), generation = wb.refreshGeneration;
-        const key = `${wb.loadKey()}/${generation}/${source}`;
+        const key = `${wb.loadKey()}/${generation}/${source}${poll ? "/poll" : ""}`;
         if (wb.executionRefreshes.has(key)) return wb.executionRefreshes.get(key);
         const pending = (async () => {
             const data = await wb.store.read();
@@ -134,7 +155,7 @@ export class Trace {
                 try { statuses = objects(await wb.gateway.call("get_sessions_status", {})); }
                 catch (error) { statusError = error.message; }
             }
-            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, statuses, statusError }));
+            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError }));
             if (traces.length) await wb.store.update(current => { for (const trace of traces) mergeTrace(current, trace); });
             return wb.snapshot();
         })();
@@ -152,7 +173,7 @@ export class Trace {
     }
     // Observes every source for one scope concurrently, then folds results in stored order so
     // evidence and error attribution stay deterministic.
-    async collectTrace({ scope, previous, source = "all", statuses, statusError = null }) {
+    async collectTrace({ scope, previous, source = "all", poll = false, statuses, statusError = null }) {
         const wb = this.workbench;
         const stamp = new Date().toISOString();
         const next = {
@@ -167,17 +188,31 @@ export class Trace {
         if (statusError) next.errors.push(`Live session activity unavailable: ${statusError}`);
         let sessionError = statusError, githubError = null;
         const observations = await mapLimit(previous.sessions, 4, async stored => {
-            const result = { stored, record: stored, observed: false, pr: null, error: null };
-            try {
-                if (source !== "github") {
+            const result = { stored, record: stored, observed: false, read: false, skipped: false, pr: null, error: null };
+            // Polls stop asking about a session confirmed missing; an explicit refresh still checks it.
+            if (poll && stored.activity === "missing" && stored.missingPolls >= MISSING_POLLS) {
+                result.observed = result.skipped = true;
+                return result;
+            }
+            if (source !== "github") {
+                try {
                     const detail = await wb.gateway.call("get_session", { project_session_id: stored.id });
                     const status = statuses.find(s => s.id === stored.id || s.id === detail.id);
                     result.record = { ...stored, ...sessionRecord(detail, stored.id, status || detail), stale: Boolean(statusError) };
-                    result.observed = true;
+                } catch (error) {
+                    // The host's own answer that the session is gone (deleted): a fact about the session, not a failed read.
+                    if (!error.notFound) { result.error = error; return result; }
+                    result.record = { ...stored, activity: "missing", missingSince: stored.missingSince || stamp,
+                        missingPolls: (stored.activity === "missing" ? stored.missingPolls || 0 : 0) + 1, stale: false,
+                        awaitingInput: null, awaitingPlan: false, interrupted: false, error: null, verifiedAt: new Date().toISOString() };
                 }
-                if (source !== "sessions" && result.record.prNumber && result.record.prRepo)
-                    result.pr = await wb.github(result.record.prRepo, result.record.prNumber);
-            } catch (error) { result.error = error; }
+                result.observed = result.read = true;
+            }
+            // A deleted session's recorded PR still needs verifying; a failed lookup is GitHub's, not the session's.
+            if (source !== "sessions" && result.record.prNumber && result.record.prRepo) {
+                try { result.pr = await wb.github(result.record.prRepo, result.record.prNumber); }
+                catch (error) { result.error = error; }
+            }
             return result;
         });
         for (const { stored, record, observed, pr, error } of observations) {
@@ -212,6 +247,7 @@ export class Trace {
         });
         if (source !== "github") next.sourceStatus.sessions = { state: sessionError ? "stale" : "fresh", fetchedAt: stamp, error: sessionError };
         if (source !== "sessions") next.sourceStatus.github = { state: githubError ? "stale" : "fresh", fetchedAt: stamp, error: githubError };
-        return { scope, previous, next, stamp, source };
+        return { scope, previous, next, stamp, source, observed: observations.filter(o => o.read).map(o => o.stored.id),
+            skipped: observations.filter(o => o.skipped).map(o => o.stored.id) };
     }
 }

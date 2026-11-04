@@ -209,6 +209,12 @@ then offers **Reload** only. A reload restarts every extension in the
 session; the host re-opens open panels against the new process. Background checks
 that fail (offline, `gh` signed out) stay silent; pressing the button reports why.
 
+An update that times out (see the bounds below) clears the in-progress state and
+offers **Update & reload** again; the next press checks first, so it reloads
+instead if the update landed meanwhile. The 20-second "did not restart" watchdog
+starts when the reload is sent, so a reload that never answers also ends in
+**Reload**. Panels opened together share one updater per extension process.
+
 ## Daily execution
 
 The queue is derived from recorded Jira, Copilot, and GitHub evidence:
@@ -330,6 +336,13 @@ the real session.
   project.
 - Jira status, session activity, PR state, and checks remain separate.
   An idle agent, open PR, or missing check result is **not** completion.
+- A linked session the host reports as not found is recorded with activity
+  `missing` and `missingSince`, and shown as "Session no longer exists". It is not
+  a failed observation: it does not stale the sessions source or make sibling
+  sessions uncertain. The panel's background session poll stops asking about it
+  after 3 misses; an explicit **Refresh**, **Refresh live state**, **Refresh
+  Sessions** or **Refresh trace** still checks, so a restored session returns. The
+  link itself is kept.
 
 The header's **Refresh** re-reads Jira, then the project's linked sessions and
 GitHub evidence. **Refresh live state** re-reads only the linked sessions and
@@ -414,7 +427,7 @@ The design follows from these runtime behaviors, each observed live:
 | With a dead cached token, `mcp.oauth.login` on v2 throws "probe returned HTTP 400" | **Sign in to Atlassian** retries once with `forceReauth`, and also forces re-auth when the runtime returns no URL but the probe says expired |
 | A server can drop to **`needs-auth`**: its tools vanish, and a tool still in the snapshot fails with "Tool '...' does not exist" | Treated as `signin` straight from the server status, with no probe. The panel keeps the last good data and reloads as soon as the server is `connected` again |
 | A Jira server can end up `failed` | Restarted on the budget above |
-| `tools.getCurrentMetadata()` and `mcp.list` can stop answering for minutes | Every runtime call is time-bounded (below). A stalled call is reused rather than repeated, and the last tool list is used while there is one |
+| `tools.getCurrentMetadata()` and `mcp.list` can stop answering for minutes | Every runtime call is time-bounded (below). A stalled call is reused rather than repeated, and the last tool list is used while there is one. A call still pending three times its bound after it was sent (at most 5 minutes), or past its bound when an MCP event arrives, is presumed lost and sent again; this is safe because the gateway only reads |
 | The Copilot app's **Atlassian Rovo connector** is listed by `mcp.list` as `cc-_<id>`, with no display name or source, and offers the same Atlassian v2 tools as an `atlassian` MCP server | A server offering `getAccessibleAtlassianResources` counts as a Jira server whatever its name. While no Jira server is known to be connected, a check waits up to 1.5s for the tool list to find one. When several servers offer a Jira tool, the gateway reads from the most usable one (by status, then preferring the connector), switches to another after a failed attempt (for the project list, to the other Atlassian version when the servers differ), and keeps this choice per tool list. The connection reports the server that last answered |
 | The app signs in its connector itself; `/mcp auth` and `mcp.oauth.login` do not apply to it | When the connector needs sign-in, the panel asks you to reconnect it in the Copilot app, shows no **Sign in to Atlassian** button, and never starts an OAuth login for it |
 | A canvas opened from **Canvases** in the app's sidebar runs in its own Copilot runtime with an empty home: no MCP servers, no sign-in, and none of the app's session tools. Its tool list is empty until a rebuild adds only the CLI built-ins, yet the extension still reads the saved data in `~/.copilot` | The `standalone` state above: the panel shows the saved data and says to open it from a session |
@@ -432,9 +445,12 @@ Every Copilot runtime call the extension makes is time-bounded:
 | Starting sign-in (`mcp.oauth.login`) | 30s |
 | Native navigation: tool list, then the navigation call | 8s, then 30s |
 | Installed plugin list (`plugins.list`), for the update check | 5s |
+| Plugin update (`plugins.update`), for **Update & reload** | 120s |
+| Plugin or extension reload (`plugins.reload`, `extensions.reload`), after an update | 30s |
 
 A Jira-side timeout fails as retryable ("Copilot did not answer ... within Ns.
-Retrying automatically.") and the supervisor tries again. A navigation timeout
+Still waiting; the Workbench checks again automatically.") and the supervisor tries
+again, waiting on the same pending call until the cap above. A navigation timeout
 fails with "Try again." (see [Daily execution](#daily-execution)). Outside the
 runtime, `gh pr view` is bounded at 30s, and the updater's `git fetch` at 30s and
 its GitHub check at 20s.
@@ -546,6 +562,13 @@ acknowledgements:
 
 A larger body is read to the end and discarded, then answered with 413, so the
 client never hangs mid-upload.
+
+A body that is not valid JSON, or an error an action raises with a message for the
+panel (validation, or what to do next), is answered with 400 and that message. A
+programming error, a failed system call or a thrown non-`Error` is answered with 500
+and a generic message ("The Workbench hit an internal error. ..."); the detail is
+logged to the extension's standard error, not sent to the panel. The panel treats a
+5xx from **Start** as an unknown launch outcome, never as a definite failure.
 
 ## Persistent local data
 

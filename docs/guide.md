@@ -76,7 +76,10 @@ change reaches you when the next release includes it. When the check finds a
 newer build, a banner appears above the work queue:
 
 - **Update available ... Update & reload** updates the install and restarts the
-  Workbench. The open panel comes back on the new build by itself.
+  Workbench. The open panel comes back on the new build by itself. If Copilot
+  does not answer the update within 2 minutes, the banner shows "Update failed:
+  ..." and offers **Update & reload** again. If the Workbench does not restart,
+  the banner offers **Reload**.
 - **A different build is on disk ... Reload** means the files were already
   updated (for example by `git pull` or another session). Reloading runs them.
 - **... has local changes** means a git checkout has uncommitted edits. The
@@ -374,6 +377,10 @@ The three steps are always in the same order:
    the project started in Jira or was created from a PRD.
 2. **Copilot sessions**: every session on the item, each with **Open session**.
    You can also link a session you started elsewhere by its app session ID.
+   A linked session that was deleted in the Copilot app shows **Session no
+   longer exists**, without **Open session**. It does not mark the item stale
+   or hide the actions of the item's other sessions, such as **Answer
+   question**.
 3. **Pull requests & checks**: pull requests found in session metadata and
    verified on GitHub, with their checks.
 
@@ -478,7 +485,7 @@ Then find the message you see:
 | Message or symptom | Fix |
 | --- | --- |
 | "Atlassian needs you to sign in", "... sign-in has expired", or "... needs sign-in" | Press **Sign in to Atlassian** in the canvas, or run `/mcp auth atlassian`. If the canvas asks you to reconnect the Atlassian connector instead, reconnect it in the Copilot app. The canvas reloads your site and project when you finish |
-| "Copilot did not answer ... Retrying automatically" | Wait: the last good data stays visible and the canvas retries. If it persists, reload extensions. If that does not help, restart the Copilot session |
+| "Copilot did not answer ... Still waiting; the Workbench checks again automatically." | Wait: the last good data stays visible. The canvas keeps waiting for that answer and asks Copilot again if it never comes. If it persists, reload extensions. If that does not help, restart the Copilot session |
 | "MCP server atlassian is stopped" | Start it with `/mcp` in Copilot. The canvas loads within about a second |
 | "atlassian failed to connect" | Usually nothing: the canvas restarts the server itself, up to 3 times. If it keeps failing, restart it with `/mcp` |
 | "Reconnecting automatically in about Ns" | Nothing. The canvas retries by itself; you never need **Reload connections** |
@@ -491,6 +498,10 @@ Then find the message you see:
 | The canvas does not appear | Start a new Copilot session, because plugins load when a session starts. If it is still missing, see [install troubleshooting](install.md#troubleshooting) |
 | "A different build (...) is on disk. Reload to run it." | Press **Reload** in the banner, or ask Copilot to reload extensions. The session started before the files were last updated |
 | "Launch outcome unknown: no session receipt after 15 minutes" | Check the project's sessions first, because the launch may have created one. Then start again, or press **Clear stuck request** and **Confirm clear**. See [When a launch never reports back](#when-a-launch-never-reports-back) |
+| "Update failed: Copilot did not answer the plugin update within 120s. Try again." | Press **Update & reload** again. It checks first, so it only reloads if the update finished in the meantime |
+| "The Workbench did not restart. Reload extensions to finish." or "Reload failed: ..." | Press **Reload** in the banner, or ask Copilot to reload extensions |
+| A linked session shows "Session no longer exists" | The session was deleted in the Copilot app. Nothing to fix: the item's other sessions and pull requests are still traced |
+| "The Workbench hit an internal error" | Try the action again. If it keeps happening, reload extensions |
 | "Copilot did not answer the navigation request within 30s. Try again." | Press the button again to start a new request. If it keeps happening, reload extensions |
 
 ---

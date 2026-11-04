@@ -258,3 +258,185 @@ test("a masked session ID from the host never replaces the ID that was linked", 
     await workbench.refreshTrace("2");
     assert.deepEqual((await store.read()).links["cloud-demo/42/2"].sessions.map(s => s.id), ["session-1"]);
 });
+
+// Finding M-5: a deleted linked session says "Session no longer exists" without hiding a live sibling's action,
+// staling the link, or invalidating the shared gateway on every poll.
+test("a deleted session neither hides a live sibling's question nor stales the link or the gateway", async t => {
+    const { Gateway } = await import("../lib/gateway.mjs");
+    const { workbench, store, gateway: fake } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const reads = { metadata: 0, live: 0, gone: 0 }, invalidations = { count: 0 };
+    const ok = value => ({ resultType: "success", textResultForLlm: JSON.stringify(value) });
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: async () => { reads.metadata++; return { tools: ["get_session", "get_sessions_status"].map(name => ({ name })) }; },
+        execute: async ({ name, arguments: args }) => {
+            if (name === "get_sessions_status") return ok({ sessions: [] });
+            if (args.project_session_id === "session-gone") { reads.gone++; return { resultType: "failure", error: "Session session-gone not found" }; }
+            reads.live++;
+            return ok({ id: "session-live", project_id: copilot.id, name: "Live", activity: { status: "idle" }, awaiting_user_input: true });
+        },
+    } } }, { rebuildMinMs: 60_000, shareMs: 0 });
+    const invalidate = gateway.invalidate.bind(gateway);
+    gateway.invalidate = () => { invalidations.count++; invalidate(); };
+    Object.assign(gateway, { sites: fake.sites, projects: fake.projects, issues: fake.issues });
+    workbench.gateway = gateway;
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [
+            { id: "session-live", name: "Live", activity: "idle", projectId: copilot.id },
+            { id: "session-gone", name: "Deleted", activity: "idle", projectId: copilot.id, awaitingInput: { question: "Old?" } },
+        ] };
+    });
+    let snapshot;
+    for (let poll = 0; poll < 5; poll++) snapshot = await workbench.refreshExecution({ source: "sessions", poll: true });
+    const execution = snapshot.executions.find(e => e.nodeId === "2");
+    assert.equal(execution.primary?.label, "Answer question");
+    assert.ok(execution.signals.some(s => s.kind === "session_missing" && /Deleted: session no longer exists/.test(s.reason)));
+    assert.ok(!execution.signals.some(s => ["sessions_stale", "trace_error", "session_unknown"].includes(s.kind)));
+    const link = (await store.read()).links[scope];
+    assert.equal(link.sourceStatus.sessions.state, "fresh");
+    assert.deepEqual(link.errors, []);
+    const gone = link.sessions.find(s => s.id === "session-gone");
+    assert.equal(gone.activity, "missing");
+    assert.equal(gone.awaitingInput, null, "a deleted session no longer asks anything");
+    assert.ok(gone.missingSince);
+    assert.equal(invalidations.count, 0, "the gateway is not invalidated");
+    assert.equal(reads.metadata, 1);
+    assert.equal(reads.live, 5);
+    assert.ok(reads.gone < 5, `polling stops asking about a session confirmed missing (${reads.gone})`);
+    // An explicit trace refresh still checks, so a restored session comes back.
+    await workbench.refreshTrace("2");
+    assert.equal(reads.gone, 4);
+    // So does Refresh Sessions, which reads the same source as the poll but is the user's explicit request.
+    await workbench.refreshExecution({ source: "sessions" });
+    assert.equal(reads.gone, 5);
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal(reads.gone, 5, "the poll still skips it");
+});
+
+test("a session found again after being missing loses its missing marker", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [{ id: "session-1", name: "Back", activity: "missing", missingSince: "2026-01-01T00:00:00.000Z", missingPolls: 3, projectId: copilot.id }] };
+    });
+    await workbench.refreshTrace("2");
+    const session = (await store.read()).links[scope].sessions[0];
+    assert.equal(session.activity, "idle");
+    assert.equal(session.missingSince, undefined);
+    assert.equal(session.missingPolls, undefined);
+});
+
+const notFound = id => Object.assign(new Error(`Session ${id} not found`), { kind: "permanent", notFound: true });
+
+// Review thread: a poll that skips a missing session must not discard an explicit refresh that observed it.
+test("a poll that skips a missing session does not discard a concurrent trace refresh's observation", async t => {
+    const { workbench, store, gateway } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [{ id: "session-1", name: "Restored", activity: "missing",
+            missingSince: "2026-01-01T00:00:00.000Z", missingPolls: 3, verifiedAt: "2026-01-01T00:00:00.000Z", projectId: copilot.id }] };
+    });
+    const original = gateway.call;
+    let release, asked;
+    const reached = new Promise(resolve => { asked = resolve; });
+    gateway.call = async (name, args) => {
+        if (name === "get_session") { asked(); await new Promise(resolve => { release = resolve; }); }
+        return original(name, args);
+    };
+    const refreshing = workbench.refreshTrace("2");
+    await reached;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal((await store.read()).links[scope].sessions[0].activity, "missing", "the poll skipped it");
+    release();
+    await refreshing;
+    const session = (await store.read()).links[scope].sessions[0];
+    assert.equal(session.activity, "idle", "the refresh's observation is kept");
+    assert.equal(session.missingPolls, undefined);
+});
+
+// Review thread: a deleted session's recorded PR is still verified, and a failed check is GitHub's.
+test("a deleted session's recorded PR is still verified on GitHub", async t => {
+    const { workbench, store, gateway, githubReads } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    const unchecked = { state: "unknown", error: "Session reports a PR not yet checked on GitHub.", fetchedAt: null };
+    const seed = () => store.update(data => {
+        data.links[scope] = { prs: [], sourceStatus: { github: unchecked }, sessions: [{ id: "session-1", name: "Gone", activity: "idle",
+            prNumber: 9, prRepo: "example/demo", projectId: copilot.id }] };
+    });
+    await seed();
+    const original = gateway.call;
+    gateway.call = async (name, args) => name === "get_session" ? Promise.reject(notFound(args.project_session_id)) : original(name, args);
+    await workbench.refreshTrace("2");
+    let link = (await store.read()).links[scope];
+    assert.deepEqual(githubReads, ["example/demo#9"]);
+    assert.deepEqual(link.prs.map(pr => pr.number), [9]);
+    assert.equal(link.sessions[0].activity, "missing");
+    assert.equal(link.sourceStatus.github.state, "fresh");
+    assert.equal(link.sourceStatus.sessions.state, "fresh");
+    await seed();
+    workbench.github = async () => { throw new Error("gh: rate limited"); };
+    await workbench.refreshTrace("2");
+    link = (await store.read()).links[scope];
+    assert.equal(link.sourceStatus.github.state, "stale", "the failed lookup is GitHub's");
+    assert.match(link.sourceStatus.github.error, /rate limited/);
+    assert.equal(link.sourceStatus.sessions.state, "fresh");
+});
+
+// Review thread: Review PR never navigates through a deleted session.
+test("Review PR opens the native PR view when the session that created it was deleted", async t => {
+    const { workbench, store } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    await store.update(data => {
+        data.links["cloud-demo/42/2"] = { sessions: [{ id: "session-1", name: "Gone", activity: "missing", prNumber: 9, prRepo: "example/demo" }],
+            prs: [{ number: 9, repo: "example/demo", url: "https://github.com/example/demo/pull/9", state: "OPEN", sessionIds: ["session-1"] }] };
+    });
+    const calls = [];
+    workbench.hostActions = { openPr: async (repo, number, options) => { calls.push(options.sessionId || "native PR view"); return { status: "acknowledged" }; } };
+    await workbench.openPr({ nodeId: "2", repo: "example/demo", number: 9 });
+    assert.deepEqual(calls, ["native PR view"]);
+});
+
+// Review thread: a poll that skipped a missing session and finishes last must not overwrite the restored record.
+test("a poll that skipped a missing session and finishes last keeps a refresh's restored record", async t => {
+    const { workbench, store, gateway } = await fixture(t);
+    await workbench.map({ copilotProjectId: copilot.id });
+    const scope = "cloud-demo/42/2";
+    await store.update(data => {
+        data.links[scope] = { prs: [], sessions: [
+            { id: "session-1", name: "Restored", activity: "missing", missingSince: "2026-01-01T00:00:00.000Z", missingPolls: 3,
+                verifiedAt: "2026-01-01T00:00:00.000Z", projectId: copilot.id },
+            { id: "session-2", name: "Sibling", activity: "idle", projectId: copilot.id },
+        ] };
+    });
+    const original = gateway.call, gates = [];
+    let arrived = () => {};
+    // Every read of the sibling waits for the test to release it, in order.
+    gateway.call = async (name, args) => {
+        if (name === "get_session" && args.project_session_id === "session-2") {
+            await new Promise(resolve => { gates.push(resolve); arrived(); });
+        }
+        return original(name, args);
+    };
+    const waitFor = count => new Promise(resolve => {
+        arrived = () => gates.length >= count && resolve();
+        arrived();
+    });
+    const refreshing = workbench.refreshTrace("2");
+    await waitFor(1);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const polling = workbench.refreshExecution({ source: "sessions", poll: true });
+    await waitFor(2);
+    gates[0]();
+    await refreshing;
+    assert.equal((await store.read()).links[scope].sessions.find(s => s.id === "session-1").activity, "idle", "the refresh restored it");
+    gates[1]();
+    await polling;
+    const restored = (await store.read()).links[scope].sessions.find(s => s.id === "session-1");
+    assert.equal(restored.activity, "idle", "the poll that only skipped it does not undo the refresh");
+    assert.equal(restored.missingPolls, undefined);
+});

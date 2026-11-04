@@ -120,7 +120,7 @@ export class Connection {
             serverName, clientName: "Jira Workbench (GitHub Copilot)",
             callbackSuccessMessage: "Signed in to Atlassian. Return to the Jira Workbench in Copilot; it reloads on its own.",
         };
-        const start = extra => bounded(Promise.resolve().then(() => login({ ...options, ...extra })), this.gateway.timeouts.login, "the Atlassian sign-in")
+        const start = extra => bounded(Promise.resolve().then(() => login({ ...options, ...extra })), this.gateway.timeouts.login, "the Atlassian sign-in", "Try again.")
             .then(result => result?.authorizationUrl);
         // Observed live with Atlassian v2: login first probes with the cached dead token, gets HTTP 400 instead of
         // 401 and throws ("MCP server probe returned HTTP 400"). forceReauth drops that token, so retry with it once.

@@ -43,7 +43,11 @@ export function freshnessSummary(snapshot, trace, time) {
     return `Jira: ${jiraFreshness(snapshot, time).text}. Sessions: ${sourceFreshness([trace], "sessions", time).label}. GitHub: ${sourceFreshness([trace], "github", time).label}.`;
 }
 
+// A linked session the host reported as not found (deleted): nothing can be opened or observed.
+export const sessionExists = session => session.activity !== "missing";
+
 export function sessionState(session) {
+    if (!sessionExists(session)) return "no longer exists";
     const observations = [];
     if (session.stale) observations.push("stale");
     if (session.awaitingInput) observations.push("needs your input");
@@ -58,6 +62,7 @@ export function sessionsBadge(sessions) {
     if (!sessions.length) return null;
     if (sessions.length > 1) return `${sessions.length} sessions`;
     const [session] = sessions;
+    if (!sessionExists(session)) return "Session no longer exists";
     return session.stale ? "Stale session" : session.awaitingInput ? "Needs input" : session.awaitingPlan ? "Plan approval" :
         session.interrupted ? "Interrupted" : session.activity ? `Session: ${humanize(session.activity)}` : "Session unknown";
 }

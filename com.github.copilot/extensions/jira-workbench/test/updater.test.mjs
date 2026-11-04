@@ -389,3 +389,73 @@ test("the update check sends owner and name to GitHub as strings", async () => {
     assert.deepEqual(gh.slice(5), ["-f", "owner=2048", "-f", "name=2048"]);
     assert.ok(!gh.includes("-F"), "no typed (-F) fields");
 });
+
+// Finding M-3: the plugin update and reload calls are bounded, so a host that never answers cannot wedge the update.
+const pluginUpdater = (session, options = {}) => {
+    const remote = JSON.stringify({ data: { repository: { defaultBranchRef: { target: { oid: OTHER, committedDate: "2026-09-30T01:16:20Z", file: { oid: REMOTE_TREE } } } } } });
+    const identity = { kind: "plugin", head: null, commit: null, date: null, dirty: false, tree: TREE, version: "1.0.0", repo: "example/demo" };
+    return new Updater({ install: { ...install, kind: "plugin" }, identity, session, run: fakeRun({ "gh api graphql": remote }).run,
+        hash: async () => TREE, reloadDelayMs: 0, ...options });
+};
+const never = () => new Promise(() => {});
+
+test("a plugin update that never answers ends in a retryable error, and a second apply is accepted", async () => {
+    const session = fakeSession();
+    const sendRequest = session.connection.sendRequest;
+    let updates = 0;
+    session.connection.sendRequest = (method, params) => method === "plugins.update" && ++updates === 1 ? never() : sendRequest(method, params);
+    const updater = pluginUpdater(session, { updateTimeoutMs: 30 });
+    const started = Date.now();
+    await assert.rejects(updater.apply(), /^Error: Copilot did not answer the plugin update within 0s\. Try again\.$/);
+    assert.ok(Date.now() - started < 1000, "apply settles within the bound");
+    assert.equal(updater.applying, false);
+    const status = updater.status();
+    assert.deepEqual([status.state, status.action], ["error", "update"], "the panel offers the update again");
+    assert.match(status.message, /^Update failed: Copilot did not answer the plugin update/);
+    assert.equal((await updater.apply()).state, "reloading", "a second apply is accepted");
+    assert.equal(updates, 2);
+});
+
+test("a reload that never answers ends in a retryable error, and a second apply is accepted", async () => {
+    const session = fakeSession();
+    let reloads = 0;
+    session.rpc.plugins.reload = () => { reloads++; return never(); };
+    const updater = pluginUpdater(session, { reloadTimeoutMs: 30, restartTimeoutMs: 60_000 });
+    assert.equal((await updater.apply()).state, "reloading");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const status = updater.status();
+    assert.deepEqual([status.state, status.action], ["error", "reload"]);
+    assert.equal(status.message, "Reload failed: Copilot did not answer the extension reload within 0s. Reload extensions to finish.");
+    assert.equal(updater.applying, false);
+    assert.equal((await updater.apply()).state, "reloading", "a second apply is accepted");
+    assert.equal(reloads, 1, "the second apply waits its reload delay before reloading again");
+});
+
+test("the restart watchdog is armed when the reload is sent, not when it answers", async () => {
+    const session = fakeSession();
+    session.rpc.plugins.reload = never;
+    const updater = pluginUpdater(session, { reloadTimeoutMs: 1_000, restartTimeoutMs: 30 });
+    await updater.apply();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const status = updater.status();
+    assert.deepEqual([status.state, status.action], ["error", "reload"]);
+    assert.match(status.message, /did not restart/);
+    assert.equal(updater.applying, false);
+});
+
+test("a late failure from an earlier reload attempt cannot end a newer attempt", async () => {
+    const session = fakeSession();
+    let reloads = 0;
+    session.rpc.plugins.reload = () => { reloads++; return never(); };
+    // The watchdog ends the first attempt at 30ms while its reload call stays pending until its 150ms bound.
+    const updater = pluginUpdater(session, { reloadTimeoutMs: 150, restartTimeoutMs: 30 });
+    await updater.apply();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.deepEqual([updater.status().state, updater.applying], ["error", false]);
+    updater.restartTimeoutMs = 1_000;
+    updater.reloadTimeoutMs = 1_000;
+    assert.equal((await updater.apply()).state, "reloading", "the user retries");
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(reloads, 2);
+    assert.deepEqual([updater.status().state, updater.applying], ["reloading", true], "the first reload's timeout does not touch the retry");
+});

@@ -48,10 +48,12 @@ export const SESSION_TOOLS = ["list_repositories", "list_projects", "get_session
 export const STANDALONE = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions. This happens when Jira Workbench is opened from Canvases in the sidebar; open it from a session instead.";
 export const standaloneError = () => Object.assign(new Error(STANDALONE), { kind: "unavailable", retryable: false, standalone: true });
 
-export function bounded(promise, ms, what) {
+// next: what happens after the timeout. A timed-out call is still pending in the runtime, and the gateway waits on
+// it again before sending a new one, so "still waiting" is accurate where "retrying" was not.
+export function bounded(promise, ms, what, next = "Still waiting; the Workbench checks again automatically.") {
     let timer;
     const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(toolError(`Copilot did not answer ${what} within ${Math.round(ms / 1000)}s. Retrying automatically.`, true)), ms);
+        timer = setTimeout(() => reject(toolError(`Copilot did not answer ${what} within ${Math.round(ms / 1000)}s.${next ? ` ${next}` : ""}`, true)), ms);
     });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

@@ -381,3 +381,91 @@ test("Copilot repositories come from list_repositories, or list_projects on olde
     assert.match(error.message, /^Copilot did not offer list_repositories; update or restart Copilot\.$/);
     await assert.rejects(host(["list_projects"]).gateway.call("list_projects", {}), /read-only; list_projects is not allowed/);
 });
+
+// Finding M-1: a lost runtime reply must not wedge its key until the extension restarts.
+test("a runtime call whose reply is lost is sent again after the age cap", async () => {
+    let calls = 0;
+    const tools = [{ name: "get_session" }];
+    // The first call never settles, as a lost JSON-RPC reply would; every later call answers at once.
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: () => ++calls === 1 ? new Promise(() => {}) : Promise.resolve({ tools }),
+    } } }, { timeouts: { metadata: 30 } });
+    await assert.rejects(gateway.metadata(), /did not answer its tool list within 0s/);
+    await assert.rejects(gateway.metadata(), /did not answer/, "within the cap the pending call is reused, not stacked");
+    assert.equal(calls, 1);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.deepEqual(await gateway.metadata(), tools, "past the cap the call is presumed lost and sent again");
+    assert.equal(calls, 2);
+    assert.equal(gateway.stuck.size, 0);
+});
+
+test("invalidate() clears runtime calls that already outlived their timeout", async () => {
+    let calls = 0;
+    const tools = [{ name: "get_session" }];
+    let answer;
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: () => ++calls === 1 ? new Promise(() => {}) : new Promise(resolve => { answer = () => resolve({ tools }); }),
+    } } }, { timeouts: { metadata: 30 } });
+    await assert.rejects(gateway.metadata(), /did not answer/);
+    // A timer can fire a millisecond before Date.now() shows its full delay; wait until the call has clearly outlived it.
+    await new Promise(resolve => setTimeout(resolve, 15));
+    gateway.invalidate();
+    const second = gateway.metadata();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(calls, 2, "the stale call is dropped, so the next one reaches the runtime");
+    gateway.invalidate();
+    const third = gateway.metadata();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(calls, 2, "a call still within its timeout is kept and shared");
+    answer();
+    assert.deepEqual(await second, tools);
+    assert.deepEqual(await third, tools);
+});
+
+// Finding M-5: a host tool's own "not found" (a deleted session) is its answer and says nothing about the tool list.
+test("a host tool's not-found answer does not invalidate the shared tool list", async () => {
+    let snapshots = 0;
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: async () => { snapshots++; return { tools: [{ name: "get_session" }] }; },
+        execute: async () => ({ resultType: "failure", error: "Session 0000 not found" }),
+    } } }, { rebuildMinMs: 60_000 });
+    let invalidations = 0;
+    const invalidate = gateway.invalidate.bind(gateway);
+    gateway.invalidate = () => { invalidations++; invalidate(); };
+    for (let i = 0; i < 3; i++) {
+        const error = await gateway.call("get_session", { project_session_id: "0000" }).then(() => null, e => e);
+        assert.equal(error.kind, "permanent");
+        assert.equal(error.notFound, true);
+    }
+    assert.equal(invalidations, 0);
+    assert.equal(snapshots, 1, "the tool list is read once, not again after every not-found answer");
+});
+
+test("a host tool that itself no longer exists still invalidates the tool list", async () => {
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: async () => ({ tools: [{ name: "get_session" }] }),
+        execute: async () => ({ resultType: "failure", error: "Tool 'get_session' does not exist." }),
+    } } }, { rebuildMinMs: 60_000 });
+    let invalidations = 0;
+    const invalidate = gateway.invalidate.bind(gateway);
+    gateway.invalidate = () => { invalidations++; invalidate(); };
+    const error = await gateway.call("get_session", { project_session_id: "0000" }).then(() => null, e => e);
+    assert.equal(error.kind, "permanent");
+    assert.equal(error.notFound, undefined, "the tool is gone, not the session");
+    assert.equal(invalidations, 1);
+});
+
+test("a missing legacy host tool resolved for its new name invalidates the tool list and is not marked notFound", async () => {
+    // Older app builds offer only list_projects, which the gateway resolves for list_repositories.
+    const gateway = new Gateway({ rpc: { tools: {
+        getCurrentMetadata: async () => ({ tools: [{ name: "list_projects" }] }),
+        execute: async () => ({ resultType: "failure", error: "Tool 'list_projects' does not exist." }),
+    } } }, { rebuildMinMs: 60_000 });
+    let invalidations = 0;
+    const invalidate = gateway.invalidate.bind(gateway);
+    gateway.invalidate = () => { invalidations++; invalidate(); };
+    const error = await gateway.call("list_repositories", {}).then(() => null, e => e);
+    assert.equal(error.kind, "permanent");
+    assert.equal(error.notFound, undefined, "the tool is gone, not a record it looked up");
+    assert.equal(invalidations, 1);
+});

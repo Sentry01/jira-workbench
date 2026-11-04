@@ -202,14 +202,20 @@ test("an event burst triggers one reconnect per panel, not one per event", async
     // No polling: every check below is caused by the burst.
     const { connection, workbench, open } = await harness(t, runtime, { connection: { watchMs: 60_000 } });
     await open();
-    await sleep(20);
+    // Quiet before counting: the startup check has settled on "down" and no recovery pass is running or queued.
+    // A fixed sleep let a slow startup land inside the burst's window and count as a second reconnect.
+    const settled = () => connection.current.state === "down" && !connection.ticking && !connection.due.size
+        && !workbench.passes && !workbench.queued && !workbench.pending.size;
+    await until(t, settled, { what: "the startup check and recovery to settle" });
     let reconnects = 0, checks = 0;
     const original = workbench.recover.bind(workbench);
     workbench.recover = () => { reconnects++; return original(); };
     const invalidate = connection.gateway.invalidate.bind(connection.gateway);
     connection.gateway.invalidate = () => { checks++; invalidate(); };
     for (let i = 0; i < 25; i++) runtime.emit(RECONNECT_EVENTS[i % RECONNECT_EVENTS.length], { serverName: "github", status: "connected" });
-    await sleep(40);
+    // The burst's one debounced check has run and everything it started has finished; nothing else is scheduled.
+    await until(t, () => checks >= 1 && reconnects >= 1 && settled(), { what: "the burst's check and recovery" });
+    await workbench.idle();
     assert.equal(reconnects, 1);
     assert.equal(checks, 1, "one connection check (and one tool-snapshot refresh) for the whole burst");
 });
@@ -563,7 +569,7 @@ test("a runtime that stops answering never leaves the panel warming forever, and
     await open();
     await until(t, () => workbench.catalogErrors.length, { what: "the reason shown while still retrying" });
     await until(t, () => !workbench.warming, { what: "a bounded failure instead of a hang" });
-    assert.match(workbench.catalogErrors[0], /did not answer its tool list within \d+s\. Retrying automatically/);
+    assert.match(workbench.catalogErrors[0], /did not answer its tool list within \d+s\. Still waiting; the Workbench checks again automatically\.$/);
     await sleep(100);
     assert.ok(runtime.counters.metadata <= 2, `stuck calls are reused, not stacked (${runtime.counters.metadata})`);
     runtime.release = runtime.stalled.release;

@@ -49,8 +49,8 @@ function manifestVersion(text) {
 // Watches for a newer build of this extension and applies it on request, then reloads the session's
 // extensions; the host re-opens every open panel against the new process.
 export class Updater {
-    constructor({ install, identity, session = null, run = execFileAsync, hash = treeHash, checkEveryMs = 10 * 60_000, firstCheckMs = 15_000, reloadDelayMs = 300, restartTimeoutMs = 20_000, listTimeoutMs = 5_000 }) {
-        Object.assign(this, { install, identity, session, run, hash, checkEveryMs, firstCheckMs, reloadDelayMs, restartTimeoutMs, listTimeoutMs });
+    constructor({ install, identity, session = null, run = execFileAsync, hash = treeHash, checkEveryMs = 10 * 60_000, firstCheckMs = 15_000, reloadDelayMs = 300, restartTimeoutMs = 20_000, listTimeoutMs = 5_000, updateTimeoutMs = 120_000, reloadTimeoutMs = 30_000 }) {
+        Object.assign(this, { install, identity, session, run, hash, checkEveryMs, firstCheckMs, reloadDelayMs, restartTimeoutMs, listTimeoutMs, updateTimeoutMs, reloadTimeoutMs });
         this.git = gitIn(install.root, run);
         this.remote = null;
         this.state = { state: "unknown", action: null, message: null, target: null };
@@ -205,19 +205,28 @@ export class Updater {
             }
         } catch (error) {
             this.applying = false;
-            if (current?.action) this.state = { state: "error", action: null, target: current.target, message: `Update failed: ${error.message}` };
+            // A timed-out update offers itself again: the next apply re-checks first, so it reloads instead if the
+            // update landed on disk after all.
+            if (current?.action) this.state = { state: "error", action: error.retryable ? current.action : null, target: current.target, message: `Update failed: ${error.message}` };
             throw error;
         }
         this.state = { ...this.state, state: "reloading", action: null, message: "Restarting the Workbench…" };
+        // Each attempt ends once: a watchdog or a late reload failure from an earlier attempt must not end a retry.
+        let watchdog = null, done = false;
         const failed = message => {
+            if (done) return;
+            done = true;
+            clearTimeout(watchdog);
             this.applying = false;
             this.state = { state: "error", action: "reload", target: null, message };
         };
-        setTimeout(() => void this.reload().then(
-            // A successful reload ends this process; still being here means the host did not restart it.
-            () => setTimeout(() => failed("The Workbench did not restart. Reload extensions to finish."), this.restartTimeoutMs).unref?.(),
-            error => failed(`Reload failed: ${error.message}. Reload extensions to finish.`),
-        ), this.reloadDelayMs).unref?.();
+        setTimeout(() => {
+            // A successful reload ends this process; still being here means the host did not restart it. Armed when
+            // the reload is sent, so a reload that never answers cannot leave the panel restarting forever.
+            watchdog = setTimeout(() => failed("The Workbench did not restart. Reload extensions to finish."), this.restartTimeoutMs);
+            watchdog.unref?.();
+            void this.reload().catch(error => failed(`Reload failed: ${error.message.replace(/\.$/, "")}. Reload extensions to finish.`));
+        }, this.reloadDelayMs).unref?.();
         return this.status();
     }
 
@@ -234,14 +243,17 @@ export class Updater {
         const connection = this.session?.connection;
         const entry = await this.installEntry();
         if (!entry) throw new Error(`the ${PLUGIN} plugin is not installed`);
-        await connection.sendRequest("plugins.update", { name: entry.marketplace ? `${entry.name}@${entry.marketplace}` : entry.name });
+        const name = entry.marketplace ? `${entry.name}@${entry.marketplace}` : entry.name;
+        await bounded(Promise.resolve().then(() => connection.sendRequest("plugins.update", { name })), this.updateTimeoutMs, "the plugin update", "Try again.");
     }
 
     async reload() {
         const rpc = this.session?.rpc;
-        if (this.identity.kind === "plugin" && typeof rpc?.plugins?.reload === "function") await rpc.plugins.reload({ reloadMcp: false });
-        else if (typeof rpc?.extensions?.reload === "function") await rpc.extensions.reload();
+        let call;
+        if (this.identity.kind === "plugin" && typeof rpc?.plugins?.reload === "function") call = () => rpc.plugins.reload({ reloadMcp: false });
+        else if (typeof rpc?.extensions?.reload === "function") call = () => rpc.extensions.reload();
         else throw new Error("this host cannot reload extensions");
+        await bounded(Promise.resolve().then(call), this.reloadTimeoutMs, "the extension reload", null);
     }
 }
 

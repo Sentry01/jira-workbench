@@ -1,6 +1,6 @@
 import { scopeKey, descendants, progressRollup, freshnessTone, jiraFreshness } from "/model.mjs";
 import {
-    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, launchState, launchBlocks, launchLabel, requestOutcome,
+    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
 } from "/view-model.mjs";
@@ -112,15 +112,17 @@ async function loadMoreAction(context) {
     if (snapshot.pageResult?.error) throw new Error(snapshot.pageResult.error);
     return snapshot;
 }
-function refreshExecution(source = "all", epoch = scopeEpoch, afterCurrent = false) {
-    const key = `${epoch}:${source}`;
-    const existing = executionRefreshes.get(`${epoch}:all`) || executionRefreshes.get(key);
+// poll: the background session poll. It may share an explicit refresh, but an explicit refresh never shares a poll,
+// because a poll skips sessions confirmed missing.
+function refreshExecution(source = "all", epoch = scopeEpoch, afterCurrent = false, poll = false) {
+    const key = poll ? `${epoch}:poll` : `${epoch}:${source}`;
+    const existing = executionRefreshes.get(`${epoch}:all`) || executionRefreshes.get(key) || (poll && executionRefreshes.get(`${epoch}:${source}`));
     if (existing && !afterCurrent) return existing;
-    const preceding = source === "all" ? ["all", "sessions", "github"].map(name => executionRefreshes.get(`${epoch}:${name}`)).filter(Boolean) : [];
+    const preceding = source === "all" ? ["all", "sessions", "github", "poll"].map(name => executionRefreshes.get(`${epoch}:${name}`)).filter(Boolean) : [];
     // Earlier callers report their failures; an explicit refresh still gets its own attempt.
     const pending = Promise.allSettled(preceding).then(() => {
         if (epoch !== scopeEpoch || selecting || !scopeConfirmed) throw new Error("Project selection changed before the live refresh could run.");
-        return api("refresh-execution", { source });
+        return api("refresh-execution", poll ? { source, poll } : { source });
     }).finally(() => {
         if (executionRefreshes.get(key) === pending) executionRefreshes.delete(key);
     });
@@ -1030,7 +1032,8 @@ function renderTrace(body, item) {
             if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable. Select and copy the ID from Session identity.");
             await navigator.clipboard.writeText(session.id);
         }, { success: "Session ID copied." }));
-        card.append(identity, openSessionButton("Open session", item.id, session.id));
+        card.append(identity);
+        if (sessionExists(session)) card.append(openSessionButton("Open session", item.id, session.id));
         if (session.contextHash) {
             const receipt = state.requests.find(request => request.nodeId === item.id && request.contextHash === session.contextHash &&
                 request.sessionId === session.id) ||
@@ -1427,7 +1430,7 @@ async function poll() {
     try {
         if (state.project && scopeConfirmed && !state.warming && !state.refreshing && !standaloneHost(state) && Date.now() - lastSessionPoll >= 4500) {
             lastSessionPoll = Date.now();
-            await refreshExecution("sessions", epoch);
+            await refreshExecution("sessions", epoch, false, true);
         }
         if (epoch !== scopeEpoch || pollingPaused()) return;
         await sync(epoch);
