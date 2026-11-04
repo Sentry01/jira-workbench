@@ -214,7 +214,8 @@ export class Trace {
                 catch (error) { statusError = error.message; }
             }
             const github = this.reader(!reuseRecent);
-            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, github }));
+            const details = new Map();
+            const traces = await mapLimit(targets, 4, target => this.collectTrace({ ...target, source, poll, statuses, statusError, github, details }));
             if (traces.length) await this.persist(traces);
             return wb.snapshot();
         })();
@@ -287,7 +288,8 @@ export class Trace {
     // evidence and error attribution stay deterministic.
     // `github`: the refresh's PR reader; an explicit refresh reads its PRs from GitHub again rather than reuse a read
     // from the last minute.
-    async observe({ scope, previous, source = "all", poll = false, statuses, statusError = null, github = this.reader(false) }) {
+    // `details`: the session reads of this refresh, by session ID, shared by every trace in it.
+    async observe({ scope, previous, source = "all", poll = false, statuses, statusError = null, github = this.reader(false), details = new Map() }) {
         const wb = this.workbench;
         const stamp = new Date().toISOString();
         const next = {
@@ -311,11 +313,15 @@ export class Trace {
             if (source !== "github") {
                 try {
                     const listed = statuses.find(s => s.id === stored.id);
-                    const due = Date.now() - (this.detailAt.get(stored.id) ?? -Infinity) >= DETAIL_EVERY_MS;
+                    // Each trace keeps its own copy of the session, so each copy has its own slow cadence; a session
+                    // read in full once in this refresh is used by every trace that links it.
+                    const cadence = `${scope} ${stored.id}`;
+                    const due = Date.now() - (this.detailAt.get(cadence) ?? -Infinity) >= DETAIL_EVERY_MS;
                     let detail, status = listed;
-                    if (!poll || !listed || source === "all" || due || !complete(stored, listed)) {
-                        detail = await wb.gateway.call("get_session", { project_session_id: stored.id });
-                        this.detailAt.set(stored.id, Date.now());
+                    if (!poll || !listed || source === "all" || due || !complete(stored, listed) || details.has(stored.id)) {
+                        if (!details.has(stored.id)) details.set(stored.id, wb.gateway.call("get_session", { project_session_id: stored.id }));
+                        detail = await details.get(stored.id);
+                        this.detailAt.set(cadence, Date.now());
                         status ||= statuses.find(s => s.id === detail.id);
                     } else detail = knownDetail(stored, listed);
                     result.record = { ...stored, ...sessionRecord(detail, stored.id, status || detail), stale: Boolean(statusError) };

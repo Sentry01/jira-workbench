@@ -520,7 +520,7 @@ test("a session is read in full only when it is missing from the status list, in
     await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(counts.get_session, 1, "only the incomplete session");
     counts.get_session = 0;
-    for (const id of ["s-101-0", "s-101-1"]) workbench.trace.detailAt.set(id, Date.now() - 61_000);
+    for (const id of ["s-101-0", "s-101-1"]) workbench.trace.detailAt.set(`cloud-demo/42/101 ${id}`, Date.now() - 61_000);
     await workbench.refreshExecution({ source: "sessions", poll: true });
     assert.equal(counts.get_session, 2, "only the sessions due for their slow check");
 });
@@ -691,4 +691,26 @@ test("a poll reads a session in full when the status list gives it no activity",
     assert.equal(session.awaitingInput.question, "Which?");
     const execution = (await workbench.snapshot()).executions.find(e => e.nodeId === "100");
     assert.equal(execution.primary?.label, "Answer question");
+});
+
+// Copilot review on #22: a session linked to many issues is read once per poll, and every issue gets that read.
+test("a session linked to more issues than one batch gets the same full read in every trace", async t => {
+    const { workbench, store } = await linkedProject(t);
+    const scopes = Array.from({ length: 10 }, (_, i) => `cloud-demo/42/${100 + i}`);
+    await store.update(data => {
+        const shared = data.links[scopes[0]].sessions[0];
+        for (const scope of scopes.slice(1)) data.links[scope].sessions.push({ ...shared });
+    });
+    const original = workbench.gateway.call;
+    let reads = 0;
+    workbench.gateway.call = async (name, args) => {
+        const result = await original(name, args);
+        if (name === "get_session" && args.project_session_id === "s-100-0") { reads++; return { ...result, branch: "branch-new" }; }
+        return result;
+    };
+    workbench.trace.detailAt.clear();
+    await workbench.refreshExecution({ source: "sessions", poll: true });
+    assert.equal(reads, 1, "one get_session for the shared session");
+    const links = (await store.read()).links;
+    assert.deepEqual(scopes.map(scope => links[scope].sessions.find(s => s.id === "s-100-0").branch), scopes.map(() => "branch-new"));
 });
