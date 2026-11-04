@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    CONTEXT, changesRequestedBy, checkStates, evaluateStack, memberProblems, requiredChecks, resolve, verdict,
+    CONTEXT, changesRequestedBy, checkStates, evaluateStack, memberProblems, requiredChecks, resolve, unresolvedThreads, verdict,
 } from "./stack-gate.mjs";
 
 const ACTIONS = 15368;
@@ -76,6 +76,13 @@ test("a member lists every reason it cannot merge", () => {
     assert.deepEqual(member.details, ["is a draft", "changes requested by ann", "failing: A", "waiting for: B"]);
 });
 
+test("unresolved review threads make a member not ready, and say how many", () => {
+    const base = { pull: { number: 19, draft: false }, required: [], checkRuns: [], statuses: [], reviews: [] };
+    assert.deepEqual(memberProblems({ ...base, unresolvedThreads: 0 }).problems, []);
+    assert.deepEqual(memberProblems({ ...base, unresolvedThreads: 1 }).problems, ["1 unresolved thread"]);
+    assert.deepEqual(memberProblems({ ...base, unresolvedThreads: 2 }).problems, ["2 unresolved threads"]);
+});
+
 test("the verdict is success only when every member is ready", () => {
     assert.deepEqual(verdict(26, [{ number: 1, problems: [] }, { number: 2, problems: [] }]), {
         state: "success", description: "All 2 open pull requests in stack #26 are ready.",
@@ -94,6 +101,7 @@ test("a long failure description is shortened to fit a commit status", () => {
 });
 
 // A fake API over fixed responses that records the statuses it is asked to post.
+// Review threads come from responses["threads/<number>"]: a list of pages, each a list of isResolved values.
 function fakeApi(responses) {
     const posted = [];
     const lookup = path => {
@@ -105,6 +113,14 @@ function fakeApi(responses) {
         get: async path => lookup(path),
         list: async (path, key) => { const data = lookup(path); return key ? data?.[key] ?? [] : data ?? []; },
         post: async (path, body) => { posted.push({ sha: path.replace("statuses/", ""), ...body }); return {}; },
+        graphql: async (query, { owner, name, number, cursor }) => {
+            assert.deepEqual([owner, name], ["octo", "demo"]);
+            const pages = responses[`threads/${number}`] ?? [[]];
+            const page = cursor ? Number(cursor) : 0;
+            const pageInfo = { hasNextPage: page + 1 < pages.length, endCursor: String(page + 1) };
+            return { repository: { pullRequest: { reviewThreads: { nodes: pages[page].map(isResolved => ({ isResolved })), pageInfo } } } };
+        },
+        repository: "octo/demo",
     };
 }
 
@@ -141,6 +157,30 @@ test("one member that is not ready fails the gate on every member, including the
     assert.equal(api.posted[0].description, "Stack #26 not ready: #20 (checks failing), #22 (changes requested)");
 });
 
+test("unresolved threads on one member fail the gate on every member, naming the pull request and count", async () => {
+    const responses = stackResponses([[19, "aaa", [run("Tests", "success")]], [20, "bbb", [run("Tests", "success")]]]);
+    responses["threads/19"] = [[false, true, false]];
+    responses["threads/20"] = [[true]];
+    const api = fakeApi(responses);
+    await evaluateStack(api, 26, { log: () => {} });
+    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"], ["bbb", "failure"]]);
+    assert.equal(api.posted[0].description, "Stack #26 not ready: #19 (2 unresolved threads)");
+});
+
+test("unresolved threads are counted across every page", async () => {
+    const api = fakeApi({ "threads/19": [[false, true], [false], [true, false]] });
+    assert.equal(await unresolvedThreads(api, 19), 3);
+});
+
+test("a status that has not changed is not posted again", async () => {
+    const responses = stackResponses([[19, "aaa", [run("Tests", "success")]], [20, "bbb", [run("Tests", "success")]]]);
+    const ready = { context: CONTEXT, state: "success", description: "All 2 open pull requests in stack #26 are ready." };
+    responses["commits/aaa/status?per_page=100"] = { statuses: [ready] };
+    const api = fakeApi(responses);
+    await evaluateStack(api, 26, { log: () => {} });
+    assert.deepEqual(api.posted.map(p => p.sha), ["bbb"]);
+});
+
 test("merged and closed members are skipped, and get no status", async () => {
     const responses = stackResponses([[19, "aaa", []], [20, "bbb", [run("Tests", "success")]]]);
     responses["pulls/19"] = pull(19, "aaa", { state: "closed", merged_at: "2026-11-04T00:00:00Z" });
@@ -165,7 +205,7 @@ test("a dissolved stack posts nothing", async () => {
 });
 
 test("a pull request outside any stack gets success at once", async () => {
-    const api = fakeApi({ "pulls/5": pull(5, "eee"), "stacks?pull_request=5": [] });
+    const api = fakeApi({ "pulls/5": pull(5, "eee"), "stacks?pull_request=5": [], "commits/eee/status?per_page=100": { statuses: [] } });
     const stacks = await resolve(api, "pull_request_target", { pull_request: { number: 5 } }, { log: () => {} });
     assert.deepEqual(stacks, []);
     assert.deepEqual(api.posted.map(p => [p.sha, p.state, p.description]), [["eee", "success", "Not in a stack."]]);
@@ -201,4 +241,22 @@ test("a CI run without linked pull requests is matched through its commit", asyn
 test("a manual run refreshes the stack of the pull request it names", async () => {
     const api = fakeApi({ "pulls/22": pull(22, "ccc", { stack: { number: 26 } }) });
     assert.deepEqual(await resolve(api, "workflow_dispatch", {}, { input: "22", log: () => {} }), [26]);
+});
+
+test("the schedule sweeps every open pull request", async () => {
+    const api = fakeApi({
+        "pulls?state=open&per_page=100": [pull(15, "ddd"), pull(16, "eee"), pull(19, "aaa", { stack: { number: 26 } }), pull(20, "bbb", { stack: { number: 26 } })],
+        "stacks?pull_request=15": [],
+        "stacks?pull_request=16": [],
+        "commits/ddd/status?per_page=100": { statuses: [] },
+        "commits/eee/status?per_page=100": { statuses: [{ context: CONTEXT, state: "success", description: "Not in a stack." }] },
+    });
+    assert.deepEqual(await resolve(api, "schedule", {}, { log: () => {} }), [26]);
+    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["ddd", "success"]]);
+});
+
+test("a manual run without a number sweeps, and rejects anything but a number", async () => {
+    const api = fakeApi({ "pulls?state=open&per_page=100": [pull(19, "aaa", { stack: { number: 26 } })] });
+    assert.deepEqual(await resolve(api, "workflow_dispatch", {}, { input: "", log: () => {} }), [26]);
+    await assert.rejects(resolve(api, "workflow_dispatch", {}, { input: "22; true", log: () => {} }), /not a pull request number/);
 });

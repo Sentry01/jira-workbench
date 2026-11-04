@@ -1,6 +1,7 @@
 // Posts the "Stack gate" commit status, so no pull request in a stack merges unless the whole stack can.
 // GitHub already blocks merging a pull request while one below it is not ready, but it lets a lower part of
-// the stack merge on its own. This status is success on every open member only when all of them are ready.
+// the stack merge on its own. This status is success on every open member only when all of them are ready:
+// not a draft, required checks passing, no reviewer requesting changes, and no unresolved review thread.
 // Usage: node .github/scripts/stack-gate.mjs resolve | evaluate <stack-number>
 // It reads and writes through the GitHub API only; it never checks out or runs pull request code.
 import { appendFileSync, readFileSync } from "node:fs";
@@ -58,12 +59,18 @@ export function changesRequestedBy(reviews = []) {
 }
 
 // What keeps one open member from merging: short labels for the status, details for the log.
-export function memberProblems({ pull, required, checkRuns, statuses, reviews }) {
+// main requires conversation resolution, so an unresolved review thread blocks a member too.
+export function memberProblems({ pull, required, checkRuns, statuses, reviews, unresolvedThreads = 0 }) {
     const problems = [];
     const details = [];
     if (pull.draft) { problems.push("draft"); details.push("is a draft"); }
     const blockers = changesRequestedBy(reviews);
     if (blockers.length) { problems.push("changes requested"); details.push(`changes requested by ${blockers.join(", ")}`); }
+    if (unresolvedThreads > 0) {
+        const threads = `${unresolvedThreads} unresolved thread${unresolvedThreads === 1 ? "" : "s"}`;
+        problems.push(threads);
+        details.push(`${threads} in review`);
+    }
     const checks = checkStates(required, checkRuns, statuses);
     const failing = checks.filter(c => c.state === "fail").map(c => c.context);
     const pending = checks.filter(c => c.state === "pending").map(c => c.context);
@@ -122,11 +129,46 @@ export function client({ token, repository, apiUrl = "https://api.github.com" })
             return items;
         },
         post: async (path, body) => (await request("POST", path, body)).data,
+        graphql: async (query, variables) => {
+            const { data } = await request("POST", `${apiUrl}/graphql`, { query, variables });
+            if (data.errors?.length) throw new Error(`GraphQL: ${data.errors.map(e => e.message).join("; ")}`);
+            return data.data;
+        },
+        repository,
     };
 }
 
-const post = (api, sha, { state, description }, targetUrl) =>
-    api.post(`statuses/${sha}`, { state, description, context: CONTEXT, ...(targetUrl ? { target_url: targetUrl } : {}) });
+const THREADS = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) { nodes { isResolved } pageInfo { hasNextPage endCursor } }
+    }
+  }
+}`;
+
+// The number of review threads on a pull request that are not resolved. Only GraphQL exposes isResolved.
+export async function unresolvedThreads(api, number) {
+    const [owner, name] = api.repository.split("/");
+    let count = 0;
+    for (let cursor = null, more = true; more;) {
+        const data = await api.graphql(THREADS, { owner, name, number, cursor });
+        const threads = data?.repository?.pullRequest?.reviewThreads;
+        if (!threads) break;
+        count += threads.nodes.filter(t => !t.isResolved).length;
+        more = threads.pageInfo.hasNextPage;
+        cursor = threads.pageInfo.endCursor;
+    }
+    return count;
+}
+
+// Posts only a change: GitHub keeps at most 1000 statuses per commit and context, and the sweep re-posts often.
+async function post(api, sha, { state, description }, targetUrl, statuses) {
+    statuses ??= (await api.get(`commits/${sha}/status?per_page=100`))?.statuses ?? [];
+    const current = statuses.find(s => s.context === CONTEXT);
+    if (current?.state === state && current.description === description) return false;
+    await api.post(`statuses/${sha}`, { state, description, context: CONTEXT, ...(targetUrl ? { target_url: targetUrl } : {}) });
+    return true;
+}
 
 // Recomputes one stack and posts the verdict to the head commit of every open member.
 export async function evaluateStack(api, stackNumber, { targetUrl, log = console.log } = {}) {
@@ -144,12 +186,14 @@ export async function evaluateStack(api, stackNumber, { targetUrl, log = console
         const pull = await api.get(`pulls/${entry.number}`);
         if (!pull || pull.state !== "open" || pull.merged_at) continue;
         const sha = pull.head.sha;
-        const [checkRuns, combined, reviews] = await Promise.all([
+        const [checkRuns, combined, reviews, threads] = await Promise.all([
             api.list(`commits/${sha}/check-runs?filter=latest&per_page=100`, "check_runs"),
             api.get(`commits/${sha}/status?per_page=100`),
             api.list(`pulls/${pull.number}/reviews?per_page=100`),
+            unresolvedThreads(api, pull.number),
         ]);
-        members.push({ ...memberProblems({ pull, required, checkRuns, statuses: combined?.statuses ?? [], reviews }), sha });
+        const statuses = combined?.statuses ?? [];
+        members.push({ ...memberProblems({ pull, required, checkRuns, statuses, reviews, unresolvedThreads: threads }), sha, statuses });
     }
     if (!members.length) {
         log(`Stack #${stackNumber} has no open pull requests; nothing to gate.`);
@@ -164,13 +208,21 @@ export async function evaluateStack(api, stackNumber, { targetUrl, log = console
     log(`Stack #${stackNumber} into ${stack.base.ref}, required checks: ${required.map(c => c.context).join(", ") || "none"}`);
     for (const m of members) log(`  #${m.number} ${m.sha.slice(0, 7)}: ${m.details.join("; ") || "ready"}`);
     log(`Stack gate: ${result.state}: ${result.description}`);
-    for (const m of members) await post(api, m.sha, result, targetUrl);
+    for (const m of members) await post(api, m.sha, result, targetUrl, m.statuses);
     return { ...result, members };
 }
 
 // Which pull requests an event touches. A CI run names its pull requests, or is found through its commit.
+// The schedule, and a manual run without a number, sweep every open pull request.
 export async function pullsForEvent(api, eventName, event, input) {
-    if (eventName === "workflow_dispatch") return [{ number: Number(input) }];
+    if (eventName === "schedule" || (eventName === "workflow_dispatch" && !input)) {
+        const pulls = await api.list("pulls?state=open&per_page=100");
+        return pulls.map(pull => ({ number: pull.number, pull }));
+    }
+    if (eventName === "workflow_dispatch") {
+        if (!/^\d+$/.test(String(input).trim())) throw new Error(`"${input}" is not a pull request number.`);
+        return [{ number: Number(input) }];
+    }
     if (eventName === "workflow_run") {
         const run = event.workflow_run;
         if (run.pull_requests?.length) return run.pull_requests.map(p => ({ number: p.number }));
@@ -185,13 +237,13 @@ export async function pullsForEvent(api, eventName, event, input) {
 // A closed pull request keeps the stack its event named, so the members left behind are refreshed.
 export async function resolve(api, eventName, event, { input, targetUrl, log = console.log } = {}) {
     const stacks = new Set();
-    for (const { number, stack } of await pullsForEvent(api, eventName, event, input)) {
-        const pull = await api.get(`pulls/${number}`);
+    for (const { number, stack, pull: listed } of await pullsForEvent(api, eventName, event, input)) {
+        const pull = listed ?? await api.get(`pulls/${number}`);
         const current = pull?.stack?.number ?? (await api.list(`stacks?pull_request=${number}`))[0]?.number;
         if (current ?? stack) { stacks.add(current ?? stack); continue; }
         if (pull?.state !== "open") continue;
-        log(`#${number} is not in a stack: ${NOT_IN_STACK.description}`);
-        await post(api, pull.head.sha, NOT_IN_STACK, targetUrl);
+        const posted = await post(api, pull.head.sha, NOT_IN_STACK, targetUrl);
+        log(`#${number} is not in a stack: ${posted ? "posted success" : "already success"}.`);
     }
     return [...stacks];
 }

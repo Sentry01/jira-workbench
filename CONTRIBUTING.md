@@ -94,16 +94,24 @@ with a commit status named **Stack gate** on the head commit of every open pull
 request in the stack:
 
 - It is success only when every open member of the stack is ready: not a draft,
-  every check `main` requires passing, and no reviewer whose latest review
-  requests changes. Otherwise it fails on every member, and its description
-  names the pull requests that are not ready.
+  every check `main` requires passing, no reviewer whose latest review
+  requests changes, and no unresolved review thread (`main` requires
+  conversation resolution). Otherwise it fails on every member, and its
+  description names the pull requests that are not ready and why, for example
+  `#19 (2 unresolved threads)`.
 - A pull request outside a stack always gets success.
 - It reads the required checks from the protection and rulesets of the stack's
   base branch, and ignores **Stack gate** itself when it judges the members.
 - Any change in the stack re-evaluates all of it: a member is opened, pushed,
-  edited, closed, marked draft or ready, reviewed, or a run of the `tests`
-  workflow finishes. To re-evaluate by hand, run the workflow from the Actions
-  tab with any member's number.
+  edited, closed, marked draft or ready, reviewed or commented on, or a run of
+  the `tests` workflow finishes.
+- A schedule also sweeps every open pull request every 5 minutes (GitHub can
+  delay scheduled runs). It picks up resolved and reopened review threads,
+  which trigger no workflow, and review events on stacked pull requests, which
+  run the workflow file from the pull request's merge ref and so miss it until
+  the base branch contains it. A status is posted only when it changes.
+- To re-evaluate by hand, run the workflow from the Actions tab with a pull
+  request number, or with no number to sweep every open pull request.
 
 Required on `main`, the status blocks merging any part of a stack until the
 whole stack could merge. The workflow runs with a write token, so it never

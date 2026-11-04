@@ -1,13 +1,20 @@
 name: stack gate
 
 # Posts the "Stack gate" commit status on every open pull request in a stack. It is success only
-# when every open member is ready to merge: not a draft, every check main requires passing, and no
-# reviewer requesting changes. GitHub already blocks merging a pull request while one below it is
-# not ready, but it lets a lower part of the stack merge on its own; required on main, this status
-# stops that. Pull requests outside a stack always get success. See CONTRIBUTING.md.
+# when every open member is ready to merge: not a draft, every check main requires passing, no
+# reviewer requesting changes, and no unresolved review thread. GitHub already blocks merging a
+# pull request while one below it is not ready, but it lets a lower part of the stack merge on its
+# own; required on main, this status stops that. Pull requests outside a stack always get success.
+# See CONTRIBUTING.md.
 #
 # Any change to a member re-evaluates the whole stack, so every member's status stays in step:
-# pull request and review events, and every completed run of the tests workflow.
+# pull request, review and review comment events, and every completed run of the tests workflow.
+# A schedule also sweeps every open pull request from the default branch, because:
+# - resolving or reopening a review thread triggers no workflow (pull_request_review_thread is a
+#   webhook event, not an Actions trigger);
+# - review events load this file from the pull request's merge ref, which a stacked pull request
+#   lacks until its base branch contains it.
+# Statuses are posted only when they change.
 #
 # These events run with a write token, so this workflow never checks out or runs pull request
 # code. It checks out the default branch for .github/scripts alone and reads the pull requests
@@ -17,24 +24,30 @@ on:
     types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, closed]
   pull_request_review:
     types: [submitted, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
   workflow_run:
     workflows: [tests]
     types: [completed]
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       pull_request:
-        description: Pull request number whose stack to re-evaluate
-        required: true
-        type: number
+        description: Pull request number whose stack to re-evaluate; empty sweeps every open pull request
+        required: false
+        type: string
 
 permissions: {}
 
 jobs:
   resolve:
     name: Find the stack
-    # A review on a fork's pull request runs with a read-only token. Stacks live in one repository,
-    # and a pull request outside a stack already got its status from pull_request_target.
-    if: github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.full_name == github.repository
+    # Review events on a fork's pull request run with a read-only token. Stacks live in one
+    # repository, and a pull request outside a stack already got its status from pull_request_target.
+    if: >-
+      !startsWith(github.event_name, 'pull_request_review')
+      || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,7 +66,7 @@ jobs:
         with:
           node-version: "22"
 
-      # Posts success on a pull request outside any stack; lists the stacks to evaluate.
+      # Posts success on pull requests outside any stack; lists the stacks to evaluate.
       - name: Find the stacks this event touches
         id: resolve
         run: node .github/scripts/stack-gate.mjs resolve
