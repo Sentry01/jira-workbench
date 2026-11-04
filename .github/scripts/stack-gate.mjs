@@ -32,8 +32,9 @@ export function requiredChecks(branch, rules = []) {
     return [...found.values()];
 }
 
-// Each required check is "pass", "fail" or "pending", from its latest check run or its commit status.
+// Each required check is "pass", "fail" or "pending", from its latest check run and its commit status.
 // A check pinned to an app accepts only that app's check runs; commit statuses carry no app to match.
+// When a check run and a commit status share an unpinned name, GitHub requires both, so every one present must pass.
 export function checkStates(required, checkRuns = [], statuses = []) {
     return required.map(({ context, appId }) => {
         const run = checkRuns
@@ -43,8 +44,8 @@ export function checkStates(required, checkRuns = [], statuses = []) {
         const states = [
             !run ? null : run.status !== "completed" ? "pending" : PASSING.has(run.conclusion) ? "pass" : "fail",
             !status ? null : status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail",
-        ];
-        const state = states.includes("pass") ? "pass" : states.includes("fail") && !states.includes("pending") ? "fail" : "pending";
+        ].filter(Boolean);
+        const state = states.includes("fail") ? "fail" : states.length && states.every(s => s === "pass") ? "pass" : "pending";
         return { context, state };
     });
 }
@@ -171,12 +172,27 @@ async function post(api, sha, { state, description }, targetUrl, statuses) {
 }
 
 // Recomputes one stack and posts the verdict to the head commit of every open member.
+// If the evaluation fails partway, a success posted earlier must not stand: the members are blocked first.
 export async function evaluateStack(api, stackNumber, { targetUrl, log = console.log } = {}) {
     const stack = await api.get(`stacks/${stackNumber}`);
     if (!stack) {
         log(`Stack #${stackNumber} no longer exists; nothing to gate.`);
         return null;
     }
+    try {
+        return await judgeStack(api, stack, stackNumber, { targetUrl, log });
+    } catch (error) {
+        const blocked = { state: "failure", description: `Could not evaluate stack #${stackNumber}; blocked until the stack gate runs again.` };
+        const heads = stack.pull_requests.filter(p => p.state === "open" && !p.merged_at && p.head?.sha).map(p => p.head.sha);
+        for (const sha of heads) {
+            try { await post(api, sha, blocked, targetUrl); }
+            catch (postError) { log(`Could not block ${sha.slice(0, 7)}: ${postError.message}`); }
+        }
+        throw error;
+    }
+}
+
+async function judgeStack(api, stack, stackNumber, { targetUrl, log }) {
     const base = encodeURIComponent(stack.base.ref);
     const branch = await api.get(`branches/${base}`);
     const rules = await api.list(`rules/branches/${base}?per_page=100`);

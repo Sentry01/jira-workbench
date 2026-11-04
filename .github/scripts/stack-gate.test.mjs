@@ -51,6 +51,14 @@ test("a commit status satisfies only an unpinned required check", () => {
     assert.deepEqual(checkStates(required, [], statuses).map(c => c.state), ["pass", "pending", "fail"]);
 });
 
+test("a check run and a commit status with one unpinned name must both pass", () => {
+    const required = [{ context: "A", appId: null }, { context: "B", appId: null }, { context: "C", appId: null }];
+    const runs = [run("A", "success"), run("B", "failure"), run("C", "success")];
+    const statuses = [{ context: "A", state: "failure" }, { context: "B", state: "success" }, { context: "C", state: "pending" }];
+    assert.deepEqual(checkStates(required, runs, statuses).map(c => c.state), ["fail", "fail", "pending"]);
+    assert.deepEqual(checkStates([{ context: "A", appId: null }], [run("A", "success")], [{ context: "A", state: "success" }]).map(c => c.state), ["pass"]);
+});
+
 test("a reviewer blocks only while their latest verdict requests changes", () => {
     const reviews = [
         { user: { login: "ann" }, state: "CHANGES_REQUESTED" },
@@ -196,6 +204,26 @@ test("hidden branch protection fails closed", async () => {
     await evaluateStack(api, 26, { log: () => {} });
     assert.equal(api.posted[0].state, "failure");
     assert.match(api.posted[0].description, /Cannot read the checks main requires/);
+});
+
+test("an evaluation that fails partway blocks every open member before it fails", async () => {
+    const ready = { context: CONTEXT, state: "success", description: "All 2 open pull requests in stack #26 are ready." };
+    const api = fakeApi({
+        "stacks/26": {
+            number: 26,
+            base: { ref: "main" },
+            pull_requests: [
+                { number: 19, state: "closed", merged_at: "2026-11-04T00:00:00Z", head: { sha: "zzz" } },
+                { number: 20, state: "open", merged_at: null, head: { sha: "aaa" } },
+                { number: 22, state: "open", merged_at: null, head: { sha: "bbb" } },
+            ],
+        },
+        "commits/aaa/status?per_page=100": { statuses: [ready] },
+        "commits/bbb/status?per_page=100": { statuses: [ready] },
+    });
+    await assert.rejects(evaluateStack(api, 26, { log: () => {} }), /unexpected request: branches\/main/);
+    assert.deepEqual(api.posted.map(p => [p.sha, p.state]), [["aaa", "failure"], ["bbb", "failure"]]);
+    assert.match(api.posted[0].description, /^Could not evaluate stack #26/);
 });
 
 test("a dissolved stack posts nothing", async () => {
