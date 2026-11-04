@@ -27,7 +27,8 @@ async function mapLimit(items, limit, work) {
 // says nothing about where its PR was opened.
 // The ID is always the one asked for: observed live (Oct 2026), the host can return `id` masked as "******", and
 // storing that echo lost the session from the trace for good.
-function sessionRecord(detail, id, status = detail) {
+// `readAt`: when the host reported this detail; a read shared across traces keeps the time it was taken.
+function sessionRecord(detail, id, status = detail, readAt = new Date().toISOString()) {
     const input = status.awaiting_input;
     const pr = detail.created_pr_number && detail.created_pr_repo;
     return {
@@ -43,7 +44,7 @@ function sessionRecord(detail, id, status = detail) {
         error: typeof status.error === "string" ? status.error : null,
         prNumber: pr ? detail.created_pr_number : null,
         prRepo: pr ? detail.created_pr_repo : null,
-        verifiedAt: new Date().toISOString(),
+        verifiedAt: readAt,
     };
 }
 
@@ -72,9 +73,11 @@ function mergeTrace(current, { scope, previous, next, stamp, source, observed = 
         sourceStatus.github = next.sourceStatus.github;
     // A newer sessions source can come from a poll that skipped a session confirmed missing. It did not observe that
     // session, so this trace's own observation of it still applies unless the session was read after this trace began.
+    // A session read after this trace's own read of it (a shared read reused late, or a concurrent refresh) is kept.
     const sessions = applySessions ? next.sessions.map(record => {
         const live = link.sessions.find(s => s.id === record.id);
-        return skipped.includes(record.id) && live ? live : mergeSession(live, record);
+        if (live && (skipped.includes(record.id) || Date.parse(live.verifiedAt || "") > Date.parse(record.verifiedAt || ""))) return live;
+        return mergeSession(live, record);
     })
         : source === "github" ? link.sessions : link.sessions.map(live => {
             const record = observed.includes(live.id) && next.sessions.find(s => s.id === live.id);
@@ -327,14 +330,17 @@ export class Trace {
                     // read in full once in this refresh is used by every trace that links it.
                     const cadence = `${scope} ${stored.id}`;
                     const due = Date.now() - (this.detailAt.get(cadence) ?? -Infinity) >= DETAIL_EVERY_MS;
-                    let detail, status = listed;
+                    let detail, readAt, status = listed;
                     if (!poll || !listed || source === "all" || due || !complete(stored, listed) || details.has(stored.id)) {
-                        if (!details.has(stored.id)) details.set(stored.id, wb.gateway.call("get_session", { project_session_id: stored.id }));
-                        detail = await details.get(stored.id);
+                        if (!details.has(stored.id)) {
+                            const at = new Date().toISOString();
+                            details.set(stored.id, wb.gateway.call("get_session", { project_session_id: stored.id }).then(detail => ({ detail, at })));
+                        }
+                        ({ detail, at: readAt } = await details.get(stored.id));
                         this.detailAt.set(cadence, Date.now());
                         status ||= statuses.find(s => s.id === detail.id);
                     } else detail = knownDetail(stored, listed);
-                    result.record = { ...stored, ...sessionRecord(detail, stored.id, status || detail), stale: Boolean(statusError) };
+                    result.record = { ...stored, ...sessionRecord(detail, stored.id, status || detail, readAt), stale: Boolean(statusError) };
                 } catch (error) {
                     // The host's own answer that the session is gone (deleted): a fact about the session, not a failed read.
                     if (!error.notFound) { result.error = error; return result; }

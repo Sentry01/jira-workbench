@@ -740,3 +740,37 @@ test("a newer unchanged poll writes while an older refresh's store write is stil
     assert.equal((await store.read()).links[scope].sessions[1].activity, "idle", "the older observation did not replace the newer one");
     assert.equal((await workbench.snapshot()).links[scope].sessions[1].activity, "idle");
 });
+
+// Copilot review on #22: a session read shared across a refresh keeps the time it was read, so a trace that reuses
+// it later cannot overwrite a newer read saved meanwhile.
+test("a shared session read never overwrites a newer read saved while the refresh was blocked", async t => {
+    let gate, release, first = false;
+    const entered = new Promise(resolve => { gate = resolve; }), resume = new Promise(resolve => { release = resolve; });
+    const github = async (repo, number) => {
+        if (number === 1000 && first) { first = false; gate(); await resume; }
+        return { number, url: `https://github.com/${repo}/pull/${number}`, title: "PR", state: "OPEN", statusCheckRollup: [] };
+    };
+    const { workbench, store } = await linkedProject(t, { github });
+    const scopes = Array.from({ length: 10 }, (_, i) => `cloud-demo/42/${100 + i}`);
+    await store.update(data => {
+        const shared = data.links[scopes[0]].sessions[0];
+        for (const scope of scopes.slice(1)) data.links[scope].sessions.push({ ...shared });
+    });
+    first = true;
+    let branch = "branch-old";
+    const original = workbench.gateway.call;
+    workbench.gateway.call = async (name, args) => {
+        const result = await original(name, args);
+        return name === "get_session" && args.project_session_id === "s-100-0" ? { ...result, branch } : result;
+    };
+    const bulk = workbench.refreshExecution({ source: "all" });
+    await entered;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    branch = "branch-new";
+    await workbench.refreshTrace("108");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    release();
+    await bulk;
+    const session = (await store.read()).links["cloud-demo/42/108"].sessions.find(s => s.id === "s-100-0");
+    assert.equal(session.branch, "branch-new");
+});
