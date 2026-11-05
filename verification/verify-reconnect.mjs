@@ -201,15 +201,22 @@ try {
     // it again): after a few failed requests the panel names the cause and the fix, drops the per-poll failure, and
     // slows down. Any answer clears it.
     const status = () => page.evaluate(() => document.querySelector("#connection-status").hidden ? "" : document.querySelector("#connection-status").innerText);
-    let blocked = 0;
-    await page.route("**/api/**", route => { blocked++; return route.abort("connectionrefused"); });
+    // Only the poll's own reads count toward its cadence; the minute-by-minute version check runs on its own timer.
+    const pollPaths = new Set(["/api/state", "/api/refresh-execution"]);
+    let polled = 0;
+    await page.route("**/api/**", route => {
+        if (pollPaths.has(new URL(route.request().url()).pathname)) polled++;
+        return route.abort("connectionrefused");
+    });
     await within("the lost-server message", async () => /lost its connection to the Workbench/.test(await status()), 30_000);
     const lostNotice = await status();
     assert.match(lostNotice, /restart the GitHub Copilot app, or open Jira Workbench from a new Copilot session/);
     assert.doesNotMatch(lostNotice, /Automatic session refresh failed/, "the generic poll failure is replaced, not stacked");
-    const before = blocked;
+    // The last poll ran at most 5s before the cause was named, so the next is at least 25s away; the old 5s cadence
+    // would poll 2-3 times here.
+    const before = polled;
     await page.waitForTimeout(12_000);
-    assert.ok(blocked - before <= 2, `a lost server is polled every 30s, not every few seconds (${blocked - before} requests in 12s)`);
+    assert.equal(polled - before, 0, `a lost server is polled every 30s, not every few seconds (${polled - before} state or session refreshes in 12s)`);
     await page.unroute("**/api/**");
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await within("the lost-server message to clear once the server answers", async () => !/lost its connection/.test(await status()), 40_000);
