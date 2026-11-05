@@ -301,6 +301,40 @@ test("every gateway failure is classified for the connection supervisor", async 
     await assert.rejects(gateway.call("list_sessions_and_chats", {}), /read-only; list_sessions_and_chats is not allowed/);
 });
 
+// Observed live (Copilot 1.0.102): the connector changed a tool's definition after the session's tool list was built,
+// and execute refused the cached copy until the tool list was rebuilt.
+test("a tool whose MCP definition changed is sent again once after a tool list rebuild", async () => {
+    const server = "cc-_connector";
+    const stale = name => ({ resultType: "failure",
+        error: `MCP tool catalog changed before tool "${name}" could be invoked: Cached MCP tool "searchJiraIssuesUsingJql" changed before it could be invoked.` });
+    const host = ({ fixed }) => {
+        const state = { rebuilds: 0, executed: 0, current: false };
+        const session = { rpc: {
+            tools: {
+                initializeAndValidate: async () => { state.rebuilds++; state.current = fixed; },
+                getCurrentMetadata: async () => ({ tools: [{ name: `${server}-searchJiraIssuesUsingJql`, mcpToolName: "searchJiraIssuesUsingJql", mcpServerName: server }] }),
+                execute: async ({ name }) => {
+                    state.executed++;
+                    return state.current ? { resultType: "success", textResultForLlm: '{"issues":[],"isLast":true}' } : stale(name);
+                },
+            },
+            mcp: { list: async () => ({ servers: [{ name: server, status: "connected" }] }) },
+        } };
+        return { state, gateway: new Gateway(session, { transientDelayMs: 1, rebuildMinMs: 60_000, shareMs: 0 }) };
+    };
+    for (const retries of [2, 0]) {
+        const { state, gateway } = host({ fixed: true });
+        assert.deepEqual(await gateway.call("searchJiraIssuesUsingJql", { cloudId: "c", jql: "project = 1" }, { retries }),
+            { issues: [], isLast: true }, `recovers with retries: ${retries}; the stale call never reached the server`);
+        assert.deepEqual([state.rebuilds, state.executed], [1, 2]);
+    }
+    const { state, gateway } = host({ fixed: false });
+    const error = await gateway.call("searchJiraIssuesUsingJql", { cloudId: "c", jql: "project = 1" }).then(() => null, e => e);
+    assert.match(error.message, /catalog changed/);
+    assert.deepEqual([error.kind, error.server], ["gone", server], "still stale after a rebuild: the connection re-checks, not a permanent failure");
+    assert.deepEqual([state.rebuilds, state.executed], [1, 2], "one rebuild per call, never a loop");
+});
+
 test("among several Jira servers the most usable serves, and the app's connector wins a tie", () => {
     const rovo = { name: "cc-_rovo", status: "connected" };
     assert.equal(preferred([{ name: "atlassian", status: "connected" }, rovo]), rovo);

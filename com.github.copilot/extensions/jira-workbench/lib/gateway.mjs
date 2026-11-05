@@ -45,6 +45,9 @@ const TRANSIENT = /re-?authenticat|requires authentication|unauthori[sz]ed|\b401
 const AUTH = /re-?authenticat|requires authentication|unauthori[sz]ed|\b401\b/i;
 // Observed live: once a server drops to needs-auth, a tool still in the snapshot fails with "Tool '…' does not exist".
 const GONE = /\bdoes not exist\b|\bnot found\b/i;
+// Observed live (Copilot 1.0.102): once an MCP server changes a tool's definition, execute refuses the copy in the
+// session's tool list ("MCP tool catalog changed before tool ... could be invoked") until a rebuild replaces it.
+const STALE = /\bcatalog changed before\b|\bchanged before it could be invoked\b/i;
 const JIRA_TOOLS = new Set(["getAccessibleAtlassianResources", "getVisibleJiraProjects", "searchJiraIssuesUsingJql", "executeRead"]);
 const PAYLOAD_KEYS = ["issues", "values", "resources"];
 
@@ -248,7 +251,8 @@ export class Gateway {
             tool = next;
             return true;
         };
-        for (let attempt = 0; ; attempt++) {
+        let rebuilt = false;
+        for (let attempt = 0; ;) {
             const server = tool.mcpServerName || (jira ? "atlassian" : null);
             const accepts = tool.input_schema?.properties || {};
             const sent = { ...Object.fromEntries(Object.entries(optional || {}).filter(([key]) => Object.hasOwn(accepts, key))), ...args };
@@ -259,6 +263,19 @@ export class Gateway {
                 return jira ? unwrap(value) : value;
             } catch (error) {
                 const message = error.message || "";
+                if (STALE.test(message)) {
+                    // The call never reached the server, so one more send after a rebuild is not a retry: it
+                    // happens whatever the retry budget, at most once per call.
+                    this.invalidate();
+                    if (!rebuilt) {
+                        rebuilt = true;
+                        const next = await this.metadata({ force: true }).then(list => find(tools = list)).catch(() => null);
+                        if (next?.length === 1) { tool = next[0]; continue; }
+                        if (next && !next.length) throw await this.diagnose(name);
+                    }
+                    // Still stale: the Connection re-checks, and the next read rebuilds again.
+                    throw classify(error, "gone", server);
+                }
                 if (GONE.test(message) && !TRANSIENT.test(message)) {
                     // A host tool's own "not found" (e.g. a deleted session) is its answer, never Atlassian's fault,
                     // and says nothing about the tool list; only a message naming the tool means the tool is gone.
@@ -267,7 +284,7 @@ export class Gateway {
                     if (!jira && !names.some(n => message.includes(n))) throw Object.assign(classify(error, "permanent"), { notFound: true });
                     this.invalidate();
                     if (!jira) throw classify(error, "permanent");
-                    if (attempt < retries && await reroute()) continue;
+                    if (attempt < retries && await reroute()) { attempt++; continue; }
                     const diagnosis = await this.diagnose(name);
                     throw diagnosis.jiraDown ? diagnosis : classify(error, "gone", server);
                 }
@@ -277,6 +294,7 @@ export class Gateway {
                     this.invalidate();
                     await new Promise(resolve => setTimeout(resolve, this.transientDelayMs * (attempt + 1)));
                     await reroute();
+                    attempt++;
                     continue;
                 }
                 // A call that outlived its time bound is still running in the runtime; it is not retried, only reported.
