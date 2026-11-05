@@ -412,6 +412,15 @@ matching refresh: **Refresh Jira** (Jira only), **Refresh live state**, or
 receipts, pausing during context preparation. Jira and GitHub are not continuously
 polled: their displayed observations remain snapshots until refreshed.
 
+The panel polls every second while reconnecting and every 5 seconds otherwise.
+If three requests in a row reach no server at all (an error response still
+counts as an answer), the panel's own server is gone: after an update or
+extension reload the host can stop the session's Workbench process without
+starting it again, and reopening the panel in that session does not restart it.
+The panel then replaces the per-poll failure with one message that says to
+restart the GitHub Copilot app or open the Workbench from a new session, and
+polls every 30 seconds. Any answer clears the message.
+
 ### Opening in a new session
 
 Every Copilot session runs its own extension process, so the panel cannot share
