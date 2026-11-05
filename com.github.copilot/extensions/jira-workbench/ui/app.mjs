@@ -631,7 +631,7 @@ function render({ force = false } = {}) {
     setText($("project-title"), state.project?.name || "Your work, connected.");
     $("project-title").disabled = !state.project;
     const unavailableExecutions = state.executions.filter(execution => !getItem(execution.nodeId)).map(execution => execution.nodeId);
-    const { signIn, errors, retryAt } = banner(state, { unavailable: unavailableExecutions });
+    const { signIn, standalone, errors, retryAt } = banner(state, { unavailable: unavailableExecutions });
     setHidden($("sign-in"), !signIn);
     if (signIn) {
         $("sign-in-server").textContent = signIn.server;
@@ -641,6 +641,12 @@ function render({ force = false } = {}) {
         if (signIn.connector) $("sign-in-status").hidden = true;
     }
     else $("sign-in-status").hidden = true;
+    setHidden($("standalone"), !standalone);
+    if (standalone) {
+        setHidden($("standalone-saved"), !standalone.saved);
+        setText($("standalone-prompt"), standalone.prompt);
+    }
+    else $("standalone-status").hidden = true;
     const errorSignature = JSON.stringify(errors);
     if ($("errors").dataset.signature !== errorSignature) {
         $("errors").dataset.signature = errorSignature;
@@ -1878,6 +1884,18 @@ $("sign-in-button").addEventListener("click", async () => {
         status.textContent = `Could not start sign-in: ${error.message}`;
     } finally {
         setInert(button, false);
+    }
+});
+$("standalone-copy").addEventListener("click", async () => {
+    const status = $("standalone-status"), prompt = $("standalone-prompt");
+    status.hidden = false;
+    try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+        await navigator.clipboard.writeText(prompt.textContent);
+        status.textContent = "Prompt copied. Paste it into any Copilot session.";
+    } catch {
+        getSelection().selectAllChildren(prompt);
+        status.textContent = "Copying is not available here. The prompt is selected; copy it with your keyboard.";
     }
 });
 render();

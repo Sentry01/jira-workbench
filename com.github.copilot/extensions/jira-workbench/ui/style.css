@@ -63,11 +63,14 @@ select { max-width: 360px; min-width: 145px; }
 .action-notice button { flex-shrink: 0; padding: 3px 7px; }
 .notice-error, #launch-error { color: var(--true-color-red, #cf222e); }
 .action-notice.notice-error { border-left-color: var(--true-color-red, #cf222e); }
-#sign-in { margin: 0 28px 16px; padding: 12px 14px; border: 1px solid color-mix(in srgb, #0969da 45%, var(--border)); border-radius: 6px; background: color-mix(in srgb, #0969da 7%, var(--surface)); font-size: 13px; }
+#sign-in, #standalone { margin: 0 28px 16px; padding: 12px 14px; border: 1px solid color-mix(in srgb, #0969da 45%, var(--border)); border-radius: 6px; background: color-mix(in srgb, #0969da 7%, var(--surface)); font-size: 13px; }
 #update-banner { margin: 0 28px 12px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 6px; background: var(--soft-accent); font-size: 12px; }
 #update-banner button { flex-shrink: 0; padding: 4px 9px; }
-#sign-in p { margin: 0 0 8px; }
-#sign-in p:last-child { margin-bottom: 0; }
+#sign-in p, #standalone p { margin: 0 0 8px; }
+#sign-in p:last-child, #standalone p:last-child { margin-bottom: 0; }
+#standalone ol { margin: 0 0 8px; padding-left: 20px; }
+#standalone li + li { margin-top: 6px; }
+#standalone-copy { margin-left: 6px; padding: 3px 8px; }
 .sign-in-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 #sign-in-status a { word-break: break-all; }
 #retry-time { margin: -10px 28px 16px; font-size: 12px; color: var(--muted); }

@@ -59,7 +59,8 @@ install, updating, uninstalling, and troubleshooting.
    > Open the jira-workbench canvas
 
    Open it from a session like this. Opened from **Canvases** in the app's
-   sidebar, it has no session behind it and cannot reach Jira.
+   sidebar, it has no session behind it and cannot reach Jira; it then shows
+   how to open it from a session. Any session works, whatever its repository.
 
 4. Use the pickers along the top to choose your Jira site, a Jira project, and
    the Copilot repository to work in.

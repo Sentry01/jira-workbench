@@ -29,6 +29,15 @@
       <span id="sign-in-connector" hidden>Reconnect the Atlassian connector in the Copilot app.</span></p>
     <p id="sign-in-status" class="muted" hidden></p>
   </div>
+  <div id="standalone" role="alert" hidden>
+    <p><strong>Open Jira Workbench from a Copilot session to connect it.</strong> Opened from <strong>Canvases</strong> in the sidebar, this panel has no session behind it, so it cannot read Jira, list your repositories or start sessions. <span id="standalone-saved">The data below is the last saved copy.</span></p>
+    <ol>
+      <li>Open any Copilot session. Its repository does not matter.</li>
+      <li class="standalone-ask">Ask Copilot: <code id="standalone-prompt">Open the jira-workbench canvas</code> <button id="standalone-copy">Copy prompt</button></li>
+      <li>In the panel that opens, choose the Copilot repository for your Jira project, then start work. Each new session runs in that repository and appears under it in the sidebar, whichever session opened the panel.</li>
+    </ol>
+    <p id="standalone-status" class="muted" hidden></p>
+  </div>
   <div id="update-banner" role="status" aria-live="polite" hidden><span id="update-message"></span><button id="update-action" class="primary" hidden></button></div>
   <div id="errors" role="alert"></div>
   <p id="retry-time" hidden></p>

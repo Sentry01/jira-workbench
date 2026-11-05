@@ -335,8 +335,17 @@ export const signInNeeded = snapshot => snapshot.connection?.state === "signin"
 // shows the saved data, explains once, and disables the actions that need a session or Jira.
 export const standaloneHost = snapshot => snapshot.connection?.state === "standalone";
 
-// The sign-in call to action and the error banner. An expired sign-in is one clear call to action, not a pile of
-// per-source failures and a retry promise; a panel with no session behind it is one explanation.
+// What the user asks Copilot in a session to open this canvas there. With no input the panel opens on the last
+// selected project, which panels share on disk.
+export const STANDALONE_PROMPT = "Open the jira-workbench canvas";
+
+// The steps that connect a panel with no session behind it, or null. `saved`: the panel shows saved data.
+export const standaloneGuide = snapshot => standaloneHost(snapshot)
+    ? { saved: Boolean(snapshot.issues?.length), prompt: STANDALONE_PROMPT } : null;
+
+// The sign-in call to action, the steps for a panel with no session behind it, and the error banner. An expired
+// sign-in is one clear call to action, not a pile of per-source failures and a retry promise; a panel with no session
+// behind it gets the steps that connect it instead of errors.
 // `unavailable` lists execution node IDs with no loaded work item.
 // The errors go into an assertive alert, so they never carry a ticking number: the next attempt is returned as
 // `retryAt` for display outside the alert (see retryNotice), and the alert text changes only when the state does.
@@ -348,8 +357,8 @@ export function banner(snapshot, { unavailable = [] } = {}) {
         ...(snapshot.pageError ? [snapshot.pageError] : []),
         ...(unavailable.length ? [`Execution snapshot references unavailable work items: ${unavailable.join(", ")}. Refresh the workbench to reconcile the sources.`] : []),
     ];
-    if (standaloneHost(snapshot))
-        return { signIn: null, errors: [`${connection.reason}${snapshot.issues?.length ? " The data shown is the last saved copy." : ""}`, ...data], retryAt: null };
+    const standalone = standaloneGuide(snapshot);
+    if (standalone) return { signIn: null, standalone, errors: data, retryAt: null };
     const errors = [
         ...(signIn ? snapshot.catalogErrors.filter(message => !message.startsWith("Jira:")) : snapshot.catalogErrors),
         ...(snapshot.error && !signIn ? [`Jira refresh failed: ${snapshot.error}. Last good data retained.`] : []),
@@ -362,7 +371,7 @@ export function banner(snapshot, { unavailable = [] } = {}) {
         errors.push(snapshot.warming ? "Reconnecting now…" : "Reconnecting automatically. No need to press Reload connections.");
         if (!snapshot.warming) retryAt = nextCheckAt;
     }
-    return { signIn, errors, retryAt };
+    return { signIn, standalone: null, errors, retryAt };
 }
 
 // The next automatic attempt as a clock time: it changes once per attempt, never every second.
