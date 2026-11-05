@@ -55,8 +55,11 @@ covers a queue row's prepare action, the inspector's **Start session** and
 brief. Issue briefs also offer an opt-in **Smart Commit comment**; see
 [Read-only boundary](#read-only-boundary).
 
-Every launch requests exactly one session, nested under the canvas-owning
-session; there is no automatic child fan-out.
+Every launch requests exactly one detached session in the mapped Copilot
+repository (`create_session` with `detached: true`), so the app's sidebar lists it
+under that repository rather than under the canvas-owning session. The Workbench
+tracks it by the ID that `record_session` stores, so it needs no creator link or
+idle notification. There is no automatic child fan-out.
 
 ### Working scopes and bounded reads
 
