@@ -82,6 +82,11 @@ newer build, a banner appears above the work queue:
   the banner offers **Reload**.
 - **A different build is on disk ... Reload** means the files were already
   updated (for example by `git pull` or another session). Reloading runs them.
+- After an update or reload, the Copilot app can stop the Workbench in the
+  current session without starting it again. The panel then says "This panel
+  lost its connection to the Workbench" and checks only every 30 seconds.
+  Reopening the panel in the same session does not help. Restart the GitHub
+  Copilot app, or open Jira Workbench from a new Copilot session.
 - **... has local changes** means a git checkout has uncommitted edits. The
   Workbench never updates it for you; commit or stash the edits, then pull.
 
@@ -298,8 +303,10 @@ inspector's **Start session** and **Start follow-up**, and
 **Start project session**. You can change the mode in the brief before you
 start.
 
-Each launch creates exactly one session, nested under the canvas session. Child
-issues never get sessions automatically.
+Each launch creates exactly one session. It is a top-level session in the mapped
+repository, so the sidebar lists it under that repository, not under the session
+that opened the canvas. The panel shows its live state; the launching chat is not
+notified when it goes idle. Child issues never get sessions automatically.
 
 ### Smart Commit comment
 
@@ -547,6 +554,7 @@ Then find the message you see:
 | A pull request is missing from the trace | Press **Refresh GitHub**. Pull requests come from session metadata and must be verified on GitHub |
 | Counts look out of date | Jira data is a snapshot. Press **Refresh** |
 | The canvas does not appear | Start a new Copilot session, because plugins load when a session starts. If it is still missing, see [install troubleshooting](install.md#troubleshooting) |
+| "This panel lost its connection to the Workbench..." | The Workbench in this session stopped, usually after an update or reload, and the Copilot app did not start it again. Reopening the panel in the same session does not help. Restart the GitHub Copilot app, or open Jira Workbench from a new Copilot session. The message clears by itself if the panel reconnects |
 | "A different build (...) is on disk. Reload to run it." | Press **Reload** in the banner, or ask Copilot to reload extensions. The session started before the files were last updated |
 | "Launch outcome unknown: Copilot did not confirm it received the prompt within 30s. No retry was sent." | The launch may still start. Check the project's sessions first. To start again, press **Clear stuck request** and **Confirm clear**. See [When a launch never reports back](#when-a-launch-never-reports-back) |
 | "Launch outcome unknown: no session receipt after 15 minutes" | Check the project's sessions first, because the launch may have created one. Then start again, or press **Clear stuck request** and **Confirm clear**. See [When a launch never reports back](#when-a-launch-never-reports-back) |

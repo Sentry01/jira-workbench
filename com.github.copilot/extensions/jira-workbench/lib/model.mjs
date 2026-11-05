@@ -286,7 +286,7 @@ const sessionName = value => String(value).replace(/[\p{Cc}\u2028\u2029]/gu, " "
 
 function launcherPrompt({ args, instanceId, requestId, jiraNote }) {
     return [
-        "The user confirmed starting exactly one nested Copilot session from Jira Workbench.",
+        "The user confirmed starting exactly one Copilot session from Jira Workbench.",
         "First claim the launch request with invoke_canvas_action:",
         JSON.stringify({ instanceId, actionName: "claim_request", input: { requestId } }),
         "Continue only if it returns status \"claimed\". If it returns any other status (refused or superseded) or the call fails, stop: do not call create_session, record_session or fail_request, and report its message.",
@@ -335,7 +335,9 @@ export function launchPrompt(input) {
     const args = {
         project_id: copilotProjectId,
         name: sessionName(`${node.key || "Project"} ${node.summary}`),
-        coordinate_with_creator: true, notify_on_idle: "once",
+        // Detached, the sidebar lists the session under the repository it works in, not under the canvas session's
+        // repository. The Workbench tracks it by ID, so it needs no creator link or idle notification.
+        detached: true,
         kickoff: { mode, prompt: launchKickoff(input) },
     };
     return launcherPrompt({ args, instanceId, requestId, jiraNote: comment
@@ -402,7 +404,7 @@ export function jiraSyncPrompt(input) {
     const args = {
         project_id: copilotProjectId,
         name: sessionName(`${projectKey} Jira status sync`),
-        coordinate_with_creator: true, notify_on_idle: "once",
+        detached: true,
         kickoff: { mode: "autopilot", prompt: kickoff },
     };
     return launcherPrompt({ args, instanceId, requestId, jiraNote: "only the new session may make the status transitions described in its kickoff." });

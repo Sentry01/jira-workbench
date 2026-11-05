@@ -6,7 +6,7 @@ import {
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor,
-    flattenTree, timeLabel,
+    flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_AFTER, SERVER_LOST_MESSAGE,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -514,4 +514,17 @@ test("times show as not refreshed, as the formatted value, or as an invalid date
     assert.equal(timeLabel(Date.parse("2026-10-02T23:59:00.000Z"), format), "23:59");
     // toLocaleTimeString returned "Invalid Date" here; a cached DateTimeFormat would throw instead.
     assert.equal(timeLabel("not a date", format), "Invalid Date");
+});
+
+test("a panel whose server stopped answering says so after a few failures in a row, and polls slowly", () => {
+    assert.equal(SERVER_LOST_AFTER, 3);
+    assert.equal(serverLost(0), false);
+    assert.equal(serverLost(2), false, "one or two dropped requests are not enough");
+    assert.equal(serverLost(3), true);
+    // Reopening in the same session does not restart the extension, so the message points at what does.
+    assert.match(SERVER_LOST_MESSAGE, /restart the GitHub Copilot app/);
+    assert.match(SERVER_LOST_MESSAGE, /new Copilot session/);
+    assert.equal(pollDelayMs(), 5000);
+    assert.equal(pollDelayMs({ reconnecting: true }), 1000);
+    assert.equal(pollDelayMs({ reconnecting: true, lost: true }), 30_000, "a lost server wins over reconnecting");
 });

@@ -55,8 +55,11 @@ covers a queue row's prepare action, the inspector's **Start session** and
 brief. Issue briefs also offer an opt-in **Smart Commit comment**; see
 [Read-only boundary](#read-only-boundary).
 
-Every launch requests exactly one session, nested under the canvas-owning
-session; there is no automatic child fan-out.
+Every launch requests exactly one detached session in the mapped Copilot
+repository (`create_session` with `detached: true`), so the app's sidebar lists it
+under that repository rather than under the canvas-owning session. The Workbench
+tracks it by the ID that `record_session` stores, so it needs no creator link or
+idle notification. There is no automatic child fan-out.
 
 ### Working scopes and bounded reads
 
@@ -408,6 +411,15 @@ matching refresh: **Refresh Jira** (Jira only), **Refresh live state**, or
 **Refresh trace**. The visible panel refreshes session observations and polls local
 receipts, pausing during context preparation. Jira and GitHub are not continuously
 polled: their displayed observations remain snapshots until refreshed.
+
+The panel polls every second while reconnecting and every 5 seconds otherwise.
+If three requests in a row reach no server at all (an error response still
+counts as an answer), the panel's own server is gone: after an update or
+extension reload the host can stop the session's Workbench process without
+starting it again, and reopening the panel in that session does not restart it.
+The panel then replaces the per-poll failure with one message that says to
+restart the GitHub Copilot app or open the Workbench from a new session, and
+polls every 30 seconds. Any answer clears the message.
 
 ### Opening in a new session
 

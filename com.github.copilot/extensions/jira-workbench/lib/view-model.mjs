@@ -343,6 +343,22 @@ export function retryNotice(retryAt, { now = Date.now(), format }) {
     return at <= now ? "Retrying now." : `Next attempt at ${format(retryAt)}.`;
 }
 
+// The panel's own server can disappear for good: after an update or extension reload the host may stop this
+// session's Workbench process without starting a new one, and reopening the panel in the same session does not
+// bring it back. Network failures (not error responses) in a row decide it; any answer resets the count.
+export const SERVER_LOST_AFTER = 3;
+export const SERVER_LOST_MESSAGE = "This panel lost its connection to the Workbench, usually because the extension stopped after an update or reload. "
+    + "Reopening it in this session may not help: restart the GitHub Copilot app, or open Jira Workbench from a new Copilot session.";
+export function serverLost(failures) {
+    return failures >= SERVER_LOST_AFTER;
+}
+
+// How long the panel waits between polls: every second while reconnecting so a recovery shows at once, every 5s
+// when healthy, and every 30s once its server is gone, since nothing in this panel can bring it back.
+export function pollDelayMs({ reconnecting = false, lost = false } = {}) {
+    return lost ? 30_000 : reconnecting ? 1000 : 5000;
+}
+
 // Where keyboard focus goes when the item with `removed` key leaves a list: the next item, else the previous one.
 export function nextFocusKey(keys, removed) {
     const index = keys.indexOf(removed);
