@@ -4,7 +4,7 @@ import {
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
     retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor as indexedExecution,
-    flattenTree, timeLabel,
+    flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_MESSAGE,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -155,6 +155,17 @@ function getItem(id) {
 // The server bounds its prompt send at 30s; this bounds the whole launch or Update Jira call, so a hung request
 // cannot keep the panel waiting (and polling paused) forever.
 const LAUNCH_TIMEOUT_MS = 45_000;
+let serverFailures = 0;
+// Counts requests that reached no server at all; an error response still proves the server is there.
+function noteServer(reached) {
+    const was = serverLost(serverFailures);
+    serverFailures = reached ? 0 : serverFailures + 1;
+    const lost = serverLost(serverFailures);
+    if (lost === was) return;
+    connectionMessage("server", lost ? SERVER_LOST_MESSAGE : "");
+    // The per-request failures ("Load failed") say nothing more once the cause is named.
+    if (lost) connectionMessage("poll", "");
+}
 async function api(path, input, signal) {
     const response = await fetch(`/api/${path}`, {
         method: input === undefined ? "GET" : "POST",
@@ -162,8 +173,11 @@ async function api(path, input, signal) {
         ...(input === undefined ? {} : { body: JSON.stringify(input) }),
         ...(signal ? { signal } : {}),
     }).catch(error => {
-        throw error?.name === "TimeoutError" ? new Error(`Jira Workbench did not answer within ${Math.round(LAUNCH_TIMEOUT_MS / 1000)}s`) : error;
+        if (error?.name === "TimeoutError") throw new Error(`Jira Workbench did not answer within ${Math.round(LAUNCH_TIMEOUT_MS / 1000)}s`);
+        if (error?.name !== "AbortError") noteServer(false);
+        throw error;
     });
+    noteServer(true);
     const result = await response.json();
     if (!response.ok) {
         const error = new Error(result.error || `Request failed (${response.status})`);
@@ -1753,7 +1767,7 @@ async function poll() {
         warmingMessage();
         if (epoch === scopeEpoch) connectionMessage("poll", "");
     } catch (error) {
-        if (epoch === scopeEpoch) connectionMessage("poll", `Automatic session refresh failed: ${error.message}. Last observed state is retained; GitHub freshness has not been refreshed.`);
+        if (epoch === scopeEpoch && !serverLost(serverFailures)) connectionMessage("poll", `Automatic session refresh failed: ${error.message}. Last observed state is retained; GitHub freshness has not been refreshed.`);
     } finally {
         pollPending = false;
     }
@@ -1834,12 +1848,12 @@ for (let attempt = 0; attempt < 160 && (state.warming || state.refreshing); atte
     warmingMessage();
 }
 warmingMessage();
-// Poll every second while reconnecting so a recovery shows at once; relax to 5s when everything is healthy.
+// The cadence is pollDelayMs: 1s while reconnecting, 5s when healthy, 30s once this panel's server is gone.
 // Decided each tick, because a failure can arrive through an action response between polls.
 let lastPoll = 0;
 setInterval(() => {
-    const reconnecting = !standaloneHost(state) && (state.catalogErrors.length || state.error || state.warming || state.retryAt);
-    if (!reconnecting && Date.now() - lastPoll < 5000) return;
+    const reconnecting = Boolean(!standaloneHost(state) && (state.catalogErrors.length || state.error || state.warming || state.retryAt));
+    if (Date.now() - lastPoll < pollDelayMs({ reconnecting, lost: serverLost(serverFailures) }) - 50) return;
     lastPoll = Date.now();
     void poll();
 }, 1000);

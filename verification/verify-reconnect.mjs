@@ -197,9 +197,27 @@ try {
         await sidebar.idle();
     }
 
+    // The panel's own server disappears (the host stopped this session's extension after an update and did not start
+    // it again): after a few failed requests the panel names the cause and the fix, drops the per-poll failure, and
+    // slows down. Any answer clears it.
+    const status = () => page.evaluate(() => document.querySelector("#connection-status").hidden ? "" : document.querySelector("#connection-status").innerText);
+    let blocked = 0;
+    await page.route("**/api/**", route => { blocked++; return route.abort("connectionrefused"); });
+    await within("the lost-server message", async () => /lost its connection to the Workbench/.test(await status()), 30_000);
+    const lostNotice = await status();
+    assert.match(lostNotice, /restart the GitHub Copilot app, or open Jira Workbench from a new Copilot session/);
+    assert.doesNotMatch(lostNotice, /Automatic session refresh failed/, "the generic poll failure is replaced, not stacked");
+    const before = blocked;
+    await page.waitForTimeout(12_000);
+    assert.ok(blocked - before <= 2, `a lost server is polled every 30s, not every few seconds (${blocked - before} requests in 12s)`);
+    await page.unroute("**/api/**");
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await within("the lost-server message to clear once the server answers", async () => !/lost its connection/.test(await status()), 40_000);
+    await page.screenshot({ path: screenshotPath("reconnect-8-server-lost.png") });
+
     assert.ok(healMs < 4000 && recoverMs < 4000, `recovery must show within seconds (${healMs}ms, ${recoverMs}ms)`);
     assert.deepEqual(errors, []);
-    console.log(`PASS: stopped server named with an automatic-retry hint, project loaded ${healMs}ms after connect with no click, silent token refresh invisible, drop kept data and healed ${recoverMs}ms after reconnect, expired sign-in showed one Sign in action with no request storm and reloaded ${signInMs}ms after sign-in, needs-auth showed Sign in and reloaded ${needsAuthMs}ms after the server connected, the Atlassian Rovo connector served reads beside the atlassian server, its sign-in pointed to the Copilot app and reloaded ${connectorMs}ms after it reconnected, and a panel opened from the sidebar explained once, showed the saved data, disabled every session and Jira action and left the shared store untouched. External services were fake.`);
+    console.log(`PASS: stopped server named with an automatic-retry hint, project loaded ${healMs}ms after connect with no click, silent token refresh invisible, drop kept data and healed ${recoverMs}ms after reconnect, expired sign-in showed one Sign in action with no request storm and reloaded ${signInMs}ms after sign-in, needs-auth showed Sign in and reloaded ${needsAuthMs}ms after the server connected, the Atlassian Rovo connector served reads beside the atlassian server, its sign-in pointed to the Copilot app and reloaded ${connectorMs}ms after it reconnected, a panel opened from the sidebar explained once, showed the saved data, disabled every session and Jira action and left the shared store untouched, and a panel whose server vanished said to restart the app or use a new session, slowed to one poll per 30s and cleared once the server answered. External services were fake.`);
 } finally {
     await browser.close();
     await server.close();
