@@ -31,7 +31,11 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const banner = () => page.evaluate(() => document.querySelector("#errors").hidden ? "" : document.querySelector("#errors").innerText);
-const rows = () => page.evaluate(() => new Set(document.querySelector("#tree").innerText.match(/DEMO-\d+/g) || []).size);
+// The issue keys in the open view. textContent, not innerText: rows outside the scroll area skip rendering
+// (content-visibility), and the hierarchy, where a project opens, is taller than the work area.
+const keysShown = target => target.evaluate(() => new Set([...document.querySelectorAll("#tree .issue-key")].map(key => key.textContent)
+    .filter(key => /^DEMO-\d+$/.test(key))).size);
+const rows = () => keysShown(page);
 const within = async (what, predicate, ms = 15_000) => {
     const started = Date.now();
     while (!(await predicate())) {
@@ -173,7 +177,7 @@ try {
         assert.equal(notice.trim().split("\n").filter(Boolean).length, 1, `one explanation only: ${notice}`);
         assert.match(notice, /open it from a session instead\. The data shown is the last saved copy\./);
         assert.doesNotMatch(notice, /Reconnecting|did not offer|is unavailable/, "no retry promise and no per-source failures");
-        assert.equal(new Set((await sidebarPage.innerText("#tree")).match(/DEMO-\d+/g) || []).size, 12, "the saved hierarchy is shown");
+        assert.equal(await keysShown(sidebarPage), 12, "the saved hierarchy is shown");
         const disabled = await sidebarPage.evaluate(() => Object.fromEntries(["project-start", "sync-jira", "refresh", "refresh-execution", "connections"]
             .map(id => [id, document.getElementById(id).disabled])));
         assert.deepEqual(disabled, { "project-start": true, "sync-jira": true, refresh: true, "refresh-execution": true, connections: false },

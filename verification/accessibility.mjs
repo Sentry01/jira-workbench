@@ -149,6 +149,19 @@ async function targets(page) {
     await page.locator("#view-execution").click();
     await page.waitForFunction(() => document.querySelector("#tree .execution-evidence summary"));
     assert.deepEqual(await small(), [], "queue targets are at least 24 by 24");
+    await page.locator("#view-kanban").click();
+    await page.waitForFunction(() => document.querySelector("#tree .kanban-card .row-select"));
+    assert.deepEqual(await small(), [], "board targets are at least 24 by 24");
+    const lists = await page.$$eval("#tree .kanban-list", nodes => nodes.map(list => ({
+        role: list.getAttribute("role"), name: document.getElementById(list.getAttribute("aria-labelledby"))?.textContent,
+        cards: [...list.children].every(card => card.getAttribute("role") === "listitem" && card.querySelector(":scope .row-select")),
+    })));
+    assert.ok(lists.length && lists.every(list => list.role === "list" && list.name && list.cards), "each column is a list of cards named by its heading");
+    const boardStops = await page.$$eval("#tree *", nodes => new Set(nodes.filter(node => node.tabIndex >= 0 && !node.disabled && node.getClientRects().length)
+        .map(node => node.closest("[data-node-id]")?.dataset.nodeId)).size);
+    assert.equal(boardStops, 1, "only one card is in the tab order");
+    await page.locator("#view-execution").click();
+    await page.waitForFunction(() => document.querySelector("#tree .execution-evidence summary"));
 }
 
 async function rowsAndTabStops(page) {

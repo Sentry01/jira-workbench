@@ -39,6 +39,13 @@ async function bodyHas(text) {
 try {
     await page.goto(server.url);
     await bodyHas("Needs your answer");
+    // A project with no saved view opens in the hierarchy; the queue checks below choose Execution.
+    await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "tree");
+    assert.equal(await page.locator("#view-hierarchy").getAttribute("aria-pressed"), "true");
+    const viewSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok());
+    await byName("Execution");
+    await viewSaved;
+    await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "list");
     const sprintFilter = page.locator("#sprint-filter");
     await sprintFilter.waitFor({ state: "visible" });
     assert.deepEqual(await sprintFilter.locator("option").allTextContents(), ["All sprints", "No sprint", "Sprint 12"]);
@@ -293,6 +300,47 @@ try {
     assert.match(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), /DEMO-1/);
     await page.keyboard.press("ArrowRight");
     assert.equal(await page.getByRole("treeitem").count(), 8);
+
+    // Kanban: one column per workflow status in category order, holding work items only (the epic stays in the
+    // hierarchy). The board is read-only: a card opens the inspector, and arrow keys move between cards and columns.
+    const original = issues.map(item => [item.status, item.category]);
+    Object.assign(issues[2], { status: "PR Waiting", category: "indeterminate" });
+    Object.assign(issues[3], { status: "Done", category: "done" });
+    await workbench.refresh({ fresh: true });
+    await byName("Kanban");
+    await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "group");
+    const board = () => page.$$eval("#tree .kanban-column", columns => columns.map(column => [column.querySelector(".kanban-name").textContent,
+        Number(column.querySelector(".kanban-count").textContent), [...column.querySelectorAll("[data-node-id]")].map(card => card.dataset.nodeId)]));
+    await page.waitForFunction(() => document.querySelector('#tree .kanban-column [data-node-id="4"]')?.closest(".kanban-column").querySelector(".kanban-name").textContent === "Done");
+    assert.deepEqual(await board(), [["To Do", 5, ["2", "5", "6", "7", "8"]], ["In Progress", 0, []], ["PR Waiting", 1, ["3"]], ["Done", 1, ["4"]]]);
+    assert.equal(await page.locator("#execution-filters").isHidden(), true);
+    assert.equal(await page.locator("#expand").isHidden(), true);
+    assert.equal((await store.read()).preferences[scope].view, "kanban");
+    const focusedCard = () => page.evaluate(() => document.activeElement.closest("[data-node-id]")?.dataset.nodeId);
+    await page.locator('#tree [data-node-id="3"] .row-select').focus();
+    await page.keyboard.press("ArrowLeft");
+    assert.equal(await focusedCard(), "2", "ArrowLeft skips the empty column");
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await focusedCard(), "5");
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await focusedCard(), "3", "ArrowRight lands on the last card of a shorter column");
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await focusedCard(), "4");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.getElementById("inspector").innerText.includes("Merged work"));
+    await page.locator("#status-filter").selectOption("indeterminate");
+    await page.waitForFunction(() => document.querySelectorAll("#tree .kanban-column").length === 2);
+    assert.deepEqual(await board(), [["In Progress", 0, []], ["PR Waiting", 1, ["3"]]]);
+    await page.locator("#status-filter").selectOption("all");
+    await search(page, "nothing matches this");
+    await page.waitForFunction(() => document.getElementById("tree").innerText.includes("No matching work on the board."));
+    await search(page, "");
+    issues.forEach((item, index) => { [item.status, item.category] = original[index]; });
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(() => document.querySelectorAll("#tree .kanban-column").length === 4
+        && document.querySelector('#tree [data-node-id="4"]')?.closest(".kanban-column").querySelector(".kanban-name").textContent === "To Do");
+    await byName("Hierarchy");
+    await page.waitForFunction(() => document.querySelectorAll('#tree [role="treeitem"]').length === 8);
     await page.getByRole("treeitem", { name: /DEMO-2 / }).click();
     await byName("Execution");
     await page.screenshot({ path: screenshotPath("execution.png"), fullPage: true });
@@ -322,12 +370,18 @@ try {
     assert.equal(await page.locator("#search").isVisible(), true);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Narrow canvas must not overflow");
     await page.screenshot({ path: screenshotPath("narrow.png"), fullPage: true });
+    await byName("Kanban");
+    await page.waitForFunction(() => document.querySelector("#tree .kanban-card"));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
+        && document.getElementById("work-scroll").scrollWidth > document.getElementById("work-scroll").clientWidth),
+        "A narrow Kanban board scrolls sideways inside the work area, not the page");
+    await byName("Execution");
     assert.equal(sent.length, 2, "Only the explicitly confirmed fake launches are queued");
     await page.setViewportSize({ width: 1440, height: 1080 });
     await verifyAccessibility({ page, workbench });
     assert.equal(sent.length, 3, "The accessibility checks queue exactly one confirmed launch");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, a Hierarchy default, a read-only Kanban board (workflow-status columns, work items only, arrow keys across columns, shared filters), keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();

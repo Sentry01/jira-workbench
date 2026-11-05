@@ -28,7 +28,10 @@ const rows = () => page.locator("#tree [data-node-id]").count();
 
 try {
     await page.goto(server.url);
-    await page.waitForFunction(count => document.querySelectorAll("#tree [data-node-id]").length >= count, 300);
+    // The queue rows below are Execution rows; a project with no saved view opens in the hierarchy.
+    await page.locator("#view-execution").click();
+    await page.waitForFunction(count => document.getElementById("tree").getAttribute("role") === "list"
+        && document.querySelectorAll("#tree [data-node-id]").length >= count, 300);
     await page.locator('#tree [data-node-id="2"]').click();
     await page.locator("#inspector-content h2").waitFor();
     // The inspector shows trace times to the minute: keep the observed window inside one minute.
