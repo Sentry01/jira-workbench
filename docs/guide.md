@@ -303,8 +303,10 @@ inspector's **Start session** and **Start follow-up**, and
 **Start project session**. You can change the mode in the brief before you
 start.
 
-Each launch creates exactly one session, nested under the canvas session. Child
-issues never get sessions automatically.
+Each launch creates exactly one session. It is a top-level session in the mapped
+repository, so the sidebar lists it under that repository, not under the session
+that opened the canvas. The panel shows its live state; the launching chat is not
+notified when it goes idle. Child issues never get sessions automatically.
 
 ### Smart Commit comment
 
