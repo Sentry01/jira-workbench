@@ -52,7 +52,9 @@ the inspector's Start button, one Jira freshness label in the bar and the
 inspector, parent-key search in the hierarchy, project-scoped restoration, the
 Hierarchy default for a project with no saved view, the read-only Kanban board
 (workflow-status columns, work items only, arrow keys across columns, shared
-filters, sideways scrolling in a narrow panel),
+filters, an empty board that keeps its columns, one-line column headings that
+never cover the focused card in a scrolled column, sideways scrolling in a
+narrow panel),
 keyboard focus, the freshness dots, and the narrow layout.
 
 It then runs the WCAG 2.2 AA checks in [`accessibility.mjs`](accessibility.mjs): no

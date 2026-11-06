@@ -47,5 +47,27 @@ Update the docs the change makes wrong, in the same pull request:
 Fill in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md), including
 the commands you ran and their output.
 
+## Get a clean Copilot code review before merging
+
+A pull request is not ready to merge, and you must not report it ready or merge
+it, until its **CCR gate** status is success on the current head commit. Resolved
+review threads and passing tests are not enough: Copilot can report a finding only
+in its review summary, with no thread to resolve. See
+[Copilot code review](CONTRIBUTING.md#copilot-code-review).
+
+After every push, Copilot reviews the new head commit and the gate says
+"Waiting for Copilot code review of <commit>" until it counts that review. Then:
+
+1. If Copilot's latest review is of the head commit but the gate still says it is
+   waiting for that commit, run `gh workflow run ccr-gate.yml` so the gate counts
+   the review now; its schedule can lag by hours. Do not run it while Copilot's
+   review of the head commit is still missing.
+2. If the gate fails with a verdict, read Copilot's latest review on the head
+   commit, including its open and "previously missed" issues, and fix each
+   finding. If a finding is wrong, or fixing it needs a decision you cannot make,
+   ask the user; never merge around the gate or remove it from the required
+   checks.
+3. Push the fix and repeat until the gate is success.
+
 Write docs in a plain, professional tone: no emojis, no em dashes, no Unicode
 arrows or ellipses.
