@@ -179,6 +179,9 @@ try {
         assert.match(guide, /Ask Copilot: Open the jira-workbench canvas/);
         assert.match(guide, /runs in that repository and appears under it in the sidebar/);
         assert.equal(await sidebarBanner(), "", "no error banner: no retry promise and no per-source failures");
+        // role=alert is atomic by default; the copy result must be announced alone, not the whole set of steps again.
+        assert.deepEqual(await sidebarPage.evaluate(() => [document.querySelector("#standalone").getAttribute("aria-atomic"),
+            document.querySelector("#standalone-status").getAttribute("role")]), ["false", "status"]);
         // The copy button copies the prompt, or selects it where the clipboard is unavailable.
         await sidebarPage.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async text => { window.copiedPrompt = text; } } }));
         await sidebarPage.click("#standalone-copy");
