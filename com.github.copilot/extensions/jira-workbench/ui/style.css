@@ -169,7 +169,8 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 365px; margin: 0 28p
 .execution-row .observed-state { gap: 4px; }
 .execution-row .badge { display: inline-block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Kanban: one column per workflow status, side by side; the board scrolls sideways inside the work area. */
-#tree[data-view="kanban"] { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 10px; align-items: start; padding: 10px 14px 14px; }
+#tree[data-view="kanban"] { display: grid; grid-template-columns: repeat(var(--columns, 1), minmax(220px, 1fr)); gap: 10px; align-items: start; padding: 10px 14px 14px; }
+#tree[data-view="kanban"] > .empty { grid-column: 1 / -1; padding: 6px 4px 2px; }
 .kanban-column { --column-accent: var(--control-border); display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--tint); }
 .kanban-column[data-category="indeterminate"] { --column-accent: var(--accent); }
 .kanban-column[data-category="done"] { --column-accent: var(--green); }

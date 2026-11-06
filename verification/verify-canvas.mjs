@@ -307,6 +307,8 @@ try {
     Object.assign(issues[2], { status: "PR Waiting", category: "indeterminate" });
     Object.assign(issues[3], { status: "Done", category: "done" });
     await workbench.refresh({ fresh: true });
+    const kanbanSaved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.ok()
+        && response.request().postDataJSON()?.preferences?.view === "kanban");
     await byName("Kanban");
     await page.waitForFunction(() => document.getElementById("tree").getAttribute("role") === "group");
     const board = () => page.$$eval("#tree .kanban-column", columns => columns.map(column => [column.querySelector(".kanban-name").textContent,
@@ -315,6 +317,7 @@ try {
     assert.deepEqual(await board(), [["To Do", 5, ["2", "5", "6", "7", "8"]], ["In Progress", 0, []], ["PR Waiting", 1, ["3"]], ["Done", 1, ["4"]]]);
     assert.equal(await page.locator("#execution-filters").isHidden(), true);
     assert.equal(await page.locator("#expand").isHidden(), true);
+    await kanbanSaved;
     assert.equal((await store.read()).preferences[scope].view, "kanban");
     const focusedCard = () => page.evaluate(() => document.activeElement.closest("[data-node-id]")?.dataset.nodeId);
     await page.locator('#tree [data-node-id="3"] .row-select').focus();
@@ -332,8 +335,21 @@ try {
     await page.waitForFunction(() => document.querySelectorAll("#tree .kanban-column").length === 2);
     assert.deepEqual(await board(), [["In Progress", 0, []], ["PR Waiting", 1, ["3"]]]);
     await page.locator("#status-filter").selectOption("all");
+    await page.locator("#status-filter").selectOption("status:In Progress");
+    await page.waitForFunction(() => document.querySelectorAll("#tree .kanban-column").length === 1);
+    assert.deepEqual(await board(), [["In Progress", 0, []]], "a selected status keeps its column with no cards");
+    await page.locator("#status-filter").selectOption("all");
+    // With no matching card, every workflow column stays, and the notice spans the board above them.
     await search(page, "nothing matches this");
     await page.waitForFunction(() => document.getElementById("tree").innerText.includes("No matching work on the board."));
+    assert.deepEqual(await board(), [["To Do", 0, []], ["In Progress", 0, []], ["PR Waiting", 0, []], ["Done", 0, []]]);
+    const emptyBoard = await page.evaluate(() => {
+        const tree = document.getElementById("tree"), notice = tree.querySelector(":scope > .empty").getBoundingClientRect();
+        const columns = [...tree.querySelectorAll(".kanban-column")].map(column => column.getBoundingClientRect());
+        return { first: tree.firstElementChild.classList.contains("empty"), above: columns.every(column => column.top >= notice.bottom),
+            spans: notice.left <= columns[0].left + 1 && notice.right >= columns.at(-1).right - 1 };
+    });
+    assert.deepEqual(emptyBoard, { first: true, above: true, spans: true }, "the notice is not another column");
     await search(page, "");
     issues.forEach((item, index) => { [item.status, item.category] = original[index]; });
     await workbench.refresh({ fresh: true });

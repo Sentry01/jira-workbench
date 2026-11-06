@@ -941,10 +941,11 @@ function renderTree(force = false) {
         entry.row = row;
         rows.push(row);
     }
-    const reused = board && rows.length ? placeBoard(container, board, entries) : placeChildren(container, rows);
+    // The board keeps its workflow columns with no matching cards; the empty notice then sits above them.
+    const reused = board ? placeBoard(container, board, entries) : placeChildren(container, rows);
     treeRows = rows;
     visibleRows = visible;
-    if (!rows.length) container.append(el("div", emptyWorkMessage(ui.view, state), "empty"));
+    if (!rows.length) container.prepend(el("div", emptyWorkMessage(ui.view, state), "empty"));
     if (!visibleRows.has(focusedNode)) focusedNode = visibleRows.has(ui.selected) ? ui.selected : rows[0]?.dataset.nodeId;
     setTabStop(focusedNode);
     setText($("work-count"), `${rows.length} visible loaded item${rows.length === 1 ? "" : "s"}`);
@@ -1003,6 +1004,9 @@ function placeBoard(container, board, entries) {
         return column.element;
     });
     for (const name of boardColumns.keys()) if (!cards.has(name)) boardColumns.delete(name);
+    // An explicit column count, so an empty-board notice can span the board in a row of its own.
+    const count = String(Math.max(columns.length, 1));
+    if (container.style.getPropertyValue("--columns") !== count) container.style.setProperty("--columns", count);
     return placeChildren(container, columns);
 }
 function boardColumn({ name, category }) {
