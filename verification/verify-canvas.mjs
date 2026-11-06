@@ -351,6 +351,36 @@ try {
     });
     assert.deepEqual(emptyBoard, { first: true, above: true, spans: true }, "the notice is not another column");
     await search(page, "");
+    // A scrolled column keeps its heading in view, and the focused card stays fully visible below it, also with a
+    // status name too long for one line.
+    Object.assign(issues[2], { status: "Waiting for a review by the platform security and compliance team", category: "indeterminate" });
+    await workbench.refresh({ fresh: true });
+    await page.waitForFunction(() => document.querySelectorAll("#tree .kanban-column").length === 5);
+    await page.setViewportSize({ width: 1440, height: 500 });
+    const headingHeights = await page.$$eval("#tree .kanban-heading", headings => [...new Set(headings.map(h => Math.round(h.getBoundingClientRect().height)))]);
+    assert.equal(headingHeights.length, 1, `every heading is one line: ${headingHeights}`);
+    await page.evaluate(() => {
+        const scroller = document.getElementById("work-scroll");
+        scroller.scrollTop = scroller.scrollHeight;
+        document.querySelector('#tree [data-node-id="8"] .row-select').focus({ preventScroll: true });
+    });
+    const cardInView = () => page.evaluate(() => {
+        const select = document.activeElement, card = select.closest("[data-node-id]");
+        const column = card.closest(".kanban-column"), scroller = document.getElementById("work-scroll").getBoundingClientRect();
+        const box = select.getBoundingClientRect(), heading = column.querySelector(".kanban-heading").getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 2);
+        return { id: card.dataset.nodeId, clear: box.top >= heading.bottom - 1 && box.top >= scroller.top - 1 && box.bottom <= scroller.bottom + 1 && select.contains(hit),
+            stuck: column.getBoundingClientRect().top < scroller.top - 1, top: Math.round(box.top), headingBottom: Math.round(heading.bottom) };
+    });
+    const stuckHeadings = [];
+    for (const id of ["7", "6", "5", "2"]) {
+        await page.keyboard.press("ArrowUp");
+        const placed = await cardInView();
+        stuckHeadings.push(placed.stuck);
+        assert.ok(placed.id === id && placed.clear, `ArrowUp keeps the focused card clear of the sticky heading: ${JSON.stringify(placed)}`);
+    }
+    assert.ok(stuckHeadings.some(Boolean), "the column was scrolled, so its heading was stuck");
+    await page.setViewportSize({ width: 1440, height: 1080 });
     issues.forEach((item, index) => { [item.status, item.category] = original[index]; });
     await workbench.refresh({ fresh: true });
     await page.waitForFunction(() => document.querySelectorAll("#tree .kanban-column").length === 4
@@ -397,7 +427,7 @@ try {
     await verifyAccessibility({ page, workbench });
     assert.equal(sent.length, 3, "The accessibility checks queue exactly one confirmed launch");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, a Hierarchy default, a read-only Kanban board (workflow-status columns, work items only, arrow keys across columns, shared filters), keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, a Hierarchy default, a read-only Kanban board (workflow-status columns, work items only, arrow keys across columns, shared filters, one-line column headings that never cover the focused card in a scrolled column), keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();

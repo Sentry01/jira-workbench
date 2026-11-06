@@ -1020,7 +1020,9 @@ function boardColumn({ name, category }) {
     element.dataset.category = category;
     heading.id = `kanban-column-${++boardColumnIds}`;
     const count = el("span", "0", "kanban-count");
-    heading.append(el("span", name, "kanban-name"), count);
+    const label = el("span", name, "kanban-name");
+    label.title = name;
+    heading.append(label, count);
     const list = el("div", null, "kanban-list");
     list.setAttribute("role", "list");
     list.setAttribute("aria-labelledby", heading.id);

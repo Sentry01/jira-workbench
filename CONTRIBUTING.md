@@ -134,8 +134,15 @@ on the head commit of every open pull request:
 - A new push has no **CCR gate** status until the gate posts one, so a required
   gate blocks the new head commit until Copilot reviews it. The workflow checks
   pushes at once, and a schedule checks every open pull request every 15
-  minutes to pick up new reviews, so a clean review can take that long to count: Copilot's own review events need manual approval to
-  run workflows. A status is posted only when it changes.
+  minutes to pick up new reviews: Copilot's own review events start no
+  workflow. GitHub can delay or skip scheduled runs for hours, so once
+  Copilot's review of the head commit is posted, run the workflow by hand
+  (`gh workflow run ccr-gate.yml`) to count it at once. A status is posted
+  only when it changes.
+- Copilot can report a finding only in its review summary, for example a
+  "previously missed issue" in code the pull request did not change. Such a
+  finding has no review thread, so resolving every thread does not clear it;
+  the gate still fails until a later review recommends approval.
 - Unresolved review threads, including Copilot's, are blocked separately by
   `main`'s conversation resolution rule.
 - Every run checks every open pull request, one run at a time, so two runs

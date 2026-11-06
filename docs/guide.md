@@ -444,6 +444,8 @@ Jira workflow status: To do statuses first, then In progress, then Done.
 - Search and the sprint filter hide cards. Choosing a status or a category in the
   status filter also hides the other columns.
 - When the columns do not fit, the board scrolls sideways.
+- Column headings stay on screen while you scroll a long column. A status name
+  too long for its heading is shortened; hover over it to see the full name.
 
 ---
 

@@ -7,8 +7,10 @@ name: ccr gate
 # See CONTRIBUTING.md.
 #
 # A new push gets no status until the gate posts one, so a required CCR gate blocks the new head
-# from the moment it is pushed. Copilot's own review events need manual approval to run workflows,
-# so a 15-minute schedule picks up new reviews; pull request events also start a check at once.
+# from the moment it is pushed. Copilot's own review events start no workflow, so a 15-minute
+# schedule picks up new reviews; pull request events also start a check at once. GitHub can delay
+# or skip scheduled runs for hours, so after Copilot reviews a head commit, run this workflow by
+# hand (gh workflow run ccr-gate.yml) to count the review at once; AGENTS.md tells agents to.
 #
 # Every run checks every open pull request, one run at a time: pull requests can share a head
 # commit, and a status belongs to the commit. A newer pending run replaces an older one, so the
