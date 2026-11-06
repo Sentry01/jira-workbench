@@ -45,7 +45,7 @@ export const HOST_FALLBACKS = { list_repositories: ["list_projects"] };
 export const SESSION_TOOLS = ["list_repositories", "list_projects", "get_sessions_status", "get_session"];
 // Observed live (GitHub Copilot app, Oct 2026): a canvas opened from Canvases in the app's sidebar runs in an empty
 // runtime with no MCP servers, no sign-in and none of the session tools, so nothing the Workbench does can connect it.
-export const STANDALONE = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions. This happens when Jira Workbench is opened from Canvases in the sidebar; open it from a session instead.";
+export const STANDALONE = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions. This happens when Jira Workbench is opened from Canvases in the sidebar; open it from any Copilot session instead by asking Copilot to open the jira-workbench canvas.";
 export const standaloneError = () => Object.assign(new Error(STANDALONE), { kind: "unavailable", retryable: false, standalone: true });
 
 // next: what happens after the timeout. A timed-out call is still pending in the runtime, and the gateway waits on

@@ -146,8 +146,8 @@ try {
     assert.equal(runtime.counters.logins, logins, "no OAuth login was started for the connector");
 
     // 9. The same canvas opened from Canvases in the app's sidebar (observed live: an empty runtime with no MCP servers
-    //    and none of the app's session tools) shares this panel's saved data on disk. It explains once, shows that
-    //    data, offers no session or Jira action, and never writes failed observations into the shared store.
+    //    and none of the app's session tools) shares this panel's saved data on disk. It shows the steps that connect it
+    //    and that data, offers no session or Jira action, and never writes failed observations into the shared store.
     const sidebarRuntime = fakeRuntime({ sidebar: true });
     const sidebarConnection = new Connection(sidebarRuntime.session, { restartDelaysMs: [], keepaliveMs: 0 }).start();
     const sidebar = new Workbench({
@@ -166,17 +166,31 @@ try {
         sidebarPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
         sidebarPage.on("pageerror", error => errors.push(error.message));
         const sidebarBanner = () => sidebarPage.evaluate(() => document.querySelector("#errors").hidden ? "" : document.querySelector("#errors").innerText);
+        const sidebarGuide = () => sidebarPage.evaluate(() => document.querySelector("#standalone").hidden ? "" : document.querySelector("#standalone").innerText);
         await sidebarPage.goto(sidebarServer.url);
         const started = Date.now();
-        while (!/not running in a Copilot session/.test(await sidebarBanner())) {
-            if (Date.now() - started > 15_000) throw new Error(`Timed out waiting for the standalone notice. Banner: ${await sidebarBanner()}`);
+        while (!/Open Jira Workbench from a Copilot session/.test(await sidebarGuide())) {
+            if (Date.now() - started > 15_000) throw new Error(`Timed out waiting for the standalone steps. Banner: ${await sidebarBanner()}`);
             await sidebarPage.waitForTimeout(200);
         }
         await sidebarPage.waitForTimeout(6000);
-        const notice = await sidebarBanner();
-        assert.equal(notice.trim().split("\n").filter(Boolean).length, 1, `one explanation only: ${notice}`);
-        assert.match(notice, /open it from a session instead\. The data shown is the last saved copy\./);
-        assert.doesNotMatch(notice, /Reconnecting|did not offer|is unavailable/, "no retry promise and no per-source failures");
+        const guide = await sidebarGuide();
+        assert.match(guide, /The data below is the last saved copy\./);
+        assert.match(guide, /Ask Copilot: Open the jira-workbench canvas/);
+        assert.match(guide, /runs in that repository and appears under it in the sidebar/);
+        assert.equal(await sidebarBanner(), "", "no error banner: no retry promise and no per-source failures");
+        // role=alert is atomic by default; the copy result must be announced alone, not the whole set of steps again.
+        assert.deepEqual(await sidebarPage.evaluate(() => [document.querySelector("#standalone").getAttribute("aria-atomic"),
+            document.querySelector("#standalone-status").getAttribute("role")]), ["false", "status"]);
+        // The copy button copies the prompt, or selects it where the clipboard is unavailable.
+        await sidebarPage.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async text => { window.copiedPrompt = text; } } }));
+        await sidebarPage.click("#standalone-copy");
+        await sidebarPage.waitForFunction(() => /Prompt copied/.test(document.querySelector("#standalone-status").textContent));
+        assert.equal(await sidebarPage.evaluate(() => window.copiedPrompt), "Open the jira-workbench canvas");
+        await sidebarPage.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+        await sidebarPage.click("#standalone-copy");
+        await sidebarPage.waitForFunction(() => /The prompt is selected/.test(document.querySelector("#standalone-status").textContent));
+        assert.equal(await sidebarPage.evaluate(() => String(getSelection())), "Open the jira-workbench canvas");
         assert.equal(await keysShown(sidebarPage), 12, "the saved hierarchy is shown");
         const disabled = await sidebarPage.evaluate(() => Object.fromEntries(["project-start", "sync-jira", "refresh", "refresh-execution", "connections"]
             .map(id => [id, document.getElementById(id).disabled])));
@@ -228,7 +242,7 @@ try {
 
     assert.ok(healMs < 4000 && recoverMs < 4000, `recovery must show within seconds (${healMs}ms, ${recoverMs}ms)`);
     assert.deepEqual(errors, []);
-    console.log(`PASS: stopped server named with an automatic-retry hint, project loaded ${healMs}ms after connect with no click, silent token refresh invisible, drop kept data and healed ${recoverMs}ms after reconnect, expired sign-in showed one Sign in action with no request storm and reloaded ${signInMs}ms after sign-in, needs-auth showed Sign in and reloaded ${needsAuthMs}ms after the server connected, the Atlassian Rovo connector served reads beside the atlassian server, its sign-in pointed to the Copilot app and reloaded ${connectorMs}ms after it reconnected, a panel opened from the sidebar explained once, showed the saved data, disabled every session and Jira action and left the shared store untouched, and a panel whose server vanished said to restart the app or use a new session, slowed to one poll per 30s and cleared once the server answered. External services were fake.`);
+    console.log(`PASS: stopped server named with an automatic-retry hint, project loaded ${healMs}ms after connect with no click, silent token refresh invisible, drop kept data and healed ${recoverMs}ms after reconnect, expired sign-in showed one Sign in action with no request storm and reloaded ${signInMs}ms after sign-in, needs-auth showed Sign in and reloaded ${needsAuthMs}ms after the server connected, the Atlassian Rovo connector served reads beside the atlassian server, its sign-in pointed to the Copilot app and reloaded ${connectorMs}ms after it reconnected, a panel opened from the sidebar showed the steps that connect it and a working Copy prompt, showed the saved data, disabled every session and Jira action and left the shared store untouched, and a panel whose server vanished said to restart the app or use a new session, slowed to one poll per 30s and cleared once the server answered. External services were fake.`);
 } finally {
     await browser.close();
     await server.close();

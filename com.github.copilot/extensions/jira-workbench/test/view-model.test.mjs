@@ -4,7 +4,7 @@ import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS }
 import {
     humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
-    descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
+    descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, standaloneGuide, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor,
     flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_AFTER, SERVER_LOST_MESSAGE, WORK_VIEWS, workView, kanbanBoard, emptyWorkMessage,
 } from "../lib/view-model.mjs";
@@ -310,9 +310,9 @@ test("every Start button opens with the same mode: the execution's, else Plan fo
 test("the banner follows the connection state: sign-in, automatic retry, or plain errors", () => {
     const base = { catalogErrors: [], error: null, backgroundError: null, warming: false, tree: { warnings: [] }, connection: null };
     const down = { state: "down", reason: "MCP server atlassian is stopped.", server: "atlassian", nextCheckAt: new Date(NOW + 4_200).toISOString() };
-    assert.deepEqual(banner(base, { now: NOW }), { signIn: null, errors: [], retryAt: null });
+    assert.deepEqual(banner(base, { now: NOW }), { signIn: null, standalone: null, errors: [], retryAt: null });
     assert.deepEqual(banner({ ...base, catalogErrors: ["Jira: MCP server atlassian is stopped."], connection: down }, { now: NOW }),
-        { signIn: null, errors: ["Jira: MCP server atlassian is stopped.", "Reconnecting automatically. No need to press Reload connections."], retryAt: down.nextCheckAt });
+        { signIn: null, standalone: null, errors: ["Jira: MCP server atlassian is stopped.", "Reconnecting automatically. No need to press Reload connections."], retryAt: down.nextCheckAt });
     assert.deepEqual(banner({ ...base, error: "timeout", warming: true, connection: down }, { now: NOW }).errors,
         ["Jira refresh failed: timeout. Last good data retained.", "Reconnecting now…"]);
     assert.deepEqual(banner({ ...base, error: "timeout", connection: { ...down, state: "ready", nextCheckAt: null } }, { now: NOW }).errors,
@@ -323,7 +323,7 @@ test("the banner follows the connection state: sign-in, automatic retry, or plai
         ...base, connection: signin, error: "Re-authentication required", backgroundError: "Atlassian sign-in has expired.",
         catalogErrors: ["Jira: needs sign-in", "Copilot projects: timeout"],
     }, { now: NOW });
-    assert.deepEqual(expired, { signIn: { server: "atlassian", connector: false }, errors: ["Copilot projects: timeout"], retryAt: null }, "one Sign in action, no Jira noise");
+    assert.deepEqual(expired, { signIn: { server: "atlassian", connector: false }, standalone: null, errors: ["Copilot projects: timeout"], retryAt: null }, "one Sign in action, no Jira noise");
     assert.deepEqual(signInNeeded({ connection: { ...signin, server: null } }), { server: null, connector: false });
     assert.deepEqual(signInNeeded({ connection: { ...signin, server: "cc-_rovo", connector: true } }), { server: "cc-_rovo", connector: true },
         "the app's connector is signed in by the app, so the panel offers no Sign in button");
@@ -361,7 +361,7 @@ test("after a notice is dismissed, focus moves to the next notice, else the prev
     assert.equal(nextFocusKey(["a", "b"], "z"), null);
 });
 
-test("a panel with no Copilot session behind it shows one explanation, no per-source failures and no retry promise", () => {
+test("a panel with no Copilot session behind it shows the steps that connect it, no per-source failures and no retry promise", () => {
     const reason = "This panel is not running in a Copilot session, so it cannot reach Jira or your sessions.";
     const standalone = { state: "standalone", reason, server: null, nextCheckAt: new Date(NOW + 60_000).toISOString() };
     const failing = {
@@ -372,12 +372,13 @@ test("a panel with no Copilot session behind it shows one explanation, no per-so
     assert.equal(standaloneHost(failing), true);
     assert.equal(standaloneHost({ connection: { ...standalone, state: "down" } }), false);
     assert.equal(standaloneHost({ connection: null }), false);
-    assert.deepEqual(banner(failing, { now: NOW }), { signIn: null, errors: [`${reason} The data shown is the last saved copy.`], retryAt: null });
-    assert.deepEqual(banner({ ...failing, warming: true }, { now: NOW }).errors, [`${reason} The data shown is the last saved copy.`], "no Reconnecting now either");
-    assert.deepEqual(banner({ ...failing, issues: [] }, { now: NOW }).errors, [reason], "no saved data, no claim about it");
+    assert.equal(standaloneGuide({ connection: { ...standalone, state: "down" } }), null);
+    const guide = { saved: true, prompt: "Open the jira-workbench canvas" };
+    assert.deepEqual(banner(failing, { now: NOW }), { signIn: null, standalone: guide, errors: [], retryAt: null });
+    assert.deepEqual(banner({ ...failing, warming: true }, { now: NOW }).errors, [], "no Reconnecting now either");
+    assert.deepEqual(banner({ ...failing, issues: [] }, { now: NOW }).standalone, { ...guide, saved: false }, "no saved data, no claim about it");
     assert.deepEqual(banner({ ...failing, tree: { warnings: ["Parent cycle"] } }, { now: NOW, unavailable: ["9"] }).errors, [
-        `${reason} The data shown is the last saved copy.`, "Parent cycle",
-        "Execution snapshot references unavailable work items: 9. Refresh the workbench to reconcile the sources.",
+        "Parent cycle", "Execution snapshot references unavailable work items: 9. Refresh the workbench to reconcile the sources.",
     ], "problems in the saved data itself still show");
 });
 
