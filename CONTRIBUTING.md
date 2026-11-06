@@ -289,18 +289,29 @@ as an external plugin in its `plugins/external.json`, pinned by `version`,
 request to Awesome Copilot does, and its maintainers review it after its quality
 gates pass.
 
-After every successful `release` run, the `awesome-copilot-sync` workflow moves
-the pin to the latest release. It syncs the owner's fork of Awesome Copilot,
+After every successful `release` run, the `awesome-copilot-sync` workflow proposes
+moving the pin to the latest release. It syncs the owner's fork of Awesome Copilot,
 changes only those three fields with `.github/scripts/awesome-copilot-listing.mjs`,
 regenerates the marketplace with `npm run build`, and pushes the result to the
 fork's `jira-workbench-sync` branch. It opens a pull request from that branch, or
 updates the one already open, so a newer release replaces an unmerged older one.
-It does nothing when the listing already pins the release. To list a specific
-tag, run it from the Actions tab with that tag.
+It preserves the pull request description and does nothing when the listing
+or an open pull request already pins the release. To list a specific tag, run
+it from the Actions tab with that tag.
 
 The workflow needs the `AWESOME_COPILOT_TOKEN` repository secret: a classic
 personal access token with the `public_repo` scope, from the account that owns
-the fork. Without it the workflow skips with a warning.
+the fork. Create it in [GitHub developer settings](https://github.com/settings/tokens)
+and add it under this repository's Settings, Secrets and variables, Actions.
+The scope covers all public repositories the account can access; it does not
+require write access to Awesome Copilot. Without the secret the sync fails,
+but the release is unaffected. After adding it, run the sync from the Actions
+tab to update the latest release.
+
+The [upstream guide](https://github.com/github/awesome-copilot/blob/main/CONTRIBUTING.md#adding-external-plugins)
+says public contributors should not directly edit `plugins/external.json`, but
+also describes checks on pull requests updating existing entries. Confirm with
+its maintainers that this update route is accepted before enabling the sync.
 
 To update the listing by hand, do what the workflow does. In a fork of
 `github/awesome-copilot`, on a branch from its `main`:

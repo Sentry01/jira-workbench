@@ -7,7 +7,7 @@ name: awesome-copilot-sync
 #
 # Releases made by the release workflow use GITHUB_TOKEN, which does not trigger `release` events, so
 # this runs after that workflow instead. Needs the AWESOME_COPILOT_TOKEN secret: a classic personal
-# access token with the public_repo scope from the owner of the fork. Without it, the run is skipped.
+# access token with the public_repo scope from the owner of the fork. Without it, the sync fails.
 on:
   workflow_run:
     workflows: [release]
@@ -42,11 +42,10 @@ jobs:
           TOKEN: ${{ secrets.AWESOME_COPILOT_TOKEN }}
         run: |
           if [ -z "$TOKEN" ]; then
-            echo "::warning::AWESOME_COPILOT_TOKEN is not set; skipping the Awesome Copilot listing update."
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "::error::AWESOME_COPILOT_TOKEN is not set; cannot update the Awesome Copilot listing."
+            exit 1
           fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.token.outputs.present == 'true'
@@ -116,11 +115,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.AWESOME_COPILOT_TOKEN }}
           NAME: ${{ steps.release.outputs.name }}
-          TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
-          SHA: ${{ steps.release.outputs.sha }}
         run: |
           login="$(gh api user --jq .login)"
+          number="$(gh pr list --repo "$UPSTREAM" --head "$BRANCH" --author "$login" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            git fetch --quiet origin "$BRANCH"
+            diff_status=0
+            git diff --quiet FETCH_HEAD -- plugins/external.json .github/plugin/marketplace.json || diff_status=$?
+            if [ "$diff_status" -eq 0 ]; then
+              echo "Pull request $number already proposes this update."
+              exit 0
+            elif [ "$diff_status" -ne 1 ]; then
+              echo "::error::Could not compare the existing pull request."
+              exit "$diff_status"
+            fi
+          fi
           git config user.name "$login"
           git config user.email "$(gh api user --jq .id)+$login@users.noreply.github.com"
           git add plugins/external.json .github/plugin/marketplace.json
@@ -136,7 +146,7 @@ jobs:
           - [ ] My contribution adds a new instruction, prompt, agent, skill, workflow, or canvas extension file in the correct directory.
           - [x] The file follows the required naming convention.
           - [x] The content is clearly structured and follows the example format.
-          - [x] I have tested my instructions, prompt, agent, skill, workflow, or canvas extension with GitHub Copilot.
+          - [ ] I have tested my instructions, prompt, agent, skill, workflow, or canvas extension with GitHub Copilot.
           - [x] I have run \`npm start\` and verified that \`README.md\` is up to date.
           - [x] I am targeting the \`main\` branch for this pull request.
 
@@ -144,21 +154,33 @@ jobs:
 
           ## Description
 
+          <!-- Briefly describe your contribution and its purpose. Include any relevant context or usage notes. -->
+
           Version update for the already approved \`$NAME\` external plugin, following "Updating listed external plugins via PR" in CONTRIBUTING.md.
 
-          The existing entry in \`plugins/external.json\` now pins \`version\` $VERSION, \`source.ref\` $TAG and \`source.sha\` $SHA (the $TAG tag commit). \`.github/plugin/marketplace.json\` was regenerated with \`npm run build\`, and \`npm run plugin:validate\` passed. No other fields change.
+          The existing entry in \`plugins/external.json\` pins \`version\`, \`source.ref\` and \`source.sha\` to the selected release and its tag commit. \`.github/plugin/marketplace.json\` was regenerated with \`npm run build\`, and \`npm run plugin:validate\` passed. No other fields change.
 
-          Release notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG
+          Release notes: https://github.com/$GITHUB_REPOSITORY/releases
 
           ---
 
           ## Type of Contribution
 
+          - [ ] New instruction file.
+          - [ ] New prompt file.
+          - [ ] New agent file.
+          - [ ] New plugin.
+          - [ ] New skill file.
+          - [ ] New agentic workflow.
+          - [ ] New canvas extension.
           - [x] Update to existing instruction, prompt, agent, plugin, skill, workflow, or canvas extension.
+          - [ ] Other (please specify):
 
           ---
 
           ## Additional Notes
+
+          <!-- Add any additional information or context for reviewers here. -->
 
           Opened by the plugin author's release automation in $GITHUB_REPOSITORY. A newer release updates this pull request in place.
 
@@ -167,9 +189,8 @@ jobs:
           By submitting this pull request, I confirm that my contribution abides by the [Code of Conduct](../CODE_OF_CONDUCT.md) and will be licensed under the MIT License.
           EOF
 
-          number="$(gh pr list --repo "$UPSTREAM" --head "$BRANCH" --author "$login" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$number" ]; then
-            gh pr edit "$number" --repo "$UPSTREAM" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            gh api --method PATCH "repos/$UPSTREAM/pulls/$number" -f "title=$title" --silent
             echo "Updated https://github.com/$UPSTREAM/pull/$number."
           else
             gh pr create --repo "$UPSTREAM" --base main --head "$login:$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md"
