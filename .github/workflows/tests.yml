@@ -114,8 +114,27 @@ jobs:
             exit 1
           fi
 
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime, development, unknown
+          show-openssf-scorecard: false
+
   release-manifests:
     name: Release manifests
+    needs: dependency-review
+    # Keep this required check from being skipped when dependency review fails.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       # Depth 2 keeps the base: a pull request checks out its merge commit, whose first parent is the base branch.
@@ -141,3 +160,9 @@ jobs:
         run: node .github/scripts/check-version-bump.mjs
         env:
           NO_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'no-release') }}
+
+      - name: Require dependency review on pull requests
+        if: github.event_name == 'pull_request' && needs.dependency-review.result != 'success'
+        run: |
+          echo "::error::Dependency review did not pass."
+          exit 1
