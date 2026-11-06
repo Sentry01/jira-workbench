@@ -286,6 +286,40 @@ the Actions tab; a version that is already tagged is skipped. Release tags are p
 once created, they cannot be moved or deleted, so a broken release is fixed by
 publishing a new version.
 
+### Awesome Copilot listing
+
+[Awesome Copilot](https://github.com/github/awesome-copilot) lists Jira Workbench
+as an external plugin in its `plugins/external.json`, pinned by `version`,
+`source.ref` and `source.sha`. A release here does not change that pin; a pull
+request to Awesome Copilot does, and its maintainers review it after its quality
+gates pass.
+
+Listing updates are manual, separate from release CI. Use the repository's
+[`update-awesome-copilot` agent](.github/agents/update-awesome-copilot.agent.md)
+after publishing a release. From this repository in Copilot CLI:
+
+```sh
+copilot --agent update-awesome-copilot
+```
+
+Then ask: "Update the Awesome Copilot listing to the latest published release."
+To choose a release, name its tag instead, such as `v2.4.2`.
+In the Copilot app, ask: "Follow
+`.github/agents/update-awesome-copilot.agent.md` to update the Awesome Copilot
+listing to the latest published release."
+
+The agent verifies the published tag and commit, checks the upstream listing
+and open PRs, changes only the release pin, regenerates and validates the
+marketplace, and opens or updates a fork PR. It stops without changes when the
+listing already matches. Use your existing `gh` login and fork; no Actions
+secret or upstream write access is required.
+
+The full procedure is in the agent file. It follows the
+[upstream guide for existing listing updates](https://github.com/github/awesome-copilot/blob/main/CONTRIBUTING.md#updating-listed-external-plugins-via-pr),
+which is separate from new-plugin intake. Maintainer approval and quality gates
+are still required. The listing changes only when that upstream PR merges;
+the agent does not merge it or set up monitoring.
+
 ## Where things live
 
 ```text
@@ -304,6 +338,7 @@ assets/preview.png           The plugin listing image; docs/screenshots.mjs rege
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version
+.github/agents/              On-demand Copilot procedures, including the Awesome Copilot listing update
 .github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the stack gate and the CCR gate
 .github/workflows/           CI (unit tests, browser harnesses, dependency review, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
