@@ -281,6 +281,41 @@ the Actions tab; a version that is already tagged is skipped. Release tags are p
 once created, they cannot be moved or deleted, so a broken release is fixed by
 publishing a new version.
 
+### Awesome Copilot listing
+
+[Awesome Copilot](https://github.com/github/awesome-copilot) lists Jira Workbench
+as an external plugin in its `plugins/external.json`, pinned by `version`,
+`source.ref` and `source.sha`. A release here does not change that pin; a pull
+request to Awesome Copilot does, and its maintainers review it after its quality
+gates pass.
+
+After every successful `release` run, the `awesome-copilot-sync` workflow moves
+the pin to the latest release. It syncs the owner's fork of Awesome Copilot,
+changes only those three fields with `.github/scripts/awesome-copilot-listing.mjs`,
+regenerates the marketplace with `npm run build`, and pushes the result to the
+fork's `jira-workbench-sync` branch. It opens a pull request from that branch, or
+updates the one already open, so a newer release replaces an unmerged older one.
+It does nothing when the listing already pins the release. To list a specific
+tag, run it from the Actions tab with that tag.
+
+The workflow needs the `AWESOME_COPILOT_TOKEN` repository secret: a classic
+personal access token with the `public_repo` scope, from the account that owns
+the fork. Without it the workflow skips with a warning.
+
+To update the listing by hand, do what the workflow does. In a fork of
+`github/awesome-copilot`, on a branch from its `main`:
+
+```sh
+node <this-repo>/.github/scripts/awesome-copilot-listing.mjs plugins/external.json \
+  jira-workbench Sentry01/jira-workbench <version> "$(gh api repos/Sentry01/jira-workbench/commits/v<version> --jq .sha)"
+npm ci && npm run build && npm run plugin:validate
+```
+
+Commit `plugins/external.json` and `.github/plugin/marketplace.json`, then open a
+pull request against `github/awesome-copilot` `main` using its template. Changes
+to the description or keywords also go through that review; the script does not
+copy them.
+
 ## Where things live
 
 ```text
@@ -299,8 +334,8 @@ assets/preview.png           The plugin listing image; docs/screenshots.mjs rege
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version
-.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the stack gate and the CCR gate
-.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
+.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the Awesome Copilot listing update, the stack gate and the CCR gate
+.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack and CCR gates, the release workflow and the Awesome Copilot sync
 verification/                Browser harnesses and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
