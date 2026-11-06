@@ -72,17 +72,22 @@ CI runs on every pull request and on every push to `main`:
   Chrome. Their screenshots are uploaded as an artifact when one fails.
 - **No private data**: rejects a committed `artifacts/` directory or an absolute
   home path.
+- **Dependency review**: on pull requests, checks newly introduced dependencies
+  in all scopes, including development dependencies, and fails on high or
+  critical vulnerabilities.
 - **Release manifests**: tests the scripts in `.github/scripts/`, then runs
   `check-release.mjs` to check that `plugin.json` and `marketplace.json` name the
   same release. On a pull request it also runs `check-version-bump.mjs`, which
   fails when the shipped canvas changes but the version does not rise (see
-  [Releasing](#releasing)).
+  [Releasing](#releasing)), and fails if dependency review did not pass.
 
-All four are required: a pull request cannot merge until they pass. The branch
-must also be up to date with `main`, so the checks run against the latest
-release; otherwise two pull requests could both raise the version to the same
-number and the second would merge unreleased. Pull requests are squash-merged,
-and the branch is deleted after the merge.
+Unit tests, browser harnesses, no private data and release manifests are
+required: a pull request cannot merge until they pass. Dependency review is
+enforced through the required Release manifests check. The branch must also be
+up to date with `main`, so the checks run against the latest release; otherwise
+two pull requests could both raise the version to the same number and the
+second would merge unreleased. Pull requests are squash-merged, and the branch
+is deleted after the merge.
 
 ### Stacked pull requests
 
@@ -335,7 +340,7 @@ plugin.json                  The plugin manifest (Agent Plugins format); its ver
 .github/plugin/              The marketplace manifest, which pins the released version
 .github/agents/              On-demand Copilot procedures, including the Awesome Copilot listing update
 .github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the stack gate and the CCR gate
-.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
+.github/workflows/           CI (unit tests, browser harnesses, dependency review, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
