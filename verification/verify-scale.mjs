@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { launchBrowser } from "./browser.mjs";
 import { createFixture, issues, seedProject } from "./fixture.mjs";
 
-// UI budgets at 1,000 loaded issues, in both views: the main-thread time a search keystroke costs (the key itself and
+// UI budgets at 1,000 loaded issues, in all three views: the main-thread time a search keystroke costs (the key itself and
 // the debounced render that follows), selecting a row, expanding a parent, ArrowDown, and an unchanged session poll.
 // Each figure is a median after an untimed warm-up. Budgets sit well above what a loaded M-series laptop measures
 // (keystroke under 130 ms, select 20 to 400 ms, expand 90 to 160 ms, poll under 200 ms), so a slower CI runner
@@ -61,9 +61,9 @@ const results = {};
 try {
     await page.goto(server.url);
     await page.waitForFunction(() => document.querySelectorAll("#tree [data-node-id]").length >= 900, null, { timeout: 60_000 });
-    for (const view of ["execution", "hierarchy"]) {
+    for (const view of ["execution", "hierarchy", "kanban"]) {
         await page.locator(`#view-${view}`).click();
-        await page.waitForFunction(view => document.getElementById("tree").getAttribute("role") === (view === "hierarchy" ? "tree" : "list"), view);
+        await page.waitForFunction(view => document.getElementById("tree").dataset.view === view && document.querySelectorAll("#tree [data-node-id]").length >= 900, view);
         for (const query of ["p", ""]) await cost("type", query);
         // The first actions after a 1,000-row load pay for JIT warm-up and collecting the load's garbage.
         await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1500)));
@@ -96,12 +96,15 @@ try {
         const select = [];
         for (const id of ids) select.push(await cost("select", id));
         results[`${view} select`] = median(select);
-        // Rows added to the list by one more selection: the old and the new selected row, nothing else.
+        // Rows added to the list by one more selection: the old and the new selected row, nothing else. Kanban cards sit
+        // inside their columns, so rows are counted wherever they are added.
         const replaced = await page.evaluate(async id => {
             const tree = document.getElementById("tree");
             let added = 0;
-            const observer = new MutationObserver(list => { for (const record of list) added += record.addedNodes.length; });
-            observer.observe(tree, { childList: true });
+            const observer = new MutationObserver(list => {
+                for (const record of list) for (const node of record.addedNodes) if (node.dataset?.nodeId) added++;
+            });
+            observer.observe(tree, { childList: true, subtree: true });
             document.querySelector(`#tree [data-node-id="${id}"]`).click();
             await new Promise(resolve => setTimeout(resolve, 100));
             observer.disconnect();
@@ -148,7 +151,7 @@ try {
         assert.ok(ms <= budget, `${name}: ${ms.toFixed(0)} ms over the ${budget} ms budget at 1,000 issues`);
     }
     assert.deepEqual(errors, []);
-    console.log("PASS: 1,000 loaded issues in both views; a search keystroke, row selection, expand, ArrowDown and an unchanged session poll stay within their main-thread budgets; a typing burst renders the tree once, a selection replaces only its two rows, and a collapse rebuilds only the toggled row. All services were synthetic; no Jira writes.");
+    console.log("PASS: 1,000 loaded issues in all three views; a search keystroke, row selection, expand, ArrowDown and an unchanged session poll stay within their main-thread budgets; a typing burst renders the tree once, a selection replaces only its two rows, and a collapse rebuilds only the toggled row. All services were synthetic; no Jira writes.");
 } finally {
     await page.close();
     await browser.close();

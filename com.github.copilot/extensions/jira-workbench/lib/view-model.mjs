@@ -1,10 +1,14 @@
 // Pure view-model helpers for the panel: every input is explicit, with no DOM and no node: imports.
 // The server serves this file as /view-model.mjs next to /model.mjs, which it imports.
-import { REQUEST_TTL_MS, CLAIM_TTL_MS, jiraFreshness, requestStatus, issueIndex, issueParent } from "./model.mjs";
+import { REQUEST_TTL_MS, CLAIM_TTL_MS, jiraFreshness, requestStatus, issueIndex, issueParent, projectStatuses } from "./model.mjs";
 
 const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
 
 export const humanize = value => String(value || "unknown").replace(/[_-]/g, " ");
+
+// The panel's work views. A project with no saved choice, or an unknown one, opens in the hierarchy.
+export const WORK_VIEWS = ["hierarchy", "execution", "kanban"];
+export const workView = value => WORK_VIEWS.includes(value) ? value : "hierarchy";
 
 // Why a loaded row is not ordinary scope work; shown as a badge and in the row's accessible name.
 export function scopeLabel(item) {
@@ -226,6 +230,31 @@ export function filterTree(roots, query = "", category = "all", sprint = "all") 
         const children = filterTree(node.children, query, category, sprint);
         return matches(node.issue, query, category, sprint) || children.length ? [{ ...node, children }] : [];
     });
+}
+
+// The Kanban board: one column per workflow status in category order (To do, In progress, Done, then any other), each
+// holding the loaded work items in that status that pass the shared filters, in working-set order. Parents and
+// context-only ancestors stay in the hierarchy. A status seen only on loaded work (another project in a JQL scope) gets
+// its own column. Every column shows while the status filter is "all", empty or not, as on a Jira board; a status
+// filter keeps the columns it selects plus any that still hold matching work.
+export function kanbanBoard(issues = [], statuses = [], { query = "", category = "all", sprint = "all" } = {}) {
+    const work = issues.filter(item => !item.contextOnly && item.level <= 0);
+    const columns = new Map(projectStatuses(statuses, work).map(status => [status.name, { ...status, items: [] }]));
+    for (const item of work) if (matches(item, query, category, sprint)) columns.get(item.status)?.items.push(item);
+    const selected = column => category === "all"
+        || (category.startsWith("status:") ? column.name === category.slice(7) : column.category === category);
+    return [...columns.values()].filter(column => selected(column) || column.items.length);
+}
+
+// What a work view with no rows says instead.
+export function emptyWorkMessage(view, { issues = [], executions = [] } = {}) {
+    if (view === "execution" && !executions.length)
+        return "No execution entries reported for this project. Refresh live state, or inspect and start project work from the header.";
+    if (!issues.length) return "No visible issues in this project.";
+    if (view !== "kanban") return "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters.";
+    return issues.some(item => !item.contextOnly && item.level <= 0)
+        ? "No matching work on the board. Clear the search, Jira status and sprint filters."
+        : "No loaded work items for the board. Epics and other parents are in Hierarchy.";
 }
 
 // The hierarchy's visible rows in display order: depth, parent, position among siblings and expansion. A collapsed

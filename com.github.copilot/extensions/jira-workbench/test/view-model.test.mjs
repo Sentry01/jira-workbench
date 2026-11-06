@@ -6,7 +6,7 @@ import {
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor,
-    flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_AFTER, SERVER_LOST_MESSAGE,
+    flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_AFTER, SERVER_LOST_MESSAGE, WORK_VIEWS, workView, kanbanBoard, emptyWorkMessage,
 } from "../lib/view-model.mjs";
 import { issues as fixtureIssues } from "../../../../verification/fixture.mjs";
 
@@ -73,6 +73,53 @@ test("a saved sprint the project no longer offers applies as all, and applies ag
     assert.equal(appliedSprint([], "sprint:12"), "all", "no sprint data: no sprint filter");
     assert.equal(appliedSprint(offered, "all"), "all");
     assert.equal(appliedSprint(), "all");
+});
+
+test("a project opens in the hierarchy unless it saved another known view", () => {
+    assert.deepEqual(WORK_VIEWS, ["hierarchy", "execution", "kanban"]);
+    assert.equal(workView(), "hierarchy");
+    assert.equal(workView("execution"), "execution");
+    assert.equal(workView("kanban"), "kanban");
+    assert.equal(workView("invented"), "hierarchy");
+});
+
+test("the Kanban board has one column per workflow status in category order, holding loaded work items only", () => {
+    const workflow = [{ name: "Done", category: "done" }, { name: "PR Waiting", category: "indeterminate" }, { name: "To Do", category: "new" }];
+    const context = { ...rows[3], id: "missing:DEMO-9", key: "DEMO-9", contextOnly: true };
+    const board = kanbanBoard([...rows, context], workflow);
+    // "Accepted" is not in the workflow, but loaded work is in it (another project in a JQL scope), so it gets a column.
+    assert.deepEqual(board.map(column => [column.name, column.category]),
+        [["To Do", "new"], ["PR Waiting", "indeterminate"], ["Done", "done"], ["Accepted", "done"]]);
+    assert.deepEqual(board.map(column => column.items.map(item => item.key)), [["DEMO-2", "DEMO-4", "DEMO-5"], [], [], ["DEMO-3"]],
+        "the epic and the context-only ancestor stay out; empty workflow columns still show");
+    assert.deepEqual(kanbanBoard([...rows].reverse(), workflow)[0].items.map(item => item.key), ["DEMO-5", "DEMO-4", "DEMO-2"], "working-set order");
+    assert.deepEqual(kanbanBoard([], []), []);
+    assert.deepEqual(kanbanBoard([rows[0]], []), [], "a board of parents only has no columns");
+});
+
+test("Kanban filters share the search and sprint rules; a status filter keeps only the columns it selects", () => {
+    const workflow = [{ name: "To Do", category: "new" }, { name: "PR Waiting", category: "indeterminate" }, { name: "Done", category: "done" }];
+    const cards = options => kanbanBoard(rows, workflow, options).map(column => [column.name, column.items.map(item => item.key)]);
+    assert.deepEqual(cards({ query: "ada" }), [["To Do", ["DEMO-2"]], ["PR Waiting", []], ["Done", []], ["Accepted", []]]);
+    assert.deepEqual(cards({ category: "indeterminate" }), [["PR Waiting", []]]);
+    assert.deepEqual(cards({ category: "done" }), [["Done", []], ["Accepted", ["DEMO-3"]]]);
+    assert.deepEqual(cards({ category: "status:Accepted" }), [["Accepted", ["DEMO-3"]]]);
+    assert.deepEqual(cards({ category: "status:Retired" }), [], "a saved status the project no longer lists");
+    const sprinted = rows.map((row, index) => ({ ...row, sprints: index === 3 ? [{ id: "12", name: "Sprint 12" }] : [] }));
+    assert.deepEqual(kanbanBoard(sprinted, workflow, { sprint: "sprint:12" })[0].items.map(item => item.key), ["DEMO-4"]);
+    // A status whose loaded work reports another category than the workflow lists keeps the column for its matching work.
+    const moved = [{ ...rows[3], status: "Done", category: "new" }];
+    assert.deepEqual(kanbanBoard(moved, workflow, { category: "new" }).map(column => [column.name, column.items.length]), [["To Do", 0], ["Done", 1]]);
+});
+
+test("an empty work view says why it is empty", () => {
+    const work = { issues: rows, executions: [{ nodeId: "2" }] };
+    assert.match(emptyWorkMessage("execution", { issues: rows, executions: [] }), /^No execution entries reported/);
+    assert.match(emptyWorkMessage("execution", work), /Choose All work/);
+    assert.match(emptyWorkMessage("hierarchy", work), /^No matching work in this view/);
+    assert.equal(emptyWorkMessage("kanban", work), "No matching work on the board. Clear the search, Jira status and sprint filters.");
+    assert.equal(emptyWorkMessage("kanban", { issues: [rows[0]] }), "No loaded work items for the board. Epics and other parents are in Hierarchy.");
+    for (const view of WORK_VIEWS) assert.equal(emptyWorkMessage(view, { executions: [{ nodeId: "2" }] }), "No visible issues in this project.");
 });
 
 test("an unfiltered tree keeps every node and child", () => {

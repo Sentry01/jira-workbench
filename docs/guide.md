@@ -158,7 +158,8 @@ the first page of the applied scope.
 Work you already started is never hidden by the scope. Issues in the selected
 project with a linked session or pull request, or a queued, expired or failed
 launch request, are read by ID on every first-page read (up to 300) and stay in
-**Execution** and **Hierarchy**. They are labeled **Linked, outside scope** and
+**Execution** and **Hierarchy**, and on the **Kanban** board when they are work
+items. They are labeled **Linked, outside scope** and
 are not counted as scope matches. Linked issues that are missing, restricted or
 over the limit are reported in the warning banner. If that read fails, linked
 items already shown stay, labeled **Linked, not re-read from Jira**; they ask for
@@ -214,7 +215,8 @@ queued.
 ## 4. The daily loop
 
 Most of your time is spent in the **Execution** view. It shows what to pick up
-next.
+next. A project opens in **Hierarchy** until you choose another view; after
+that, the canvas reopens the project in the view you last used.
 
 ![The execution queue](images/02-execution.png)
 
@@ -247,7 +249,8 @@ Keep two points in mind:
 - The list is a single Tab stop. The Up and Down arrow keys, Home and End move
   between rows, and Tab moves into the focused row's own controls. In
   **Hierarchy**, Right expands a row or moves to its first child, and Left
-  collapses it or moves to its parent.
+  collapses it or moves to its parent. On the **Kanban** board, Up and Down move
+  within a column, and Left and Right move to the nearest column that has cards.
 - **Skip to details** appears when you Tab past the filters. It moves focus
   past the list to the selected item's details.
 - After you start an action, focus stays on its control, which shows as
@@ -399,11 +402,12 @@ that warning acknowledged. The session can read the full issues in Jira.
 ## 6. See the whole structure
 
 Switch to **Hierarchy** to see epics, stories and subtasks by Jira parent link.
+This is the view a project opens in.
 
 ![The hierarchy view with an item selected](images/04-hierarchy.png)
 
 - Search (by key, title, assignee or parent key), the status filter and the
-  sprint filter apply to both views. Searching for a parent's key also finds its
+  sprint filter apply to every view. Searching for a parent's key also finds its
   children.
 - The status filter lists the selected project's own workflow statuses, grouped
   by category, so custom steps such as "PR Waiting" can be filtered on even
@@ -415,6 +419,28 @@ Switch to **Hierarchy** to see epics, stories and subtasks by Jira parent link.
 - Parent progress counts descendant work items, not story points.
 - Your selection, filters, expanded rows and scroll position are saved per
   project.
+
+### Kanban board
+
+Switch to **Kanban** to see the loaded work items as cards, in one column per
+Jira workflow status: To do statuses first, then In progress, then Done.
+
+![The Kanban board, with one column per workflow status](images/04b-kanban.png)
+
+- The columns are the selected project's own workflow statuses, so a custom
+  step such as "PR Waiting" has a column even while no issue is in it. A status
+  seen only on loaded work, for example from another project in a JQL scope,
+  gets a column too.
+- Cards are work items: stories, tasks, bugs and subtasks, in working-set
+  order. Epics and other parents stay in **Hierarchy**.
+- A card shows the assignee, the parent, and the state of linked sessions and
+  pull requests. Select a card to open its details.
+- The board is read-only. Moving a card would change its Jira status, which the
+  canvas never does. Status changes come from the sessions you launch and from
+  **Update Jira**.
+- Search and the sprint filter hide cards. Choosing a status or a category in the
+  status filter also hides the other columns.
+- When the columns do not fit, the board scrolls sideways.
 
 ---
 

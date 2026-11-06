@@ -4,7 +4,7 @@ import {
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
     retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor as indexedExecution,
-    flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_MESSAGE,
+    flattenTree, timeLabel, serverLost, pollDelayMs, SERVER_LOST_MESSAGE, WORK_VIEWS, workView, kanbanBoard, emptyWorkMessage,
 } from "/view-model.mjs";
 
 const $ = id => document.getElementById(id);
@@ -15,7 +15,7 @@ const jiraMark = className => {
 };
 const token = location.hash.slice(1);
 const filters = [["needs-me", "Needs me"], ["running", "Running"], ["prs", "PRs to review"], ["available", "Available to start"], ["all", "All work"]];
-const defaults = () => ({ view: "execution", executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", sprint: "all", scrollTop: 0, detailsOpen: false });
+const defaults = () => ({ view: workView(), executionFilter: "all", selected: null, collapsed: [], query: "", category: "all", sprint: "all", scrollTop: 0, detailsOpen: false });
 let state = { sites: [], projects: [], appProjects: [], issues: [], links: {}, requests: [], executions: [], navigationReceipts: [], tree: { roots: [], warnings: [] }, catalogErrors: [] };
 // Indexes rebuilt once per snapshot: issues by ID, executions by node, and (on first use) children by parent.
 let itemsById = new Map(), itemsSource = null, issueChildren = null, executionsById = new Map();
@@ -224,7 +224,7 @@ function connectionMessage(key, message) {
 }
 function normalizePreferences(value = {}) {
     return {
-        view: value.view === "hierarchy" ? "hierarchy" : "execution",
+        view: workView(value.view),
         executionFilter: filters.some(([id]) => id === value.executionFilter) ? value.executionFilter : "all",
         selected: typeof value.selected === "string" ? value.selected : null,
         collapsed: Array.isArray(value.collapsed) ? value.collapsed.filter(id => typeof id === "string") : [],
@@ -681,8 +681,7 @@ function render({ force = false } = {}) {
     renderProgress(work, unverified);
     setData($("workbench"), "detailsOpen", String(ui.detailsOpen));
     $("show-details").disabled = !getItem(ui.selected);
-    setAttr($("view-execution"), "aria-pressed", String(ui.view === "execution"));
-    setAttr($("view-hierarchy"), "aria-pressed", String(ui.view === "hierarchy"));
+    for (const view of WORK_VIEWS) setAttr($(`view-${view}`), "aria-pressed", String(ui.view === view));
     setHidden($("execution-filters"), ui.view !== "execution");
     setHidden($("hierarchy-header"), ui.view !== "hierarchy");
     setHidden($("expand"), ui.view !== "hierarchy");
@@ -849,6 +848,9 @@ function refreshSourceButton(label, source = "all", nodeId) {
 // keeps the others (and the focus inside them) in place, so selecting, expanding, filtering or a poll touches only the
 // rows it changes. Rows a filter hides stay cached for the current view until their issue leaves the working set.
 let treeRows = [], rowCache = new Map(), visibleRows = new Map(), tabStopRow = null, rowView = null, rowIssues = null;
+// The Kanban columns on screen by status name, kept like rows so the cards and the focus inside them stay in place.
+let boardColumns = new Map(), boardColumnIds = 0;
+const VIEW_ROLES = { hierarchy: ["tree", "Jira work hierarchy"], execution: ["list", "Daily execution queue"], kanban: ["group", "Kanban board by Jira status"] };
 const itemDigests = new WeakMap();
 const itemDigest = item => {
     if (!itemDigests.has(item)) itemDigests.set(item, JSON.stringify(item));
@@ -857,7 +859,7 @@ const itemDigest = item => {
 function renderTree(force = false) {
     const container = $("tree");
     // The revision stands for the working set and its tree; links leave out stamps that rows never show.
-    const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issuesRevision ?? state.issues, state.executions, linksDigest(state.links), state.requests, requestStatuses(state.requests), state.mapping, selecting, scopeConfirmed]);
+    const signature = JSON.stringify([ui.view, ui.executionFilter, ui.query, ui.category, sprintFilter(), ui.selected, [...collapsed], state.issuesRevision ?? state.issues, state.statuses, state.executions, linksDigest(state.links), state.requests, requestStatuses(state.requests), state.mapping, selecting, scopeConfirmed]);
     if (!force && signature === treeDigest) return;
     const focus = captureFocus(container), hadFocus = container.contains(document.activeElement);
     // Control keys repeat across rows (the same refresh action, or one session or PR linked to two issues), so focus is
@@ -866,19 +868,21 @@ function renderTree(force = false) {
     // The order the user saw, so a focused row that leaves the list hands focus to its nearest neighbour.
     const shownOrder = focusedRowId === undefined ? [] : treeRows.map(row => row.dataset.nodeId);
     // A cleared digest means the scope or working set was replaced: build every row afresh.
-    if (!treeDigest || rowView !== ui.view) rowCache = new Map();
+    if (!treeDigest || rowView !== ui.view) { rowCache = new Map(); boardColumns = new Map(); }
     else if (rowIssues !== state.issues) for (const id of rowCache.keys()) if (!itemsById.has(id)) rowCache.delete(id);
     rowView = ui.view;
     rowIssues = state.issues;
     treeDigest = signature;
-    container.setAttribute("role", ui.view === "hierarchy" ? "tree" : "list");
-    container.setAttribute("aria-label", ui.view === "hierarchy" ? "Jira work hierarchy" : "Daily execution queue");
+    container.setAttribute("role", VIEW_ROLES[ui.view][0]);
+    container.setAttribute("aria-label", VIEW_ROLES[ui.view][1]);
+    setData(container, "view", ui.view);
     if (!state.project) {
         const empty = el("div", null, "empty");
         empty.append(el("h3", "Choose a Jira project"), el("p", "All epics, issues and subtasks. No active sprint required."));
         container.replaceChildren(empty);
         treeRows = [];
         rowCache = new Map();
+        boardColumns = new Map();
         visibleRows = new Map();
         tabStopRow = null;
         $("work-count").textContent = "No project loaded";
@@ -891,6 +895,7 @@ function renderTree(force = false) {
         const primary = executionFor(id).primary;
         return [nodeLaunch(id), Boolean(state.mapping), primary?.kind === "clear_request" && armedClears.has(actionKey("clear-request", primary.requestId))];
     };
+    let board = null;
     if (ui.view === "execution") {
         const sprint = sprintFilter();
         const queue = executionItems().filter(({ item, execution }) => matches(item, ui.query, ui.category, sprint) && (ui.executionFilter === "all" || execution.views.includes(ui.executionFilter)));
@@ -902,6 +907,12 @@ function renderTree(force = false) {
                 build: () => executionRow(item, execution, trace),
             });
         }
+    } else if (ui.view === "kanban") {
+        board = kanbanBoard(state.issues, state.statuses, { query: ui.query, category: ui.category, sprint: sprintFilter() });
+        for (const column of board) for (const item of column.items) entries.push({
+            item, column: column.name, digest: JSON.stringify(["kanban", ui.selected === item.id, launchSummary(item.id)]) + linksDigest(nodeLinks(item.id)),
+            build: () => kanbanCard(item),
+        });
     } else {
         const roots = filterTree(state.tree.roots, ui.query, ui.category, sprintFilter());
         const childSessions = descendantSessionCounts(state.issues, id => nodeLinks(id).sessions.map(session => session.id));
@@ -916,7 +927,8 @@ function renderTree(force = false) {
         }
     }
     const visible = new Map(), rows = [];
-    for (const { item, digest, build } of entries) {
+    for (const entry of entries) {
+        const { item, digest, build } = entry;
         const shown = `${itemDigest(item)}${digest}`, cached = rowCache.get(item.id);
         let row = cached?.shown === shown && !visible.has(item.id) && clearStateCurrent(cached.row) ? cached.row : null;
         if (!row) {
@@ -926,27 +938,14 @@ function renderTree(force = false) {
             if (!visible.has(item.id)) rowCache.set(item.id, { row, shown });
         }
         if (!visible.has(item.id)) visible.set(item.id, row);
+        entry.row = row;
         rows.push(row);
     }
-    const kept = new Set(rows), reused = rows.some(row => row.parentNode === container);
-    if (!reused) {
-        const fragment = document.createDocumentFragment();
-        for (const row of rows) fragment.append(row);
-        container.replaceChildren(fragment);
-    } else {
-        // Remove what goes first, so the rows that stay are never moved past each other; then insert the new ones.
-        for (const child of [...container.children]) if (!kept.has(child)) child.remove();
-        let cursor = container.firstElementChild;
-        for (const row of rows) {
-            if (row === cursor) cursor = cursor.nextElementSibling;
-            else container.insertBefore(row, cursor);
-        }
-    }
+    // The board keeps its workflow columns with no matching cards; the empty notice then sits above them.
+    const reused = board ? placeBoard(container, board, entries) : placeChildren(container, rows);
     treeRows = rows;
     visibleRows = visible;
-    if (!rows.length) container.append(el("div", ui.view === "execution" && !state.executions.length
-        ? "No execution entries reported for this project. Refresh live state, or inspect and start project work from the header."
-        : state.issues.length ? "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters." : "No visible issues in this project.", "empty"));
+    if (!rows.length) container.prepend(el("div", emptyWorkMessage(ui.view, state), "empty"));
     if (!visibleRows.has(focusedNode)) focusedNode = visibleRows.has(ui.selected) ? ui.selected : rows[0]?.dataset.nodeId;
     setTabStop(focusedNode);
     setText($("work-count"), `${rows.length} visible loaded item${rows.length === 1 ? "" : "s"}`);
@@ -972,6 +971,77 @@ function renderTree(force = false) {
         const restored = container.contains(document.activeElement) ? document.activeElement.closest("[data-node-id]") || document.activeElement : null;
         restored?.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
+}
+// Puts `children` into `parent` in order. Those already there stay put, so the focus inside them survives: what goes is
+// removed first, so the ones that stay are never moved past each other, then the new ones are inserted. Returns whether
+// any child was already there.
+function placeChildren(parent, children) {
+    const kept = new Set(children), reused = children.some(child => child.parentNode === parent);
+    if (!reused) {
+        const fragment = document.createDocumentFragment();
+        for (const child of children) fragment.append(child);
+        parent.replaceChildren(fragment);
+        return false;
+    }
+    for (const child of [...parent.children]) if (!kept.has(child)) child.remove();
+    let cursor = parent.firstElementChild;
+    for (const child of children) {
+        if (child === cursor) cursor = cursor.nextElementSibling;
+        else parent.insertBefore(child, cursor);
+    }
+    return true;
+}
+// Puts each card in its status column and the columns on the board, keeping the columns and cards already on screen.
+function placeBoard(container, board, entries) {
+    const cards = new Map(board.map(status => [status.name, []]));
+    for (const entry of entries) cards.get(entry.column).push(entry.row);
+    const columns = board.map(status => {
+        let column = boardColumns.get(status.name);
+        if (column?.category !== status.category) boardColumns.set(status.name, column = boardColumn(status));
+        const own = cards.get(status.name);
+        setText(column.count, String(own.length));
+        placeChildren(column.list, own);
+        return column.element;
+    });
+    for (const name of boardColumns.keys()) if (!cards.has(name)) boardColumns.delete(name);
+    // An explicit column count, so an empty-board notice can span the board in a row of its own.
+    const count = String(Math.max(columns.length, 1));
+    if (container.style.getPropertyValue("--columns") !== count) container.style.setProperty("--columns", count);
+    return placeChildren(container, columns);
+}
+function boardColumn({ name, category }) {
+    const element = el("div", null, "kanban-column"), heading = el("h3", null, "kanban-heading");
+    element.dataset.category = category;
+    heading.id = `kanban-column-${++boardColumnIds}`;
+    const count = el("span", "0", "kanban-count");
+    heading.append(el("span", name, "kanban-name"), count);
+    const list = el("div", null, "kanban-list");
+    list.setAttribute("role", "list");
+    list.setAttribute("aria-labelledby", heading.id);
+    element.append(heading, list);
+    return { element, list, count, category };
+}
+// The card at the same position in the nearest column that has cards, to the left (-1) or right (1).
+function boardNeighbour(card, step) {
+    const lists = [...$("tree").querySelectorAll(".kanban-list")], at = [...card.parentElement.children].indexOf(card);
+    for (let index = lists.indexOf(card.parentElement) + step; index >= 0 && index < lists.length; index += step) {
+        const cards = lists[index].children;
+        if (cards.length) return cards[Math.min(at, cards.length - 1)];
+    }
+    return null;
+}
+function kanbanCard(item) {
+    const card = createRow(item, 0);
+    card.classList.add("kanban-card");
+    const details = el("div", null, "kanban-details");
+    details.append(el("span", item.assignee || "Unassigned"));
+    if (item.parentKey) details.append(el("span", `In ${item.parentKey}`));
+    const observed = el("div", null, "observed-state");
+    appendCompactObserved(observed, item.id, { quiet: true });
+    card.append(itemName(item, null, true), details);
+    if (observed.childElementCount) card.append(observed);
+    card.append(feedbackFor(item.id));
+    return card;
 }
 function executionRow(item, execution, trace) {
     const row = createRow(item, 0);
@@ -1049,7 +1119,7 @@ function itemName(item, node, compact = false) {
     if (node?.total) title.append(el("small", `${node.done}/${node.total} loaded descendant items Jira done`));
     return title;
 }
-function appendCompactObserved(container, nodeId) {
+function appendCompactObserved(container, nodeId, { quiet = false } = {}) {
     const trace = nodeLinks(nodeId), launch = nodeLaunch(nodeId);
     if (launchBlocks(launch)) container.append(badge(launchLabel(launch), "session"));
     else if (trace.sessions.length) container.append(badge(sessionsBadge(trace.sessions), "session"));
@@ -1058,7 +1128,7 @@ function appendCompactObserved(container, nodeId) {
         container.append(badge(trace.prs.length > 1 ? `${trace.prs.length} PRs` :
             `#${pr.number} ${pr.stale ? "stale" : pr.isDraft ? "draft" : humanize(pr.state)}`, pr.state === "MERGED" ? "merged" : "pr"));
     }
-    if (!trace.sessions.length && !trace.prs.length && !launchBlocks(launch)) container.append(badge("No linked activity"));
+    if (!quiet && !trace.sessions.length && !trace.prs.length && !launchBlocks(launch)) container.append(badge("No linked activity"));
 }
 function appendObserved(container, nodeId, execution = executionFor(nodeId)) {
     const traces = nodeLinks(nodeId), launch = nodeLaunch(nodeId);
@@ -1115,6 +1185,12 @@ function createRow(item, depth, parentId = "", hasChildren = false) {
             const next = event.key === "Home" ? treeRows[0] : event.key === "End" ? treeRows.at(-1)
                 : event.key === "ArrowDown" ? row.nextElementSibling : row.previousElementSibling;
             if (next?.dataset.nodeId) rowTarget(next).focus();
+        }
+        if (ui.view === "kanban" && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+            event.preventDefault();
+            const next = boardNeighbour(row, event.key === "ArrowRight" ? 1 : -1);
+            if (next) rowTarget(next).focus();
+            return;
         }
         if (ui.view !== "hierarchy" || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
         event.preventDefault();
@@ -1633,7 +1709,7 @@ $("search").addEventListener("input", () => {
 $("status-filter").addEventListener("change", () => { ui.category = $("status-filter").value; savePreferences("category"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("sprint-filter").addEventListener("change", () => { ui.sprint = $("sprint-filter").value || "all"; savePreferences("sprint"); renderExecutionFilters(); renderTree(true); paintFeedback(); });
 $("expand").addEventListener("click", () => { collapsed.clear(); savePreferences("collapsed"); renderTree(true); paintFeedback(); });
-for (const view of ["execution", "hierarchy"]) $(`view-${view}`).addEventListener("click", () => {
+for (const view of WORK_VIEWS) $(`view-${view}`).addEventListener("click", () => {
     ui.view = view;
     savePreferences("view");
     render({ force: true });

@@ -573,7 +573,7 @@ export class Workbench {
         if (scope !== this.selectedScope()) throw new Error("The project scope changed; preferences were not saved.");
         if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) throw new Error("Preferences must be an object.");
         const allowed = {
-            view: v => ["execution", "hierarchy"].includes(v),
+            view: v => ["execution", "hierarchy", "kanban"].includes(v),
             executionFilter: v => ["all", "needs-me", "running", "prs", "available"].includes(v),
             selected: v => v === null || typeof v === "string" && v.length <= 100,
             collapsed: v => Array.isArray(v) && v.length <= 10000 && v.every(id => typeof id === "string" && id.length <= 100),

@@ -114,6 +114,8 @@ test("project-scoped preferences survive reopening and reject stale-project writ
     assert.equal((await other.snapshot()).preferences.sprint, "sprint:12");
     await assert.rejects(workbench.savePreferences({ scope: "other/42/project", preferences: { selected: "2" } }), /project|scope/i);
     await assert.rejects(workbench.savePreferences({ scope, preferences: { view: "invented" } }), /view/i);
+    await workbench.savePreferences({ scope, preferences: { view: "kanban" } });
+    assert.equal((await workbench.snapshot()).preferences.view, "kanban");
     await assert.rejects(workbench.savePreferences({ scope, preferences: { sprint: "other-value" } }), /sprint/i);
 });
 

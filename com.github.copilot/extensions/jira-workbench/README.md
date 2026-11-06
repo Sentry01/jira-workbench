@@ -39,9 +39,11 @@ condensed version.
 2. Ask Copilot to open the `jira-workbench` canvas with an empty input object.
 3. Pick a Jira site and project, then select its Copilot repository independently.
    A Jira project ID is **not** a Copilot project ID.
-4. Use **Execution** for the next useful action, or **Hierarchy** for project
-   structure. Apply a project, JQL or saved-filter scope and page through its
-   work explicitly, whether or not it is in a sprint.
+4. A project opens in **Hierarchy** for its structure. Use **Execution** for the
+   next useful action, or **Kanban** for work items by Jira workflow status. The
+   board is read-only like the rest of the canvas. Apply a project, JQL or
+   saved-filter scope and page through its work explicitly, whether or not it is
+   in a sprint.
 5. Select an item to inspect requirements, dependencies, and trace links.
    Select the project title to inspect project-level coordination sessions.
 6. Use a preparation action to review scope, repository, objective, acceptance
@@ -87,7 +89,8 @@ Every first-page read (select, Apply, Refresh) also reads tracked work by ID:
 issues in the selected project with a durable session or PR link, or a queued,
 expired or failed launch request, that the page did not return. The lookup is
 project-constrained, read-only and capped at 300 IDs, pending requests first.
-Tracked issues are actionable work in the execution queue and hierarchy,
+Tracked issues are actionable work in the execution queue and hierarchy, and
+cards on the Kanban board when they are work items,
 labeled **Linked, outside scope**, and excluded from scope counts; a later page
 that returns one promotes it to a scope item. Lookup failures, unavailable
 identities and the limit are reported as warnings, never as an empty queue.

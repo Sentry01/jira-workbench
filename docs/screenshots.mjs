@@ -6,7 +6,7 @@
 // Requires playwright-core and a Chromium-based browser (see verification/README.md).
 
 import { launchBrowser, search } from "../verification/browser.mjs";
-import { createFixture, seedProject } from "../verification/fixture.mjs";
+import { createFixture, seedProject, issues } from "../verification/fixture.mjs";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,6 +44,7 @@ try {
     await seedProject(workbench);
     await page.reload();
     await titleIs("Daily execution demo");
+    await page.getByRole("button", { name: "Execution", exact: true }).click();
     await page.waitForFunction(() => document.body.innerText.includes("Answer question"));
     await dismissNotices();
     await shot("02-execution.png");
@@ -90,6 +91,23 @@ try {
     await page.screenshot({ path: join(images, "05b-trace-chain.png"), clip: chain });
     captured.push("05b-trace-chain.png");
     await page.setViewportSize({ width: 1440, height: 1080 });
+
+    // The Kanban board, with a few demo items moved along the workflow so that each kind of column shows.
+    const inColumn = (id, name) => page.waitForFunction(([nodeId, column]) => document.querySelector(`#tree [data-node-id="${nodeId}"]`)
+        ?.closest(".kanban-column")?.querySelector(".kanban-name").textContent === column, [id, name]);
+    const moved = [["3", "PR Waiting", "indeterminate"], ["4", "Done", "done"], ["7", "In Progress", "indeterminate"]].map(([id, status, category]) => {
+        const item = issues.find(each => each.id === id), original = { status: item.status, category: item.category };
+        Object.assign(item, { status, category });
+        return [item, original];
+    });
+    await workbench.refresh({ fresh: true });
+    await page.getByRole("button", { name: "Kanban", exact: true }).click();
+    await inColumn("4", "Done");
+    await dismissNotices();
+    await shot("04b-kanban.png");
+    for (const [item, original] of moved) Object.assign(item, original);
+    await workbench.refresh({ fresh: true });
+    await inColumn("4", "To Do");
 
     await page.setViewportSize({ width: 620, height: 900 });
     const back = page.getByRole("button", { name: /Back to work/i });

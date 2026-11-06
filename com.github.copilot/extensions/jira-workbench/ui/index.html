@@ -45,15 +45,15 @@
         <button id="load-more" hidden>Load more</button>
       </section>
       <div class="view-toolbar">
-        <div class="view-switch" role="group" aria-label="Work view"><button id="view-execution" aria-pressed="true">Execution</button><button id="view-hierarchy" aria-pressed="false">Hierarchy</button></div>
-        <div id="execution-filters" class="execution-filters" role="group" aria-label="Execution filter"></div>
+        <div class="view-switch" role="group" aria-label="Work view"><button id="view-execution" aria-pressed="false">Execution</button><button id="view-hierarchy" aria-pressed="true">Hierarchy</button><button id="view-kanban" aria-pressed="false">Kanban</button></div>
+        <div id="execution-filters" class="execution-filters" role="group" aria-label="Execution filter" hidden></div>
         <button id="show-details" disabled>Show details</button>
       </div>
       <div class="filters"><input id="search" type="search" placeholder="Search loaded items" aria-label="Search loaded items"><select id="status-filter" aria-label="Filter Jira status"><option value="all">All Jira statuses</option><option value="new">To do</option><option value="indeterminate">In progress</option><option value="done">Done</option></select><select id="sprint-filter" aria-label="Filter sprint" hidden><option value="">All sprints</option></select><button id="expand" hidden>Expand loaded</button></div>
       <button id="skip-to-details" class="skip-link" type="button">Skip to details</button>
       <div id="work-scroll">
         <div id="hierarchy-header" class="tree-header" aria-hidden="true" hidden><span>Work hierarchy</span><span>Jira</span><span>Copilot / PR</span><span>Action</span></div>
-        <div id="tree" role="list" aria-label="Daily execution queue"><div class="empty"><h3>Choose a Jira project</h3><p>Explore every epic, issue and subtask, including work outside active sprints.</p></div></div>
+        <div id="tree" role="tree" aria-label="Jira work hierarchy"><div class="empty"><h3>Choose a Jira project</h3><p>Explore every epic, issue and subtask, including work outside active sprints.</p></div></div>
       </div>
       <footer><span id="work-count">No project loaded</span><span>Jira, sessions and PRs keep their own state</span></footer>
     </section>

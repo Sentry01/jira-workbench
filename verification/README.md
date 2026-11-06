@@ -49,7 +49,10 @@ acknowledgement, edit invalidation, the immutable launch snapshot, lost-response
 reconciliation, the Update Jira confirmation, an expired launch request (it never
 blocks Start, and clears only on a confirming second click), the default mode of
 the inspector's Start button, one Jira freshness label in the bar and the
-inspector, parent-key search in the hierarchy, project-scoped restoration,
+inspector, parent-key search in the hierarchy, project-scoped restoration, the
+Hierarchy default for a project with no saved view, the read-only Kanban board
+(workflow-status columns, work items only, arrow keys across columns, shared
+filters, sideways scrolling in a narrow panel),
 keyboard focus, the freshness dots, and the narrow layout.
 
 It then runs the WCAG 2.2 AA checks in [`accessibility.mjs`](accessibility.mjs): no
@@ -58,7 +61,8 @@ of at least 4.5:1 for status badges, type icons and unverified progress steps
 with the panel's own fallback colors and with the GitHub Copilot app's default
 light and dark theme values (see the comment in `accessibility.mjs` for their
 source), input borders of at least 3:1 and a non-color
-pressed state, 24 by 24 px targets in the list, one tab stop for the list and a
+pressed state, 24 by 24 px targets in the list and on the board, one tab stop for
+the list and for the board, Kanban columns as lists named by their headings, a
 skip link, ArrowLeft keeping the parent row in view, freshness details that can be
 hovered and dismissed with Escape, notices added without rebuilding the others,
 and keyboard focus kept (never on the page body) through pending actions, Dismiss
