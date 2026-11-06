@@ -289,43 +289,31 @@ as an external plugin in its `plugins/external.json`, pinned by `version`,
 request to Awesome Copilot does, and its maintainers review it after its quality
 gates pass.
 
-After every successful `release` run, the `awesome-copilot-sync` workflow proposes
-moving the pin to the latest release. It syncs the owner's fork of Awesome Copilot,
-changes only those three fields with `.github/scripts/awesome-copilot-listing.mjs`,
-regenerates the marketplace with `npm run build`, and pushes the result to the
-fork's `jira-workbench-sync` branch. It opens a pull request from that branch, or
-updates the one already open, so a newer release replaces an unmerged older one.
-It preserves the pull request description and does nothing when the listing
-or an open pull request already pins the release. To list a specific tag, run
-it from the Actions tab with that tag.
-
-The workflow needs the `AWESOME_COPILOT_TOKEN` repository secret: a classic
-personal access token with the `public_repo` scope, from the account that owns
-the fork. Create it in [GitHub developer settings](https://github.com/settings/tokens)
-and add it under this repository's Settings, Secrets and variables, Actions.
-The scope covers all public repositories the account can access; it does not
-require write access to Awesome Copilot. Without the secret the sync fails,
-but the release is unaffected. After adding it, run the sync from the Actions
-tab to update the latest release.
-
-The [upstream guide](https://github.com/github/awesome-copilot/blob/main/CONTRIBUTING.md#adding-external-plugins)
-says public contributors should not directly edit `plugins/external.json`, but
-also describes checks on pull requests updating existing entries. Confirm with
-its maintainers that this update route is accepted before enabling the sync.
-
-To update the listing by hand, do what the workflow does. In a fork of
-`github/awesome-copilot`, on a branch from its `main`:
+Listing updates are manual, separate from release CI. Use the repository's
+[`update-awesome-copilot` agent](.github/agents/update-awesome-copilot.agent.md)
+after publishing a release. From this repository in Copilot CLI:
 
 ```sh
-node <this-repo>/.github/scripts/awesome-copilot-listing.mjs plugins/external.json \
-  jira-workbench Sentry01/jira-workbench <version> "$(gh api repos/Sentry01/jira-workbench/commits/v<version> --jq .sha)"
-npm ci && npm run build && npm run plugin:validate
+copilot --agent update-awesome-copilot
 ```
 
-Commit `plugins/external.json` and `.github/plugin/marketplace.json`, then open a
-pull request against `github/awesome-copilot` `main` using its template. Changes
-to the description or keywords also go through that review; the script does not
-copy them.
+Then ask: "Update the Awesome Copilot listing to the latest published release."
+To choose a release, name its tag instead, such as `v2.4.2`.
+In the Copilot app, ask: "Follow
+`.github/agents/update-awesome-copilot.agent.md` to update the Awesome Copilot
+listing to the latest published release."
+
+The agent verifies the published tag and commit, checks the upstream listing
+and open PRs, changes only the release pin, regenerates and validates the
+marketplace, and opens or updates a fork PR. It stops without changes when the
+listing already matches. Use your existing `gh` login and fork; no Actions
+secret or upstream write access is required.
+
+The full procedure is in the agent file. It follows the
+[upstream guide for existing listing updates](https://github.com/github/awesome-copilot/blob/main/CONTRIBUTING.md#updating-listed-external-plugins-via-pr),
+which is separate from new-plugin intake. Maintainer approval and quality gates
+are still required. The listing changes only when that upstream PR merges;
+the agent does not merge it or set up monitoring.
 
 ## Where things live
 
@@ -345,8 +333,9 @@ assets/preview.png           The plugin listing image; docs/screenshots.mjs rege
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version
-.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the Awesome Copilot listing update, the stack gate and the CCR gate
-.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack and CCR gates, the release workflow and the Awesome Copilot sync
+.github/agents/              On-demand Copilot procedures, including the Awesome Copilot listing update
+.github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the stack gate and the CCR gate
+.github/workflows/           CI (unit tests, browser harnesses, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
 verification/                Browser harnesses and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
