@@ -276,10 +276,14 @@ The Copilot app loads the canvas from `com.github.copilot/extensions/`, and
 `extensions.com.github.copilot.logo` names `assets/preview.png` as the listing
 image. Keep these paths; the Awesome Copilot marketplace checks them when it
 reviews a release. The image is the Jira mark centered on a transparent
-1280x720 background. `extensions.com.github.copilot.icon` names
-`assets/logo.svg`, the same mark cropped to a square, which the Copilot app
-shows in the sidebar and on the canvas tab; without it the app shrinks the
-16:9 logo into that small square.
+1280x720 background. The Copilot app shows a square icon in its sidebar, on the
+canvas tab, and in its Installed plugins list; given only that 16:9 logo, it
+shrinks the mark to about half the square. So `assets/logo.svg`, the same mark
+cropped square, is named twice: by `extensions.com.github.copilot.icon` for the
+sidebar and tab, and by a top-level `logo` for the plugins list. The top-level
+`logo` is not in the Agent Plugins schema, which an editor validating against
+`$schema` reports; Awesome Copilot's intake does not check it, and the
+Atlassian Jira canvas uses the same field.
 
 When the pull request merges, the
 `release` workflow creates the matching `v<version>` tag on the merge commit and
@@ -339,7 +343,7 @@ com.github.copilot/extensions/jira-workbench/   The installable canvas; this is 
   ui/                        Canvas renderer
   test/                      Node test suite, split along module ownership
 assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
-assets/logo.svg              The sidebar and canvas tab icon: the panel's Jira mark, cropped square
+assets/logo.svg              The app icon (sidebar, tab, plugins list): the panel's Jira mark, cropped square
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version
