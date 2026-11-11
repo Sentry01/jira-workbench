@@ -9,7 +9,8 @@
   "keywords": ["jira", "canvas", "traceability", "copilot"],
   "extensions": {
     "com.github.copilot": {
-      "logo": "assets/preview.png"
+      "logo": "assets/preview.png",
+      "icon": "assets/logo.svg"
     }
   }
 }
