@@ -180,6 +180,7 @@ com.github.copilot/extensions/jira-workbench/   The installable canvas; this is 
   ui/                        Canvas renderer
   test/                      A node:test suite: no framework, no dependencies
 assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
+assets/logo.svg              The sidebar and canvas tab icon: the panel's Jira mark, cropped square
 docs/                        Install guide, user guide, screenshots, and their generator
 verification/                Browser harnesses and the shared synthetic fixture
 ```

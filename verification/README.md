@@ -177,5 +177,5 @@ session, or repository data. Run it after any UI change:
 WORKBENCH_ROOT="$PWD/com.github.copilot/extensions/jira-workbench" node docs/screenshots.mjs
 ```
 
-Images are written to `docs/images/`, and the plugin listing image to
+Images are written to `docs/images/`, and the plugin logo (the Jira mark) to
 `assets/preview.png`; `SCREENSHOT_DIR` overrides both destinations.
