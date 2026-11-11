@@ -281,9 +281,10 @@ canvas tab, and in its Installed plugins list; given only that 16:9 logo, it
 shrinks the mark to about half the square. So `assets/logo.svg`, the same mark
 cropped square, is named twice: by `extensions.com.github.copilot.icon` for the
 sidebar and tab, and by a top-level `logo` for the plugins list. The top-level
-`logo` is not in the Agent Plugins schema, which an editor validating against
-`$schema` reports; Awesome Copilot's intake does not check it, and the
-Atlassian Jira canvas uses the same field.
+`logo` is not in the Agent Plugins schema, which forbids extra top-level
+fields, so `plugin.json` does not declare that schema in `$schema`. Awesome
+Copilot's intake does not check the field, and the Atlassian Jira canvas uses
+it too.
 
 When the pull request merges, the
 `release` workflow creates the matching `v<version>` tag on the merge commit and

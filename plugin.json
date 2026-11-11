@@ -1,5 +1,4 @@
 {
-  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jira-workbench",
   "description": "Browse any Jira project's hierarchy and trace issues to Copilot sessions and GitHub PRs; Jira read-only.",
   "version": "2.4.4",
