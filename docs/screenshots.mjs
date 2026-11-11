@@ -48,10 +48,16 @@ try {
     await page.waitForFunction(() => document.body.innerText.includes("Answer question"));
     await dismissNotices();
     await shot("02-execution.png");
-    // The plugin's listing image (extensions.com.github.copilot.logo in plugin.json), cropped to 16:9.
+    // The plugin logo (extensions.com.github.copilot.logo in plugin.json) is both the Awesome Copilot listing image and
+    // the canvas tab icon, which fits the whole image into a small square. So it is the panel's Jira mark on a
+    // transparent 1280x720 image, sized to the listing's 600x600 center focus.
     const preview = process.env.SCREENSHOT_DIR ? join(images, "preview.png") : fileURLToPath(new URL("../assets/preview.png", import.meta.url));
     await mkdir(dirname(preview), { recursive: true });
-    await page.screenshot({ path: preview, clip: { x: 0, y: 0, width: 1440, height: 810 } });
+    const mark = await page.locator(".brand-icon").evaluate(svg => svg.outerHTML);
+    const logo = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    await logo.setContent(`<body style="margin:0;display:grid;place-items:center;height:720px;background:transparent">${mark.replace('class="brand-icon"', 'width="600" height="600"')}</body>`);
+    await logo.screenshot({ path: preview, omitBackground: true });
+    await logo.close();
     console.log(`Wrote the plugin preview to ${preview}`);
 
     await search(page, "Work item 8");

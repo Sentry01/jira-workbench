@@ -275,7 +275,9 @@ there first would read it instead, and `check-release.mjs` fails if one exists.
 The Copilot app loads the canvas from `com.github.copilot/extensions/`, and
 `extensions.com.github.copilot.logo` names `assets/preview.png` as the listing
 image. Keep these paths; the Awesome Copilot marketplace checks them when it
-reviews a release.
+reviews a release. The Copilot app also shows the logo as the canvas tab icon,
+scaled to fit a small square, so the image is the Jira mark centered on a
+transparent 1280x720 background rather than a screenshot.
 
 When the pull request merges, the
 `release` workflow creates the matching `v<version>` tag on the merge commit and
@@ -334,7 +336,7 @@ com.github.copilot/extensions/jira-workbench/   The installable canvas; this is 
     runtime.mjs              Shared, time-bounded helpers for Copilot runtime calls
   ui/                        Canvas renderer
   test/                      Node test suite, split along module ownership
-assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
+assets/preview.png           The plugin logo (listing image and tab icon); docs/screenshots.mjs regenerates it
 docs/                        Install guide, user guide, screenshots, and their generator
 plugin.json                  The plugin manifest (Agent Plugins format); its version is the release version
 .github/plugin/              The marketplace manifest, which pins the released version

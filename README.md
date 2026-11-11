@@ -179,7 +179,7 @@ com.github.copilot/extensions/jira-workbench/   The installable canvas; this is 
     runtime.mjs              Shared, time-bounded helpers for Copilot runtime calls
   ui/                        Canvas renderer
   test/                      A node:test suite: no framework, no dependencies
-assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
+assets/preview.png           The plugin logo (listing image and tab icon); docs/screenshots.mjs regenerates it
 docs/                        Install guide, user guide, screenshots, and their generator
 verification/                Browser harnesses and the shared synthetic fixture
 ```
