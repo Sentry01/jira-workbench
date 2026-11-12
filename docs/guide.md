@@ -36,9 +36,9 @@ writes no Smart Commit commands unless you tick **Smart Commit comment** in the
 brief, which lets it add one `KEY #comment` line to its final commit. See
 [Smart Commit comment](#smart-commit-comment).
 
-**Update Jira** (top right) is the only project-wide write, and it runs only
-after you confirm. It starts one Copilot session that checks every issue in the
-project against its linked sessions, pull requests, branches and commits, then
+**Sync Jira statuses...** (next to **Start project session**) is the only
+project-wide write, and it runs only after you confirm. It starts one Copilot
+session that checks every issue in the project against its linked sessions, pull requests, branches and commits, then
 moves any issue whose status is wrong. It changes only statuses, never reopens
 Done issues, and ends with a summary table. See
 [Keep Jira statuses accurate](#keep-jira-statuses-accurate).
@@ -201,7 +201,7 @@ acknowledged, and the session's kickoff says the descendant list is incomplete.
 A story's kickoff says the same about its subtasks, without an extra warning
 in the preview.
 
-**Update Jira** remains project-wide, not limited to the loaded scope. It
+**Sync Jira statuses** remains project-wide, not limited to the loaded scope. It
 includes durable session and PR links for up to 300 linked issues, reading
 from Jira any that are not loaded in the panel. Linked issues it cannot read,
 or that exceed the limit, are reported as omitted evidence for the sync session
@@ -210,8 +210,8 @@ most recently linked sessions and its 3 highest-numbered pull requests, and the
 kickoff states how many it left out. On projects with many linked issues, issues
 are dropped from the evidence until the session's instructions fit the 48 KB
 launch limit, and the kickoff counts them as omitted. If the project's workflow
-statuses alone are larger than that limit, Update Jira is refused and nothing is
-queued.
+statuses alone are larger than that limit, Sync Jira statuses is refused and
+nothing is queued.
 
 ---
 
@@ -362,7 +362,7 @@ dropped or the panel was closed), the item moves to **Needs me** and shows
 
 ![A launch with no session receipt after 15 minutes, offering Clear stuck request](images/07-stuck-request.png)
 
-- It no longer blocks **Start** or **Update Jira**.
+- It no longer blocks **Start** or **Sync Jira statuses**.
 - **Check the project's sessions before starting again.** The launch may have
   created a session that never reported back.
 - To remove it, press **Clear stuck request**, then **Confirm clear** within a
@@ -440,7 +440,7 @@ Jira workflow status: To do statuses first, then In progress, then Done.
   pull requests. Select a card to open its details.
 - The board is read-only. Moving a card would change its Jira status, which the
   canvas never does. Status changes come from the sessions you launch and from
-  **Update Jira**.
+  **Sync Jira statuses**.
 - Search and the sprint filter hide cards. Choosing a status or a category in the
   status filter also hides the other columns.
 - When the columns do not fit, the board scrolls sideways.
@@ -476,13 +476,13 @@ Links are never inferred from similar titles or branch names.
 
 ### Refresh the right source
 
-Jira and GitHub data are snapshots, not live feeds, so each source has its own
-refresh button:
+Jira and GitHub data are snapshots, not live feeds. The panel re-checks linked
+sessions every few seconds by itself; everything else is re-read when you ask:
 
-| Button | Re-reads |
+| Control | Re-reads |
 | --- | --- |
 | **Refresh** (top right) | Jira, then sessions and GitHub for the project |
-| **Refresh live state** (top right) | Sessions and GitHub for the project |
+| **Jira**, **Sessions** or **GitHub** status (connection bar) | That one source, for the project |
 | **Refresh trace** (inspector) | Sessions and pull requests for this item |
 | **Refresh Sessions** / **Refresh GitHub** (inspector) | That one source, for the project's linked work |
 | **Refresh Jira** (on a queue row) | Jira only |
@@ -498,12 +498,15 @@ The connection bar shows a dot for each source:
 - **Grey**: not loaded or not needed.
 
 Hover over, tap, or tab to a dot for details. You can move the pointer onto the
-details to read them, and press Escape to hide them.
+details to read them, and press Escape to hide them. Click a status to re-read
+that source alone; a status for a source the project does not use yet (grey,
+"not needed") cannot be clicked.
 
 ### Keep Jira statuses accurate
 
 When Jira no longer matches the work (for example, a pull request merged but the
-issue still says To Do), click **Update Jira** in the header and confirm.
+issue still says To Do), click **Sync Jira statuses...** next to **Start project
+session** and confirm.
 
 It starts one Copilot session in the mapped repository. That session:
 
@@ -599,7 +602,7 @@ Then find the message you see:
 
 ## 11. What it does not do
 
-- **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves only its own issue to In Progress, and a confirmed **Update Jira** session may change statuses across the project. An issue session comments on its own issue only when you tick **Smart Commit comment**, and then only once, through its final commit.
+- **No Jira writes from the canvas.** The canvas never edits, transitions or comments on issues, never creates them, and never changes sprints. Status changes are delegated to sessions you launch: an issue session moves only its own issue to In Progress, and a confirmed **Sync Jira statuses** session may change statuses across the project. An issue session comments on its own issue only when you tick **Smart Commit comment**, and then only once, through its final commit.
 - **No fan-out.** One confirmed launch creates one session.
 - **No auto-merge or auto-approve.** Review actions open the real Copilot surface, and you decide.
 - **No pending action shown as finished.** A pending navigation is labeled as

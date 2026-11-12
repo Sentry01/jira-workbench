@@ -559,5 +559,5 @@ test("Update Jira refuses a kickoff whose workflow statuses alone exceed the bud
     assert.throws(() => jiraSyncPrompt({
         requestId: "r", instanceId: "w", cloudId: "site-a", jiraProjectId: "42", projectKey: "DEMO", copilotProjectId: "p",
         repo: "example/demo", siteUrl: "https://example.atlassian.net", evidence: [{ key: "DEMO-1", sessions: [], prs: [] }], statuses,
-    }), /workflow statuses alone exceed the 48 KB Update Jira limit, so no sync was queued/);
+    }), /workflow statuses alone exceed the 48 KB Jira status sync limit, so no sync was queued/);
 });

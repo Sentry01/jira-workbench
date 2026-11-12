@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><defs><linearGradient id="jira-a" x1="98%" y1="0%" x2="58%" y2="40%"><stop offset="18%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient><linearGradient id="jira-b" x1="100%" y1="0%" x2="55%" y2="44%"><stop offset="18%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient></defs><path fill="#2684FF" d="M23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0Z"/><path fill="url(#jira-a)" d="M17.294 5.757H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001z"/><path fill="url(#jira-b)" d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005z"/></svg><div><h1>Jira Workbench</h1><p>From intent to pull request.</p></div></div>
-    <div class="header-actions"><span class="readonly" title="The canvas only reads Jira. Status changes are made by the Copilot sessions it launches.">Canvas reads Jira</span><button id="sync-jira" title="Start one Copilot session that checks every issue's Jira status against linked work and fixes wrong statuses">Update Jira</button><button id="refresh-execution">Refresh live state</button><button id="refresh" title="Refresh Jira, then live sessions and GitHub evidence">Refresh</button></div>
+    <div class="header-actions"><button id="refresh" title="Re-read Jira, then linked Copilot sessions and GitHub pull requests">Refresh</button></div>
   </header>
   <section class="connection-bar" aria-label="Project selection">
     <label>Jira site<select id="site"><option value="">Connect to Jira</option></select></label>
@@ -18,7 +18,7 @@
     <span class="connection-arrow" aria-hidden="true">&rarr;</span>
     <label class="repo-label">Copilot repository<select id="repository"><option value="">Choose repository for sessions</option></select></label>
     <button id="connections" title="Reload sites and repository projects">Reload connections</button>
-    <div class="source-freshness" role="group" aria-label="Project source freshness"><span id="freshness" class="source" data-tone="idle" tabindex="0" role="note">Jira: not loaded</span><span id="session-freshness" class="source" data-tone="idle" tabindex="0" role="note">Sessions: not needed</span><span id="github-freshness" class="source" data-tone="idle" tabindex="0" role="note">GitHub: not needed</span></div>
+    <div class="source-freshness" role="group" aria-label="Project source freshness"><button id="freshness" class="source" data-tone="idle">Jira: not loaded</button><button id="session-freshness" class="source" data-tone="idle">Sessions: not needed</button><button id="github-freshness" class="source" data-tone="idle">GitHub: not needed</button></div>
   </section>
   <div id="notice" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions text" tabindex="-1"></div>
   <div id="connection-status" role="status" aria-live="polite" hidden></div>
@@ -43,7 +43,7 @@
   <p id="retry-time" hidden></p>
   <main id="workbench">
     <section class="workspace">
-      <div class="workspace-heading"><div><div class="eyebrow">PROJECT EXPLORER</div><h2><button id="project-title" class="project-title-action" title="Inspect project scope" disabled>Your work, connected.</button></h2></div><button id="project-start" class="primary" disabled>Start project session</button></div>
+      <div class="workspace-heading"><div><div class="eyebrow">PROJECT EXPLORER</div><h2><button id="project-title" class="project-title-action" title="Inspect project scope" disabled>Your work, connected.</button></h2></div><div class="heading-actions"><button id="sync-jira" title="Start one Copilot session that checks every issue's Jira status against linked work and fixes wrong statuses. The canvas itself only reads Jira." disabled>Sync Jira statuses...</button><button id="project-start" class="primary" disabled>Start project session</button></div></div>
       <div id="metrics" class="metrics"></div>
       <ol id="progress-tracker" class="progress-tracker" aria-label="Work item progress across the project" hidden></ol>
       <section class="scope-controls" aria-label="Working scope">
@@ -88,14 +88,14 @@
     <div class="dialog-actions"><button id="cancel-launch">Cancel</button><button id="review-changes" disabled>Review changes</button><button id="confirm-launch" class="primary" disabled>Start Plan session</button></div>
   </dialog>
   <dialog id="sync-dialog" aria-labelledby="sync-title">
-    <div class="dialog-heading"><div class="eyebrow">UPDATE JIRA</div><h2 id="sync-title">Sync Jira statuses with the work</h2></div>
+    <div class="dialog-heading"><div class="eyebrow">SYNC JIRA STATUSES</div><h2 id="sync-title">Sync Jira statuses with the work</h2></div>
     <p>Starts one Copilot session in <strong id="sync-repo"></strong> that checks every issue in <strong id="sync-project"></strong> against linked sessions, pull requests, branches and commits, then moves issues whose status is wrong.</p>
     <ul>
       <li>Status transitions only: no field edits, comments, assignments, sprint changes or new issues.</li>
       <li>Done issues are never reopened. Ambiguous cases are reported, not changed.</li>
       <li>The session ends with a summary table of every issue it checked.</li>
     </ul>
-    <div class="safety-note">The session decides what to change. Review its summary in the session afterwards.</div>
+    <div class="safety-note">The canvas itself only reads Jira; this session makes the changes and decides what to change. Review its summary in the session afterwards.</div>
     <div class="dialog-actions"><button id="cancel-sync">Cancel</button><button id="confirm-sync" class="primary">Start sync session</button></div>
   </dialog>
 </body>

@@ -263,7 +263,7 @@ export class Launches {
         await wb.store.update(current => {
             // The selection count also rejects a switch to another project and back while this was prepared.
             if (wb.selections !== selection || wb.selectedScope() !== scope || wb.site?.id !== site.id || wb.project?.id !== project.id)
-                throw new Error("Project changed while preparing the sync. Confirm Update Jira again for the selected project.");
+                throw new Error("Project changed while preparing the sync. Confirm Sync Jira statuses again for the selected project.");
             if (current.mappings[scope]?.id !== mapping.id) throw new Error("Repository mapping changed while preparing the sync.");
             if (Object.values(current.requests).some(r => r.scope === scope && BLOCKING_REQUEST.has(requestStatus(r))))
                 throw new Error("A session request is already queued for this project. Wait for its receipt; do not create a duplicate.");
