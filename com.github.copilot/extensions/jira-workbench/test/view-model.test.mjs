@@ -153,6 +153,11 @@ test("source freshness labels each mix of linked evidence", () => {
     assert.equal(sourceFreshness([trace(true)], "sessions", time).detail, "Linked evidence unavailable; not refreshed");
     assert.equal(sourceFreshness([trace(true, { state: "fresh" }), trace(true, { state: "stale" })], "sessions", time).label, "partly stale");
     assert.equal(sourceFreshness([trace(true, { state: "fresh" }), trace(true)], "sessions", time).label, "partly unavailable");
+    // A session-reported PR that GitHub has not verified yet still needs the GitHub source, so its chip can refresh it.
+    const reported = { sessions: [{ id: "s", prNumber: 7, prRepo: "o/r" }], prs: [],
+        sourceStatus: { github: { state: "unknown", error: "Session reports a PR not yet checked on GitHub." } } };
+    assert.deepEqual(sourceFreshness([reported], "github", time),
+        { label: "unavailable", needed: true, detail: "Linked evidence unavailable; not refreshed; Session reports a PR not yet checked on GitHub." });
 });
 
 test("a freshness chip says what clicking it does only while it can be clicked", () => {

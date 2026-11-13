@@ -26,7 +26,9 @@ export function workingSetSummary({ issues = [], page = {}, fetchedAt, cached })
 
 // Freshness of one live source across some traces. `time` formats a timestamp for display.
 export function sourceFreshness(traces, source, time) {
-    const linked = traces.filter(trace => source === "sessions" ? trace.sessions.length : trace.prs.length);
+    // A PR a session reports counts before GitHub has verified it, so the GitHub source is still needed to check it.
+    const linked = traces.filter(trace => source === "sessions" ? trace.sessions.length
+        : trace.prs.length || trace.sessions.some(session => session.prNumber && session.prRepo));
     if (!linked.length) return {
         label: "not needed", needed: false,
         detail: source === "sessions" ? "No linked session records." : "No linked pull request records.",
