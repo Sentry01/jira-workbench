@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeIssue, buildTree, descendants, jiraFreshness, REQUEST_TTL_MS } from "../lib/model.mjs";
 import {
-    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
+    humanize, sourceFreshness, sourceHint, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel,
     requestOutcome, receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree,
     descendantSessionCounts, defaultMode, signInNeeded, standaloneHost, standaloneGuide, banner, statusFilterGroups, sprintOptions, appliedSprint,
     smartCommitOption, retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor,
@@ -153,6 +153,17 @@ test("source freshness labels each mix of linked evidence", () => {
     assert.equal(sourceFreshness([trace(true)], "sessions", time).detail, "Linked evidence unavailable; not refreshed");
     assert.equal(sourceFreshness([trace(true, { state: "fresh" }), trace(true, { state: "stale" })], "sessions", time).label, "partly stale");
     assert.equal(sourceFreshness([trace(true, { state: "fresh" }), trace(true)], "sessions", time).label, "partly unavailable");
+    // A session-reported PR that GitHub has not verified yet still needs the GitHub source, so its chip can refresh it.
+    const reported = { sessions: [{ id: "s", prNumber: 7, prRepo: "o/r" }], prs: [],
+        sourceStatus: { github: { state: "unknown", error: "Session reports a PR not yet checked on GitHub." } } };
+    assert.deepEqual(sourceFreshness([reported], "github", time),
+        { label: "unavailable", needed: true, detail: "Linked evidence unavailable; not refreshed; Session reports a PR not yet checked on GitHub." });
+});
+
+test("a freshness chip says what clicking it does only while it can be clicked", () => {
+    assert.equal(sourceHint("stale; at t1", false, "re-check linked sessions"), "stale; at t1\nClick to re-check linked sessions.");
+    assert.equal(sourceHint("stale; at t1", true, "re-check linked sessions"), "stale; at t1");
+    assert.equal(sourceHint("", false, "re-read Jira"), "Click to re-read Jira.");
 });
 
 test("the inspector's Jira freshness is the connection bar's label, including while Jira loads", () => {
@@ -226,7 +237,7 @@ test("an unconfirmed or claimed launch is never shown as done, and an unconfirme
     const update = receipt => launchUpdate({ requestId: "r", at: ago(60_000), ...receipt }, { now: NOW });
     assert.deepEqual(update({ status: "queued", sendError: "Copilot did not confirm it received the prompt within 30s" }), {
         status: "uncertain",
-        message: "Launch outcome unknown: Copilot did not confirm it received the prompt within 30s. No retry was sent. Refresh live state and inspect the launch receipt before starting again.",
+        message: "Launch outcome unknown: Copilot did not confirm it received the prompt within 30s. No retry was sent. Click Refresh and inspect the launch receipt before starting again.",
     });
     assert.equal(update({ status: "queued", claimedAt: ago(1000) }).status, "queued");
     assert.deepEqual(update({ status: "failed", supersededBy: "r2", error: "Superseded by a newer launch; no session was created." }),
@@ -432,7 +443,7 @@ test("a launch action finds its stored request by request ID, preview ID or the 
 
 test("an Update Jira that timed out settles as failed when the server reports it was rejected before queueing", () => {
     const rejected = [{ clientId: "c", error: "The repository mapping changed while preparing the sync." }];
-    assert.deepEqual(launchRejection({ clientId: "c" }, rejected), { status: "failed", message: "Update Jira was not queued: The repository mapping changed while preparing the sync." });
+    assert.deepEqual(launchRejection({ clientId: "c" }, rejected), { status: "failed", message: "Sync Jira statuses was not queued: The repository mapping changed while preparing the sync." });
     assert.equal(launchRejection({ clientId: "x" }, rejected), null);
     assert.equal(launchRejection({}, rejected), null);
     assert.equal(launchRejection({ clientId: "c" }), null);
@@ -499,7 +510,7 @@ test("the inspector digest keys trace times by minute without formatting them", 
 
 test("the indexed execution lookup returns what the linear find returned, including the unobserved fallback", () => {
     const fallback = id => ({
-        nodeId: id, views: ["all"], signals: [], reasons: ["Live execution state has not been observed. Refresh live state to check."],
+        nodeId: id, views: ["all"], signals: [], reasons: ["Live execution state has not been observed. Click Refresh to check."],
         primary: { kind: "inspect", label: "Inspect work" }, rank: Number.MAX_SAFE_INTEGER,
     });
     const linear = (executions, id) => executions.find(item => item.nodeId === id) || fallback(id);

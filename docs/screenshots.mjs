@@ -134,7 +134,7 @@ try {
                 repository: { projectId: "app-project", repo: "example/demo" }, sources: [], warnings: [], children: [] },
         };
     });
-    await page.getByRole("button", { name: "Refresh live state", exact: true }).click();
+    await page.locator("#refresh").click();
     await search(page, "Ready example");
     const stuck = page.locator('#tree [data-node-id="6"]');
     await stuck.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor();

@@ -287,7 +287,7 @@ async function scrolledDismiss(page) {
 }
 
 async function focusKept(page) {
-    const header = [["#refresh-execution", "**/api/refresh-execution"], ["#connections", "**/api/catalog"], ["#refresh", "**/api/refresh"]];
+    const header = [["#github-freshness", "**/api/refresh-execution"], ["#connections", "**/api/catalog"], ["#refresh", "**/api/refresh"]];
     for (const [selector, route] of header) {
         const result = await keyboardAction(page, page.locator(selector), route);
         assert.equal(result.during, result.key, `${selector} keeps focus while pending`);

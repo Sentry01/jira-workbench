@@ -91,12 +91,13 @@ try {
     assert.match(await page.locator("#freshness").getAttribute("aria-label"), /^Jira: fresh .+\. Read from Jira at/);
     const realGithub = workbench.github;
     workbench.github = async () => { throw new Error("GitHub unreachable"); };
-    await byName("Refresh live state");
+    // The GitHub chip refreshes GitHub on its own.
+    await page.locator("#github-freshness").click();
     await page.waitForFunction(() => document.getElementById("github-freshness").dataset.tone === "error");
     assert.match(await page.locator("#github-freshness").innerText(), /GitHub: stale/);
     assert.match(await page.locator("#github-freshness").getAttribute("aria-label"), /GitHub unreachable/);
     workbench.github = realGithub;
-    await byName("Refresh live state");
+    await page.locator("#github-freshness").click();
     await page.waitForFunction(() => document.getElementById("github-freshness").dataset.tone === "fresh");
 
     navigation.hold();
@@ -164,27 +165,27 @@ try {
     assert.equal(sent.length, 1);
     assert.ok(sent[0].prompt.includes(request.contextHash));
     assert.equal((await store.read()).links["demo-site/42/project"], undefined, "Queued does not mean a session exists");
-    await page.getByRole("button", { name: "Refresh live state", exact: true }).click();
+    await page.locator("#refresh").click();
     await page.waitForFunction(() => document.body.innerText.includes("Launch queued;") && !document.body.innerText.includes("Launch outcome unknown"));
     assert.equal(sent.length, 1, "Response-loss reconciliation must not retry creation");
 
-    assert.equal(await page.locator("#sync-jira").isDisabled(), true, "Update Jira waits for the queued project launch");
-    await workbench.failRequest({ requestId: request.requestId, message: "Fake launch abandoned before the Update Jira check" });
-    await page.getByRole("button", { name: "Refresh live state", exact: true }).click();
+    assert.equal(await page.locator("#sync-jira").isDisabled(), true, "Sync Jira statuses waits for the queued project launch");
+    await workbench.failRequest({ requestId: request.requestId, message: "Fake launch abandoned before the Sync Jira statuses check" });
+    await page.locator("#refresh").click();
     await page.waitForFunction(() => !document.getElementById("sync-jira").disabled);
     await page.locator("#sync-jira").click();
     await page.locator("#sync-dialog[open]").waitFor();
     assert.match(await page.locator("#sync-dialog").innerText(), /Daily execution demo/);
     await page.locator("#cancel-sync").click();
-    assert.equal(sent.length, 1, "Cancelling Update Jira sends nothing");
+    assert.equal(sent.length, 1, "Cancelling Sync Jira statuses sends nothing");
     await page.locator("#sync-jira").click();
     await page.locator("#confirm-sync").click();
     for (let i = 0; i < 50 && sent.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 100));
-    assert.equal(sent.length, 2, "Confirming Update Jira queues exactly one session");
+    assert.equal(sent.length, 2, "Confirming Sync Jira statuses queues exactly one session");
     assert.match(sent[1].prompt, /Jira status sync/);
     const syncRequest = Object.values((await store.read()).requests).find(r => r.kind === "jira-sync");
     assert.equal(syncRequest.status, "queued");
-    // Focus returned to Update Jira when the dialog closed, so it stays focused and is marked aria-disabled.
+    // Focus returned to Sync Jira statuses when the dialog closed, so it stays focused and is marked aria-disabled.
     await page.waitForFunction(() => document.activeElement?.id === "sync-jira" && document.getElementById("sync-jira").getAttribute("aria-disabled") === "true");
 
     // A launch request with no receipt after 15 minutes is expired: it never blocks Start, and clearing it takes
@@ -199,7 +200,7 @@ try {
         };
     });
     await search(page, "Ready example");
-    await byName("Refresh live state");
+    await page.locator("#refresh").click();
     const stuckRow = page.locator('#tree [data-node-id="6"]');
     await stuckRow.getByRole("button", { name: "Clear stuck request", exact: true }).waitFor();
     assert.match(await rowText(stuckRow), /Launch outcome unknown: no session receipt after 15 minutes/);
@@ -427,7 +428,7 @@ try {
     await verifyAccessibility({ page, workbench });
     assert.equal(sent.length, 3, "The accessibility checks queue exactly one confirmed launch");
     assert.deepEqual(errors, []);
-    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Update Jira confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, a Hierarchy default, a read-only Kanban board (workflow-status columns, work items only, arrow keys across columns, shared filters, one-line column headings that never cover the focused card in a scrolled column), keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
+    console.log("PASS: state-aware queue, native acknowledgement, local navigation during pending action, Plan-with-warnings, Implement acknowledgement, edit invalidation, immutable launch snapshot, Sync Jira statuses confirmation, expired request (never blocks Start, cleared only on a confirming second click, a cached row shows the current confirmation state, focus back on its row), inspector Start defaults a leaf to Implement, one Jira freshness label in the bar and inspector, parent-key search in the hierarchy, per-project Jira status filter, sprint filter (focus kept when it hides, saved choice restored), project-scoped restoration, a Hierarchy default, a read-only Kanban board (workflow-status columns, work items only, arrow keys across columns, shared filters, one-line column headings that never cover the focused card in a scrolled column), keyboard focus, freshness dots (fresh, keyboard tooltip, failed GitHub read is red), a trace panel that fills its column and stays pinned and whole while the page scrolls, narrow layout, and accessibility (a stable alert while reconnecting, contrast in light and dark, 24 px targets, one tab stop per list and a skip link, ArrowLeft keeps the parent in view, hoverable and dismissable tooltips, notices added without rebuilding, focus kept through pending actions, Dismiss and launch confirmation). External services were fake; no real sessions or Jira writes.");
 } finally {
     navigation.release();
     await browser.close();

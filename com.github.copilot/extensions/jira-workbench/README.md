@@ -142,7 +142,7 @@ project, including context with no project metadata, cannot view, link or
 refresh traces using the selected project's mapping. Select its owning
 project to use those controls.
 
-Project-wide **Update Jira** gathers evidence from durable project links,
+Project-wide **Sync Jira statuses** gathers evidence from durable project links,
 independently of loaded scope pages. For up to 300 linked issues it uses the
 loaded rows and reads any that are not loaded (or not re-read) in
 project-constrained batches; it reports unreadable and over-limit identities as
@@ -316,7 +316,7 @@ outside any live region.
 
 ### Launch requests that never report back
 
-A confirmed launch, or an **Update Jira** sync, is stored as a queued request until
+A confirmed launch, or a **Sync Jira statuses** request, is stored as a queued request until
 the canvas-owning agent records the session it created (`record_session`) or the
 failure (`fail_request`). While it is queued it blocks a second launch for the same
 issue or project, so duplicate work is never started.
@@ -347,9 +347,9 @@ retry was sent), refused, or superseded.
   offers **Clear stuck request**. A late receipt still attaches; once cleared, the
   prompt's claim is refused. The panel also stops waiting for `/api/launch` and
   `/api/sync-jira` after 45 seconds. Error responses carry the `requestId`, and
-  **Update Jira** sends a panel-chosen `clientId` that is stored with its request,
-  so the panel matches its action to the stored request even after a timeout. An
-  Update Jira refused before any request was stored is kept by that `clientId` in
+  **Sync Jira statuses** sends a panel-chosen `clientId` that is stored with its request,
+  so the panel matches its action to the stored request even after a timeout. A
+  status sync refused before any request was stored is kept by that `clientId` in
   the state's `syncRejections`, so a panel that stopped waiting shows it as failed.
 - **Legacy requests.** Requests queued by an earlier version carry no claim, and
   their late receipts are still accepted.
@@ -370,7 +370,7 @@ the request becomes **Launch outcome unknown**. Expiry is worked out each time t
 state is read, so it needs no timer and no write. An expired request:
 
 - moves from **Running** to **Needs me**;
-- no longer blocks **Start**, the launch badge, or **Update Jira**;
+- no longer blocks **Start**, the launch badge, or **Sync Jira statuses**;
 - offers **Clear stuck request**, in the queue row and in the inspector.
 
 The launch may still have created a session that never reported back, so **check
@@ -401,13 +401,15 @@ the real session.
   `missing` and `missingSince`, and shown as "Session no longer exists". It is not
   a failed observation: it does not stale the sessions source or make sibling
   sessions uncertain. The panel's background session poll stops asking about it
-  after 3 misses; an explicit **Refresh**, **Refresh live state**, **Refresh
-  Sessions** or **Refresh trace** still checks, so a restored session returns. The
+  after 3 misses; an explicit **Refresh**, the **Sessions** freshness status,
+  **Refresh live state**, **Refresh Sessions** or **Refresh trace** still checks, so a restored session returns. The
   link itself is kept.
 
 The header's **Refresh** re-reads Jira, then the project's linked sessions and
-GitHub evidence. **Refresh live state** re-reads only the linked sessions and
-GitHub evidence. In the inspector, **Refresh trace** re-reads one item's sessions
+GitHub evidence. It is the header's only refresh. The connection bar's **Jira**,
+**Sessions** and **GitHub** freshness statuses are buttons that re-read that one
+source; a status whose source the project does not use yet ("not needed") is
+unavailable but stays focusable so its details remain readable. In the inspector, **Refresh trace** re-reads one item's sessions
 and PRs, and **Refresh Sessions** or **Refresh GitHub** re-reads that one source
 for the project's linked work. A queue row whose evidence is stale offers the
 matching refresh: **Refresh Jira** (Jira only), **Refresh live state**, or
@@ -467,7 +469,7 @@ stateDiagram-v2
 | `ready` | A Jira read worked | No polling. While a panel is open, one keepalive read every 4 minutes, so the runtime refreshes an expiring OAuth token before you hit it |
 | `signin` | The Atlassian sign-in expired, or the server reports `needs-auth` | Panel reads fail fast without reaching the runtime, and the panel shows **Sign in to Atlassian**. A probe answer of 401 or `needs-auth` makes no read at all. An unclear answer, such as Atlassian v2's 400, allows **at most one single-attempt verify read per backoff step** (5s, doubling to 5 minutes). Finishing sign-in (`mcp.oauth_completed`), an `authenticated` probe, or the server going from `needs-auth` to `connected` verifies at once. An explicit **Refresh** makes exactly one attempt |
 | `down` | The server failed, is stopped or disabled, none is configured, or reads keep failing | Keeps the last good data and keeps polling. A `failed` server is restarted at most 3 times, after 2s, 15s and 60s, and that budget is restored only after a Jira read works. `stopped` and `disabled` servers are left to you |
-| `standalone` | No Jira server is configured and the runtime offers none of the Copilot app's session tools (`list_repositories` or, on older app builds, `list_projects`; `get_sessions_status`; `get_session`): the panel is not running in an app session, as when it is opened from **Canvases** in the app's sidebar | Panel reads fail fast without reaching the runtime, and the panel shows the steps that connect it (open any Copilot session and ask it to open the jira-workbench canvas, with a **Copy prompt** button) instead of per-source errors and a next attempt time. The server refuses session work (launches, **Update Jira**, session and trace refreshes, linking, opening sessions and pull requests), so the panel never writes failed observations into the store that panels in real sessions share. Checks run once a minute; an MCP event or **Reload connections** checks at once |
+| `standalone` | No Jira server is configured and the runtime offers none of the Copilot app's session tools (`list_repositories` or, on older app builds, `list_projects`; `get_sessions_status`; `get_session`): the panel is not running in an app session, as when it is opened from **Canvases** in the app's sidebar | Panel reads fail fast without reaching the runtime, and the panel shows the steps that connect it (open any Copilot session and ask it to open the jira-workbench canvas, with a **Copy prompt** button) instead of per-source errors and a next attempt time. The server refuses session work (launches, **Sync Jira statuses**, session and trace refreshes, linking, opening sessions and pull requests), so the panel never writes failed observations into the store that panels in real sessions share. Checks run once a minute; an MCP event or **Reload connections** checks at once |
 
 While Jira is not `ready`, the supervisor polls `mcp.list` (about 4ms, no Jira
 call) every second for 30 seconds after any change, then every 2s, doubling to 60s
@@ -515,7 +517,7 @@ Every Copilot runtime call the extension makes is time-bounded:
 | Server restart (`mcp.restartServer`) | 30s |
 | Starting sign-in (`mcp.oauth.login`) | 30s |
 | Native navigation: tool list, then the navigation call or fallback prompt | 8s, then 30s |
-| Sending a launch or Update Jira prompt to the owning agent (`session.send`) | 30s |
+| Sending a launch or Sync Jira statuses prompt to the owning agent (`session.send`) | 30s |
 | Installed plugin list (`plugins.list`), for the update check | 5s |
 | Plugin update (`plugins.update`), for **Update & reload** | 120s |
 | Plugin or extension reload (`plugins.reload`, `extensions.reload`), after an update | 30s |
@@ -535,7 +537,7 @@ Session polling reads live state from one `get_sessions_status` call. A linked
 session is read in full with `get_session` only when it is missing from that
 list or listed without an activity, when its stored record has no name, branch or
 PR yet, or once a minute.
-**Refresh**, **Refresh live state** and **Refresh Sessions** read every linked
+**Refresh**, the **Sessions** status, **Refresh live state** and **Refresh Sessions** read every linked
 session in full. A session the host reports as deleted is no longer read by polls
 once it is confirmed missing. A poll that observes nothing new does not write
 `state.json`: the time of the check is kept in memory and shown in the panel,
@@ -575,8 +577,8 @@ GitHub reads are shared by every panel in the extension process. Each PR is read
 with one `gh pr view` per refresh, however many issues and sessions refer to it,
 and at most 4 `gh` processes run at once. The
 background refresh after you open or pick a project reuses a PR read from the last
-60 seconds; **Refresh**, **Refresh live state**, **Refresh GitHub** and **Refresh
-trace** always read GitHub again. Only the check fields the panel shows (name or
+60 seconds; **Refresh**, the **GitHub** status, **Refresh live state**, **Refresh
+GitHub** and **Refresh trace** always read GitHub again. Only the check fields the panel shows (name or
 context, conclusion, state and status) are stored.
 
 Freshness is source-specific. Session refreshes do not relabel old GitHub evidence
@@ -598,7 +600,7 @@ only emitted when the issue key and site ID pass strict format checks; project-l
 launches and malformed keys keep the session fully Jira read-only. The launching
 agent itself is never authorized to write to Jira.
 
-**Update Jira** is the second delegated write. After an explicit confirmation it
+**Sync Jira statuses** is the second delegated write. After an explicit confirmation it
 queues one `jira-sync` request on the project scope (subject to the same
 one-queued-request-per-scope rule; a request with no receipt after 15 minutes no
 longer counts) and launches one Autopilot session. The kickoff
@@ -795,5 +797,5 @@ verification artifacts.
   as **Launch outcome unknown** and can be cleared (see
   [Launch requests that never report back](#launch-requests-that-never-report-back)).
 - Jira editing, sprint management, unattended status synchronization, bulk agent
-  launches, and automatic PR merging are intentionally absent. **Update Jira**
+  launches, and automatic PR merging are intentionally absent. **Sync Jira statuses**
   runs only when you confirm it, as one session.

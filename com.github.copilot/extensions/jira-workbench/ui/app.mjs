@@ -1,6 +1,6 @@
 import { scopeKey, descendants, childIndex, progressRollup, freshnessTone, jiraFreshness, buildTree } from "/model.mjs";
 import {
-    humanize, sourceFreshness, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
+    humanize, sourceFreshness, sourceHint, freshnessSummary, sessionState, sessionsBadge, sessionExists, launchState, launchBlocks, launchLabel, requestOutcome,
     receiptMessage, launchUpdate, launchReceipt, launchRejection, primaryReason, executionEvidence, matches, filterTree, descendantSessionCounts, defaultMode,
     signInNeeded, standaloneHost, banner, statusFilterGroups, sprintOptions, appliedSprint, smartCommitOption, workingSetSummary, scopeLabel,
     retryNotice, nextFocusKey, resolveSnapshot, linksDigest, minuteKey, requestStatuses, indexExecutions, executionFor as indexedExecution,
@@ -378,9 +378,16 @@ function updateActionControl(control) {
     const action = actions.get(control.dataset.actionKey);
     const pending = action && ["pending", "queued", "uncertain"].includes(action.status);
     const launchPending = control.dataset.prepareNode && nodePending(control.dataset.prepareNode);
-    setInert(control, control.dataset.baseDisabled === "true" || Boolean(pending) || Boolean(launchPending) ||
-        (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed || standaloneHost(state))));
-    setText(control, pending ? action.status === "pending" ? "Working..." : action.status === "queued" ? "Queued" : "Check receipt" : control.dataset.baseLabel);
+    const off = control.dataset.baseDisabled === "true" || Boolean(pending) || Boolean(launchPending) ||
+        (control.dataset.projectAction === "true" && (selecting || !scopeConfirmed || standaloneHost(state)));
+    // A freshness chip keeps its own label and stays focusable, so its details remain readable while it is unavailable.
+    if (control.classList.contains("source")) {
+        if (off) setAttr(control, "aria-disabled", "true");
+        else control.removeAttribute("aria-disabled");
+    } else {
+        setInert(control, off);
+        setText(control, pending ? action.status === "pending" ? "Working..." : action.status === "queued" ? "Queued" : "Check receipt" : control.dataset.baseLabel);
+    }
     setAttr(control, "aria-busy", String(action?.status === "pending"));
 }
 function actionButton(text, kind, target, nodeId, work, options = {}) {
@@ -418,7 +425,7 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
             try {
                 await sync(epoch);
             } catch (error) {
-                connectionMessage("poll", `Action returned, but the local snapshot could not be read: ${error.message}. Refresh live state to reconcile.`);
+                connectionMessage("poll", `Action returned, but the local snapshot could not be read: ${error.message}. Click Refresh to reconcile.`);
             }
         }
     } catch (error) {
@@ -426,7 +433,7 @@ async function perform({ kind, target, nodeId, label, work, success, refresh = f
         if (error.requestId) record.requestId = error.requestId;
         record.status = uncertain ? "uncertain" : "failed";
         record.message = uncertain
-            ? `Launch outcome unknown: ${error.message}. No retry was sent. Refresh live state and inspect the launch receipt before starting again.`
+            ? `Launch outcome unknown: ${error.message}. No retry was sent. Click Refresh and inspect the launch receipt before starting again.`
             : `${label} failed: ${error.message}`;
         if (kind === "launch" && preview?.node.id === nodeId && previewScope === scope) {
             previewDirty = true;
@@ -626,7 +633,6 @@ function render({ force = false } = {}) {
     configureActionControl($("project-start"), "prepare", "project", !state.project || !state.mapping || state.cached);
     configureActionControl($("sync-jira"), "launch", "project", selecting || !state.project || !state.mapping || Boolean(state.error) || state.cached || nodePending("project"));
     configureActionControl($("refresh"), "refresh-jira", "jira", selecting || !state.project);
-    configureActionControl($("refresh-execution"), "refresh-execution", "all", selecting || !state.project);
     configureActionControl($("connections"), "catalog", "connections", false, null);
     setText($("project-title"), state.project?.name || "Your work, connected.");
     $("project-title").disabled = !state.project;
@@ -676,12 +682,16 @@ function render({ force = false } = {}) {
         }));
     }
     const jira = jiraFreshness(state, time);
-    setSource($("freshness"), `Jira: ${jira.text}`, jira.tone, jira.detail);
+    const jiraOff = selecting || !state.project || !scopeConfirmed || standaloneHost(state);
+    setSource($("freshness"), `Jira: ${jira.text}`, jira.tone, sourceHint(jira.detail, jiraOff, "re-read Jira"));
+    configureActionControl($("freshness"), "refresh-jira", "jira", jiraOff);
     const unverified = { jira: Boolean(state.stale || state.cached) };
     for (const source of ["sessions", "github"]) {
         const freshness = sourceFreshness(allLinks, source, time);
         const label = source === "sessions" ? "Sessions" : "GitHub";
-        setSource($(source === "sessions" ? "session-freshness" : "github-freshness"), `${label}: ${freshness.label}`, freshnessTone(freshness), freshness.detail);
+        const chip = $(source === "sessions" ? "session-freshness" : "github-freshness"), off = jiraOff || !freshness.needed;
+        setSource(chip, `${label}: ${freshness.label}`, freshnessTone(freshness), sourceHint(freshness.detail, off, `re-check linked ${source === "sessions" ? "sessions" : "pull requests"}`));
+        configureActionControl(chip, "refresh-execution", source, off);
         unverified[source] = freshness.needed && freshness.label !== "fresh";
     }
     renderProgress(work, unverified);
@@ -841,14 +851,18 @@ async function navigateToNode(path, target, context) {
     if (!receipt.requestId) throw new Error("Navigation did not return a request receipt.");
     return receipt;
 }
-function refreshSourceButton(label, source = "all", nodeId) {
+function refreshSourceAction(label, source = "all", nodeId) {
     const jira = source === "jira";
-    return actionButton(label, jira ? "refresh-jira" : "refresh-execution", source, nodeId,
-        context => jira ? api("refresh", {}) : refreshExecution(source, context.epoch), {
-        className: "row-action",
+    return {
+        kind: jira ? "refresh-jira" : "refresh-execution", target: source, nodeId, label,
+        work: context => jira ? api("refresh", {}) : refreshExecution(source, context.epoch),
         refresh: true, success: jira ? "Jira refresh returned; live source freshness is independent." :
             `${source === "all" ? "Live sources" : humanize(source)} refresh returned; see each source's freshness.`,
-    });
+    };
+}
+function refreshSourceButton(label, source = "all", nodeId) {
+    const { kind, target, work, ...options } = refreshSourceAction(label, source, nodeId);
+    return actionButton(label, kind, target, nodeId, work, { className: "row-action", ...options });
 }
 // Built rows by node ID with the digest of what each shows. A render rebuilds only the rows whose digest changed and
 // keeps the others (and the focus inside them) in place, so selecting, expanding, filtering or a poll touches only the
@@ -1774,7 +1788,7 @@ $("confirm-sync").addEventListener("click", () => {
     // Known before the call, so a timeout or an error response can still be matched to the stored request.
     const clientId = crypto.randomUUID();
     void perform({
-        kind: "launch", target: "project", nodeId: "project", label: "Update Jira", refresh: true, clientId,
+        kind: "launch", target: "project", nodeId: "project", label: "Sync Jira statuses", refresh: true, clientId,
         work: () => api("sync-jira", { clientId }, AbortSignal.timeout(LAUNCH_TIMEOUT_MS)),
     });
 });
@@ -1786,10 +1800,9 @@ $("refresh").addEventListener("click", () => void perform({
     },
     success: "Jira and live refresh returned; see each source's own freshness.",
 }));
-$("refresh-execution").addEventListener("click", () => void perform({
-    kind: "refresh-execution", target: "all", label: "Refresh live state", work: context => refreshExecution("all", context.epoch), refresh: true,
-    success: "Live refresh returned; see source freshness for any retained or unknown data.",
-}));
+$("freshness").addEventListener("click", () => void perform(refreshSourceAction("Refresh Jira", "jira")));
+$("session-freshness").addEventListener("click", () => void perform(refreshSourceAction("Refresh sessions", "sessions")));
+$("github-freshness").addEventListener("click", () => void perform(refreshSourceAction("Refresh GitHub", "github")));
 $("connections").addEventListener("click", () => void perform({
     kind: "catalog", target: "connections", label: "Reload connections", global: true, work: () => api("catalog", {}), refresh: true,
     success: "Connection catalog reloaded.",

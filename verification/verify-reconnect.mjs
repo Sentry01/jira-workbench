@@ -192,9 +192,9 @@ try {
         await sidebarPage.waitForFunction(() => /The prompt is selected/.test(document.querySelector("#standalone-status").textContent));
         assert.equal(await sidebarPage.evaluate(() => String(getSelection())), "Open the jira-workbench canvas");
         assert.equal(await keysShown(sidebarPage), 12, "the saved hierarchy is shown");
-        const disabled = await sidebarPage.evaluate(() => Object.fromEntries(["project-start", "sync-jira", "refresh", "refresh-execution", "connections"]
+        const disabled = await sidebarPage.evaluate(() => Object.fromEntries(["project-start", "sync-jira", "refresh", "connections"]
             .map(id => [id, document.getElementById(id).disabled])));
-        assert.deepEqual(disabled, { "project-start": true, "sync-jira": true, refresh: true, "refresh-execution": true, connections: false },
+        assert.deepEqual(disabled, { "project-start": true, "sync-jira": true, refresh: true, connections: false },
             "only Reload connections, the explicit re-check, stays enabled");
         await sidebarPage.evaluate(() => document.querySelector("#tree [data-node-id]").click());
         await sidebarPage.waitForSelector("#inspector-content .inspector-head");

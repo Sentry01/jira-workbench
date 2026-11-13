@@ -26,7 +26,9 @@ export function workingSetSummary({ issues = [], page = {}, fetchedAt, cached })
 
 // Freshness of one live source across some traces. `time` formats a timestamp for display.
 export function sourceFreshness(traces, source, time) {
-    const linked = traces.filter(trace => source === "sessions" ? trace.sessions.length : trace.prs.length);
+    // A PR a session reports counts before GitHub has verified it, so the GitHub source is still needed to check it.
+    const linked = traces.filter(trace => source === "sessions" ? trace.sessions.length
+        : trace.prs.length || trace.sessions.some(session => session.prNumber && session.prRepo));
     if (!linked.length) return {
         label: "not needed", needed: false,
         detail: source === "sessions" ? "No linked session records." : "No linked pull request records.",
@@ -43,6 +45,9 @@ export function sourceFreshness(traces, source, time) {
         detail: [...new Set(statuses.map(status => `${status.state === "unknown" ? "Linked evidence unavailable" : status.state}; ${time(status.fetchedAt)}${status.error ? `; ${status.error}` : ""}`))].join("\n"),
     };
 }
+
+// A freshness chip's tooltip: its detail, plus what clicking it does when it can be clicked.
+export const sourceHint = (detail, off, verb) => off ? detail : [detail, `Click to ${verb}.`].filter(Boolean).join("\n");
 
 // The inspector's one-line freshness for a single trace. Jira uses the same label as the connection bar.
 export function freshnessSummary(snapshot, trace, time) {
@@ -123,10 +128,10 @@ export function launchReceipt(record, requests = []) {
         || (record.clientId && r.clientId === record.clientId)) || null;
 }
 
-// An Update Jira the server refused before storing a request (the panel may have timed out waiting): failed, with why.
+// A Jira status sync the server refused before storing a request (the panel may have timed out waiting): failed, with why.
 export function launchRejection(record, rejections = []) {
     const rejected = record.clientId && rejections.find(r => r.clientId === record.clientId);
-    return rejected ? { status: "failed", message: `Update Jira was not queued: ${rejected.error}` } : null;
+    return rejected ? { status: "failed", message: `Sync Jira statuses was not queued: ${rejected.error}` } : null;
 }
 
 // What a stored request says about this panel's own launch action, or null to keep the action as it is
@@ -137,7 +142,7 @@ export function launchUpdate(receipt, { linkedSessionIds = [], now = Date.now() 
         return { status: "failed", message: "Launch superseded by a newer launch; no session was created." };
     if (status === "failed") return { status: "failed", message: receiptMessage("launch", receipt) };
     if (status === "queued" && receipt.sendError && !receipt.claimedAt)
-        return { status: "uncertain", message: `Launch outcome unknown: ${receipt.sendError}. No retry was sent. Refresh live state and inspect the launch receipt before starting again.` };
+        return { status: "uncertain", message: `Launch outcome unknown: ${receipt.sendError}. No retry was sent. Click Refresh and inspect the launch receipt before starting again.` };
     if (status === "unknown") return { status: "uncertain", message: UNCLAIMED };
     if (status === "expired") return { status: "expired", message: EXPIRED };
     if (status === "cancelled") return { status: "cancelled", message: "Launch request cleared without a session receipt. A late receipt still attaches its session." };
@@ -249,7 +254,7 @@ export function kanbanBoard(issues = [], statuses = [], { query = "", category =
 // What a work view with no rows says instead.
 export function emptyWorkMessage(view, { issues = [], executions = [] } = {}) {
     if (view === "execution" && !executions.length)
-        return "No execution entries reported for this project. Refresh live state, or inspect and start project work from the header.";
+        return "No execution entries reported for this project. Click Refresh, or start project work with Start project session.";
     if (!issues.length) return "No visible issues in this project.";
     if (view !== "kanban") return "No matching work in this view. Choose All work or clear the search, Jira status and sprint filters.";
     return issues.some(item => !item.contextOnly && item.level <= 0)
@@ -270,7 +275,7 @@ export function flattenTree(roots, isExpanded) {
     return rows;
 }
 
-const UNOBSERVED = "Live execution state has not been observed. Refresh live state to check.";
+const UNOBSERVED = "Live execution state has not been observed. Click Refresh to check.";
 // Executions by node, built once per snapshot. A repeated node keeps its first record, as a linear find did.
 export function indexExecutions(executions = []) {
     const index = new Map();

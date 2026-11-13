@@ -173,8 +173,8 @@ try {
         window.summaryMutations = 0;
         new MutationObserver(records => { window.summaryMutations += records.length; }).observe(document.getElementById("scope-summary"), { childList: true });
     });
-    await page.locator("#refresh-execution").click();
-    await page.waitForFunction(() => !document.getElementById("refresh-execution").disabled);
+    await Promise.all([page.waitForResponse("**/api/refresh-execution"), page.locator("#refresh").click()]);
+    await page.waitForFunction(() => !document.getElementById("refresh").disabled);
     assert.equal(await page.evaluate(() => window.summaryMutations), 0, "unchanged snapshots do not repeat live summary announcements");
     await page.reload();
     await page.waitForFunction(() => document.getElementById("scope-value").value === "456");

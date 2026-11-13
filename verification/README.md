@@ -46,7 +46,7 @@ Starts the extension's own server against fake Jira, Copilot, and GitHub service
 a temporary state directory, then drives the full workflow: the execution queue,
 native navigation acknowledgement, planning with warnings, implementation
 acknowledgement, edit invalidation, the immutable launch snapshot, lost-response
-reconciliation, the Update Jira confirmation, an expired launch request (it never
+reconciliation, the Sync Jira statuses confirmation, an expired launch request (it never
 blocks Start, and clears only on a confirming second click), the default mode of
 the inspector's Start button, one Jira freshness label in the bar and the
 inspector, parent-key search in the hierarchy, project-scoped restoration, the

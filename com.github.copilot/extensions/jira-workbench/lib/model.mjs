@@ -209,7 +209,7 @@ export function jiraFreshness({ fetchedAt, stale, cached, warming }, time) {
     const at = time(fetchedAt);
     if (stale) return { text: `stale ${at}`, tone: "error", detail: `Last Jira read failed; showing data from ${at}.` };
     if (cached) return { text: `cached ${at}${warming ? " · refreshing" : ""}`, tone: "warn", detail: "Saved copy from an earlier load; not yet re-read from Jira." };
-    return { text: `fresh ${at}`, tone: "fresh", detail: `Read from Jira at ${at}. Jira is a snapshot; press Refresh to re-read.` };
+    return { text: `fresh ${at}`, tone: "fresh", detail: `Read from Jira at ${at}. Jira is a snapshot, not a live view.` };
 }
 
 const CATEGORY_ORDER = ["new", "indeterminate", "done", "unknown"];
@@ -371,7 +371,7 @@ function fitEvidence(build, evidence, omitted) {
     for (;; kept--) {
         const kickoff = build(evidence.slice(0, kept), omitted + evidence.length - kept);
         if (kickoffBytes(kickoff) <= KICKOFF_BUDGET_BYTES) return kickoff;
-        if (kept === 0) throw new Error(`The project's workflow statuses alone exceed the ${KICKOFF_BUDGET_BYTES / 1024} KB Update Jira limit, so no sync was queued.`);
+        if (kept === 0) throw new Error(`The project's workflow statuses alone exceed the ${KICKOFF_BUDGET_BYTES / 1024} KB Jira status sync limit, so no sync was queued.`);
     }
 }
 
