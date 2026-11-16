@@ -1,7 +1,8 @@
 # Verification harnesses
 
-Browser checks that run the real canvas UI. They are development tools and are not
-installed with the extension. There are six harnesses:
+Checks that run the real canvas UI, and one that runs the Copilot app's own
+runtime. They are development tools and are not installed with the extension.
+There are seven harnesses:
 
 | Harness | Runs against | In CI |
 | --- | --- | --- |
@@ -11,6 +12,7 @@ installed with the extension. There are six harnesses:
 | [`verify-poll.mjs`](#verify-pollmjs-unchanged-polls) | 300 synthetic issues with linked sessions | Yes |
 | [`verify-scale.mjs`](#verify-scalemjs-ui-budgets-at-1000-issues) | 1,000 synthetic issues | Yes |
 | [`verify-live.mjs`](#verify-livemjs-read-only-live-check) | Your real, open canvas (read-only) | No |
+| [`verify-manifest.mjs`](#verify-manifestmjs-discovery-and-cold-resume) | The Copilot app's runtime, in a temporary home | No |
 
 CI's **Browser harnesses** job runs the five synthetic harnesses on every pull request, on Linux
 with Google Chrome, and uploads their screenshots as an artifact when one fails.
@@ -166,6 +168,37 @@ caught a real bug: the host acknowledges a PR navigation with
 `Opening owner/repo#18.`, not the generic `Navigating now.`, so strict matching
 marked successful navigations as failed. Fake services alone cannot catch that
 kind of defect.
+
+## `verify-manifest.mjs`: discovery and cold resume
+
+Checks `plugin.json` against the Copilot app's own runtime, the way the app runs
+it. It stages this checkout as a plugin in a temporary Copilot home, then:
+
+1. Creates a named session and confirms the runtime discovers and launches
+   `plugin:jira-workbench:jira-workbench`.
+2. Stops the runtime, starts a new one, resumes the session, and confirms the
+   resume succeeds and the extension is discovered again.
+3. As a control, repeats both steps without `$schema`, the shape that broke
+   releases 2.4.4 to 2.5.0
+   ([#44](https://github.com/Sentry01/jira-workbench/issues/44)), and expects the
+   extension to be missing and the resume to fail. A pass therefore shows the
+   check can see the regression.
+
+It sends no prompt, contacts no Jira site, and leaves your own Copilot home and
+sessions untouched. It needs a Mac where the GitHub Copilot app has run once,
+because it uses the SDK and runtime the app caches under
+`~/Library/Caches/github-copilot-sdk/cli/`, picking the most recently updated
+version. To use another build, set `COPILOT_SDK_DIR` to its `copilot-sdk` folder
+or `COPILOT_RUNTIME` to its runtime executable. It does not need
+`npm ci --prefix verification` or a browser.
+
+```sh
+node verification/verify-manifest.mjs
+```
+
+Run it after any change to `plugin.json`. CI cannot run it, because the
+runtime is not available there; `check-release.mjs` covers the same `$schema`
+and `extensions` rules statically on every pull request.
 
 ## `../docs/screenshots.mjs`: guide images
 

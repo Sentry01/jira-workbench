@@ -182,7 +182,7 @@ com.github.copilot/extensions/jira-workbench/   The installable canvas; this is 
 assets/preview.png           The plugin listing image; docs/screenshots.mjs regenerates it
 assets/logo.svg              The app icon (sidebar, tab, plugins list): the panel's Jira mark, cropped square
 docs/                        Install guide, user guide, screenshots, and their generator
-verification/                Browser harnesses and the shared synthetic fixture
+verification/                Browser harnesses, the manifest check and the shared synthetic fixture
 ```
 
 ## Contributing

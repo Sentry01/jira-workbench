@@ -10,6 +10,10 @@ const PLUGIN_FILE = "plugin.json";
 const LEGACY_PLUGIN_FILE = ".github/plugin/plugin.json";
 const MARKETPLACE_FILE = ".github/plugin/marketplace.json";
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+// The Copilot runtime reads "extensions" as reverse-domain namespaces only when $schema names an Agent Plugins schema.
+// Without it, it expects the legacy { paths: string[] } form: cold resume fails and the canvas is never discovered (#44).
+const AGENT_PLUGINS_SCHEMA = /^https:\/\/agent-plugins\.org\/schemas\/\d+\.\d+\.\d+\/plugin\.schema\.json$/;
+const isObject = value => !!value && typeof value === "object" && !Array.isArray(value);
 const errors = [];
 const fail = (file, message) => errors.push({ file, message });
 
@@ -29,6 +33,9 @@ if (existsSync(join(root, LEGACY_PLUGIN_FILE))) fail(LEGACY_PLUGIN_FILE, `must n
 let tag = null;
 
 if (plugin) {
+    if (!AGENT_PLUGINS_SCHEMA.test(plugin.$schema || "")) fail(PLUGIN_FILE, `"$schema" must name the Agent Plugins schema, such as "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"; found ${JSON.stringify(plugin.$schema)}. Without it the Copilot runtime reads "extensions" as the legacy { paths: string[] } form, so the canvas is not discovered and sessions fail to resume.`);
+    if ("extensions" in plugin && !(isObject(plugin.extensions) && Object.values(plugin.extensions).every(isObject)))
+        fail(PLUGIN_FILE, `"extensions" must map reverse-domain namespaces to objects, such as { "com.github.copilot": { ... } }.`);
     if (!VERSION.test(plugin.version || "")) fail(PLUGIN_FILE, `"version" must be MAJOR.MINOR.PATCH, not ${JSON.stringify(plugin.version)}.`);
     const repo = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(plugin.repository || "")?.[1];
     if (!repo) fail(PLUGIN_FILE, `"repository" must be a https://github.com/OWNER/REPO URL.`);
