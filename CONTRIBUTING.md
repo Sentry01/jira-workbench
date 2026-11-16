@@ -280,11 +280,25 @@ reviews a release. The image is the Jira mark centered on a transparent
 canvas tab, and in its Installed plugins list; given only that 16:9 logo, it
 shrinks the mark to about half the square. So `assets/logo.svg`, the same mark
 cropped square, is named twice: by `extensions.com.github.copilot.icon` for the
-sidebar and tab, and by a top-level `logo` for the plugins list. The top-level
-`logo` is not in the Agent Plugins schema, which forbids extra top-level
-fields, so `plugin.json` does not declare that schema in `$schema`. Awesome
-Copilot's intake does not check the field, and the Atlassian Jira canvas uses
-it too.
+sidebar and tab, and by a top-level `logo` for the plugins list.
+
+Keep `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"`
+in `plugin.json`. The Copilot runtime reads `extensions` as namespaced client
+data only when `$schema` names an Agent Plugins schema. Without it, the runtime
+expects the older `{ "paths": [...] }` form, so it never finds the canvas, and a
+session resumed after a restart fails with "Invalid extensions object form:
+expected { paths: string[] }". Releases 2.4.4 to 2.5.0 shipped without it
+([#44](https://github.com/Sentry01/jira-workbench/issues/44)).
+`check-release.mjs` fails when `$schema` is missing or `extensions` is not a map
+of namespace objects. The top-level `logo` is not in the Agent Plugins schema,
+which forbids extra top-level fields; the runtime ignores the field and the app
+reads it, so keep both. Awesome Copilot's intake does not check the field, and
+the Atlassian Jira canvas uses it too.
+
+To check a manifest change against the app's own runtime, run
+`node verification/verify-manifest.mjs` on a Mac with the Copilot app
+installed. It confirms that the runtime discovers the canvas and resumes a
+session after a restart. See [`verification/README.md`](verification/README.md#verify-manifestmjs-discovery-and-cold-resume).
 
 When the pull request merges, the
 `release` workflow creates the matching `v<version>` tag on the merge commit and
@@ -351,7 +365,7 @@ plugin.json                  The plugin manifest (Agent Plugins format); its ver
 .github/agents/              On-demand Copilot procedures, including the Awesome Copilot listing update
 .github/scripts/             Release checks (the two manifests name one release, and a shipped change raises it), the stack gate and the CCR gate
 .github/workflows/           CI (unit tests, browser harnesses, dependency review, private-data and release-manifest checks), the stack and CCR gates, and the release workflow
-verification/                Browser harnesses and the shared synthetic fixture
+verification/                Browser harnesses, the manifest check and the shared synthetic fixture
 AGENTS.md                    Release and docs steps for coding agents working on a pull request
 ```
 

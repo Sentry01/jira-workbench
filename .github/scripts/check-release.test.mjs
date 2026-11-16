@@ -10,7 +10,8 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL("./check-release.mjs", import.meta.url));
 const REPOSITORY = "https://github.com/example/demo";
-const plugin = (version = "1.2.0") => ({ name: "demo", version, repository: REPOSITORY });
+const SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+const plugin = (version = "1.2.0") => ({ $schema: SCHEMA, name: "demo", version, repository: REPOSITORY });
 const marketplace = (version = "1.2.0", source = { source: "github", repo: "example/demo", ref: `v${version}` }) =>
     ({ name: "demo", plugins: [{ name: "other", source: "./other" }, { name: "demo", version, source }] });
 const raw = value => ({ raw: value });
@@ -73,6 +74,26 @@ test("manifests that disagree, or a release that is not pinned, fail", async () 
         assert.match(result.stdout, message);
         assert.equal(result.outputs, "", `${message} writes no tag`);
     }
+});
+
+// v2.4.4 to v2.5.0 omitted $schema, so the runtime read the namespaced extensions as { paths: string[] } (#44).
+test("a manifest without the Agent Plugins $schema, or with non-namespaced extensions, fails", async () => {
+    const namespaced = { "com.github.copilot": { logo: "assets/preview.png", icon: "assets/logo.svg" } };
+    const { $schema, ...unschemed } = plugin();
+    const cases = [
+        [{ ...unschemed, extensions: namespaced }, /"\$schema" must name the Agent Plugins schema.*legacy \{ paths: string\[\] \}/],
+        [{ ...plugin(), $schema: "https://agent-plugins.org/schemas/latest/plugin.schema.json" }, /"\$schema" must name the Agent Plugins schema/],
+        [{ ...plugin(), extensions: { paths: ["extensions"] } }, /"extensions" must map reverse-domain namespaces to objects/],
+        [{ ...plugin(), extensions: ["com.github.copilot"] }, /"extensions" must map reverse-domain namespaces to objects/],
+    ];
+    for (const [pluginJson, message] of cases) {
+        const result = await check(pluginJson, marketplace());
+        assert.equal(result.code, 1, String(message));
+        assert.match(result.stdout, message);
+        assert.equal(result.outputs, "", `${message} writes no tag`);
+    }
+    assert.equal((await check({ ...plugin(), logo: "assets/logo.svg", extensions: namespaced }, marketplace())).code, 0,
+        "a namespaced extensions object passes");
 });
 
 test("a second manifest at .github/plugin/plugin.json fails, even when it agrees", async () => {
